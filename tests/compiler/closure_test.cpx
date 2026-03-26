@@ -1,0 +1,40 @@
+// Casprix Compiler Test - Closures
+
+// Test 1: Simple closure
+print("Test 1: Simple closure")
+
+func make_counter() -> lambda() -> int
+    let count: int = 0
+    return |:| => count = count + 1
+}
+
+let counter = make_counter()
+print(counter())  # Should print 1
+print(counter())  # Should print 2
+print(counter())  # Should print 3
+
+// Test 2: Nested closure
+print("Test 2: Nested closure")
+
+func make_adder(x: int) -> lambda(int) -> int
+    return |y: int| => x + y
+}
+
+let add5 = make_adder(5)
+let add10 = make_adder(10)
+
+print(add5(3))    # Should print 8
+print(add10(3))   # Should print 13
+
+// Test 3: Multiple captures
+print("Test 3: Multiple captures")
+
+func complex_closure(a: int, b: int) -> lambda(int) -> int
+    let c: int = a * b
+    return |x: int| => x + a + b + c
+}
+
+let closure = complex_closure(2, 3)
+print(closure(10))  # Should print 10 + 2 + 3 + 6 = 21
+
+print("All closure tests passed!")

@@ -1,0 +1,143 @@
+# =============================================================
+# release.yml — Casprix Release Publisher
+#
+# Triggered by a version tag: v1.2.3
+#
+# Steps
+#   1. Build compiler + runtime for Linux and Windows
+#   2. Package into archives
+#   3. Create a GitHub Release with the archives attached
+# =============================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'        # v1.0.0
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'      # v1.0.0-rc.1
+
+permissions:
+  contents: write
+
+env:
+  CMAKE_BUILD_TYPE: Release
+
+jobs:
+# ─────────────────────────────────────────────────────────────
+# Build artifacts
+# ─────────────────────────────────────────────────────────────
+  build-linux:
+    name: Build Linux release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build build-essential nasm \
+            zlib1g-dev libssl-dev
+
+      - name: Configure & build
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=dist/casprix
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE="casprix-${VERSION}-linux-x86_64.tar.gz"
+          tar -czf "$ARCHIVE" -C dist casprix
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - name: Upload Linux archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: ${{ env.ARCHIVE }}
+
+  build-windows:
+    name: Build Windows release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          cache: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-zlib
+            zip
+
+      - name: Configure & build
+        shell: msys2 {0}
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=dist/casprix
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Package
+        shell: msys2 {0}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE="casprix-${VERSION}-windows-x86_64.zip"
+          cd dist && zip -r "../$ARCHIVE" casprix
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - name: Upload Windows archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: ${{ env.ARCHIVE }}
+
+# ─────────────────────────────────────────────────────────────
+# Publish GitHub Release
+# ─────────────────────────────────────────────────────────────
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [ build-linux, build-windows ]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for changelog generation
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: artifacts/
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Extract section between version headers in CHANGELOG.md
+          NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          if [ -z "$NOTES" ]; then NOTES="See CHANGELOG.md for details."; fi
+          # Write to file to avoid shell quoting issues
+          printf '%s' "$NOTES" > release_notes.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Casprix ${{ github.ref_name }}
+          body_path: release_notes.txt
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: artifacts/*

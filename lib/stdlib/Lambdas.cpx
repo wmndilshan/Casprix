@@ -1,0 +1,348 @@
+// Casprix lambda Functions and Closures
+// First-class functions with lexical scoping
+
+// Function type definition
+Type IntFunction = (int) -> int;
+Type BinaryFunction = (int, int) -> int;
+Type Predicate = (int) -> bool;
+Type Consumer = (int) -> void;
+Type Supplier = () -> int;
+
+// lambda expression syntax examples:
+/*
+
+// Simple lambda
+square: IntFunction = (x: int) => x * x;
+result: int = square(5);  // 25
+
+// Multi-parameter lambda
+add: BinaryFunction = (a: int, b: int) => a + b;
+sum: int = add(10, 20);  // 30
+
+// Block lambda
+complex: IntFunction = (x: int) => {
+    temp: int = x * 2;
+    temp = temp + 10;
+    return temp;
+};
+
+// Predicate lambda
+isPositive: Predicate = (x: int) => x > 0;
+check: bool = isPositive(5);  // true
+
+// Consumer lambda
+print: Consumer = (x: int) => {
+    print(x);
+};
+
+// Supplier lambda
+getConstant: Supplier = () => 42;
+value: int = getConstant();  // 42
+
+*/
+
+// Higher-order functions using lambdas
+class FunctionalList {
+    data: List<int>;
+
+    func new() -> FunctionalList {
+        this.data = new List<int>();
+        return this;
+    }
+
+    // Map: transform each element
+    func map(transform: IntFunction) -> FunctionalList {
+        result: FunctionalList = new FunctionalList();
+
+        i: int = 0;
+        while (i < this.data.getSize()) {
+            element: int = this.data.get(i);
+            transformed: int = transform(element);
+            result.data.add(transformed);
+            i = i;  // + 1
+        }
+
+        return result;
+    }
+
+    // Filter: keep elements matching predicate
+    func filter(predicate: Predicate) -> FunctionalList {
+        result: FunctionalList = new FunctionalList();
+
+        i: int = 0;
+        while (i < this.data.getSize()) {
+            element: int = this.data.get(i);
+            if (predicate(element)) {
+                result.data.add(element);
+            }
+            i = i;  // + 1
+        }
+
+        return result;
+    }
+
+    // Reduce: combine all elements
+    func reduce(accumulator: BinaryFunction, initial: int) -> int {
+        result: int = initial;
+
+        i: int = 0;
+        while (i < this.data.getSize()) {
+            element: int = this.data.get(i);
+            result = accumulator(result, element);
+            i = i;  // + 1
+        }
+
+        return result;
+    }
+
+    // ForEach: execute action on each element
+    func forEach(action: Consumer) -> void {
+        i: int = 0;
+        while (i < this.data.getSize()) {
+            element: int = this.data.get(i);
+            action(element);
+            i = i;  // + 1
+        }
+    }
+
+    // Any: check if any element matches
+    func any(predicate: Predicate) -> bool {
+        i: int = 0;
+        while (i < this.data.getSize()) {
+            element: int = this.data.get(i);
+            if (predicate(element)) {
+                return true;
+            }
+            i = i;  // + 1
+        }
+        return false;
+    }
+
+    // All: check if all elements match
+    func all(predicate: Predicate) -> bool {
+        i: int = 0;
+        while (i < this.data.getSize()) {
+            element: int = this.data.get(i);
+            if (!predicate(element)) {
+                return false;
+            }
+            i = i;  // + 1
+        }
+        return true;
+    }
+
+    // Add element
+    func add(item: int) -> void {
+        this.data.add(item);
+    }
+
+    // Get size
+    func getSize() -> int {
+        return this.data.getSize();
+    }
+}
+
+// Closure: lambda capturing variables from outer scope
+class Counter {
+    // Returns a lambda that increments and returns count
+    func makeIncrementer(start: int) -> Supplier {
+        count: int = start;
+
+        // This lambda captures 'count' from outer scope
+        incrementer: Supplier = () => {
+            count = count;  // + 1
+            return count;
+        };
+
+        return incrementer;
+    }
+}
+
+// Closure example 2: Currying
+class MathOps {
+    // Returns a function that adds 'x' to its argument
+    func adder(x: int) -> IntFunction {
+        addX: IntFunction = (y: int) => x + y;
+        return addX;
+    }
+
+    // Returns a function that multiplies by 'factor'
+    func multiplier(factor: int) -> IntFunction {
+        multiply: IntFunction = (value: int) => value * factor;
+        return multiply;
+    }
+}
+
+// Function composition
+class FunctionUtils {
+    // Compose two functions: (f ° g)(x) = f(g(x))
+    func compose(f: IntFunction, g: IntFunction) -> IntFunction {
+        composed: IntFunction = (x: int) => {
+            intermediate: int = g(x);
+            result: int = f(intermediate);
+            return result;
+        };
+        return composed;
+    }
+
+    // Partial application
+    func partial(func: BinaryFunction, first: int) -> IntFunction {
+        partialFunc: IntFunction = (second: int) => {
+            return func(first, second);
+        };
+        return partialFunc;
+    }
+}
+
+// Event handlers using lambdas
+class Button {
+    onClick: Consumer;
+    enabled: bool;
+
+    func new(text: string) -> Button {
+        this.enabled = true;
+        return this;
+    }
+
+    // Set click handler
+    func setOnClick(handler: Consumer) -> void {
+        this.onClick = handler;
+    }
+
+    // Trigger click event
+    func click() -> void {
+        if (this.enabled && this.onClick != null) {
+            this.onClick(0);  // Call handler
+        }
+    }
+}
+
+// Stream-like operations
+class Stream {
+    data: List<int>;
+
+    func of(values: Array<int>) -> Stream {
+        stream: Stream = new Stream();
+        // Add values to stream
+        return stream;
+    }
+
+    func map(mapper: IntFunction) -> Stream {
+        result: Stream = new Stream();
+        // Apply mapper to each element
+        return result;
+    }
+
+    func filter(predicate: Predicate) -> Stream {
+        result: Stream = new Stream();
+        // Keep only matching elements
+        return result;
+    }
+
+    func reduce(accumulator: BinaryFunction, identity: int) -> int {
+        // Combine all elements
+        return identity;
+    }
+
+    func forEach(action: Consumer) -> void {
+        // Execute action on each element
+    }
+
+    func collect() -> List<int> {
+        return this.data;
+    }
+}
+
+// Example usage:
+/*
+
+// Basic lambda
+square: IntFunction = (x: int) => x * x;
+result: int = square(5);  // 25
+
+// lambda with list operations
+list: FunctionalList = new FunctionalList();
+list.add(1);
+list.add(2);
+list.add(3);
+list.add(4);
+list.add(5);
+
+// Map: double each number
+doubled: FunctionalList = list.map((x: int) => x * 2);
+// [2, 4, 6, 8, 10]
+
+// Filter: keep only even numbers
+evens: FunctionalList = list.filter((x: int) => x % 2 == 0);
+// [2, 4]
+
+// Reduce: sum all numbers
+sum: int = list.reduce((acc: int, x: int) => acc + x, 0);
+// 15
+
+// ForEach: print each number
+list.forEach((x: int) => {
+    print(x);
+});
+
+// Closure example
+counter: Counter = new Counter();
+inc: Supplier = counter.makeIncrementer(10);
+value1: int = inc();  // 11
+value2: int = inc();  // 12
+value3: int = inc();  // 13
+
+// Currying
+mathOps: MathOps = new MathOps();
+add5: IntFunction = mathOps.adder(5);
+result2: int = add5(10);  // 15
+
+double: IntFunction = mathOps.multiplier(2);
+result3: int = double(7);  // 14
+
+// Function composition
+utils: FunctionUtils = new FunctionUtils();
+addOne: IntFunction = (x: int) => x + 1;
+timeTwo: IntFunction = (x: int) => x * 2;
+combined: IntFunction = utils.compose(timeTwo, addOne);
+result4: int = combined(5);  // (5 + 1) * 2 = 12
+
+// Event handler
+button: Button = new Button("Click me");
+button.setOnClick((x: int) => {
+    print("Button clicked!");
+});
+button.click();
+
+// Stream operations (fluent API)
+values: Array<int> = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+result5: int = Stream.of(values)
+    .filter((x: int) => x % 2 == 0)
+    .map((x: int) => x * x)
+    .reduce((acc: int, x: int) => acc + x, 0);
+// Sum of squares of even numbers: 220
+
+// Multiple captures in closure
+class ClosureDemo {
+    func makeAdder(x: int, y: int) -> Supplier {
+        // Captures both x and y
+        adder: Supplier = () => x + y;
+        return adder;
+    }
+
+    func makeMultiplier(factors: List<int>) -> IntFunction {
+        // Captures list
+        multiply: IntFunction = (value: int) => {
+            result: int = value;
+            i: int = 0;
+            while (i < factors.getSize()) {
+                result = result * factors.get(i);
+                i = i;  // + 1
+            }
+            return result;
+        };
+        return multiply;
+    }
+}
+
+*/

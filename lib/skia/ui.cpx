@@ -1,0 +1,494 @@
+// Skia UI — High-level OOP wrappers for Casprix
+// // Provides App, Column, Row, Button, Text, TextInput, etc. as
+// classes wrapping the low-level extern functions from skia.cpx.
+
+import "lib/skia/skia"
+
+// ========================================================================
+// Application
+// ========================================================================
+
+class App {
+    handle: i64;
+    root_handle: i64;
+    font_handle: i64;
+
+    func new(title: string, width: i64, height: i64) -> void {
+        this.handle = sg_app_create(title, width, height)
+        this.font_handle = skia_font_create("Segoe UI", 14.0)
+    }
+
+    func set_root(node: i64) -> void {
+        this.root_handle = node
+        sg_app_set_root(this.handle, node)
+    }
+
+    func run() -> void {
+        sg_app_run(this.handle)
+    }
+
+    func quit() -> void {
+        sg_app_quit(this.handle)
+    }
+
+    func get_font() -> i64 {
+        return this.font_handle
+    }
+
+    func set_fps(fps: i64) -> void {
+        sg_app_set_fps(this.handle, fps)
+    }
+
+    func get_anim_pool() -> i64 {
+        return sg_app_get_animations(this.handle)
+    }
+
+    func fade_in(node: i64, duration: float) -> i64 {
+        return sg_fade_in(sg_app_get_animations(this.handle), node, duration)
+    }
+
+    func fade_out(node: i64, duration: float) -> i64 {
+        return sg_fade_out(sg_app_get_animations(this.handle), node, duration)
+    }
+
+    func invalidate() -> void {
+        sg_app_invalidate(this.handle)
+    }
+
+    func destroy() -> void {
+        sg_app_destroy(this.handle)
+    }
+}
+
+// ========================================================================
+// Layout Containers
+// ========================================================================
+
+class Column {
+    handle: i64;
+
+    func new(spacing: float) -> void {
+        this.handle = widget_column(spacing)
+    }
+
+    func add(child: i64) -> void {
+        sg_node_add_child(this.handle, child)
+    }
+
+    func set_padding(p: float) -> void {
+        sg_style_set_padding_uniform(this.handle, p)
+    }
+
+    func set_background(color: i64) -> void {
+        sg_style_set_background(this.handle, color)
+    }
+
+    func set_border(color: i64, width: float, radius: float) -> void {
+        sg_style_set_border(this.handle, color, width, radius)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+
+    func set_max_size(w: float, h: float) -> void {
+        sg_node_set_max_size(this.handle, w, h)
+    }
+
+    func set_flex_grow(grow: float) -> void {
+        sg_node_set_flex_grow(this.handle, grow)
+    }
+
+    func set_align_self(align: i64) -> void {
+        sg_node_set_align_self(this.handle, align)
+    }
+
+    func set_align_items(align: i64) -> void {
+        sg_node_set_align_items(this.handle, align)
+    }
+
+    func set_visible(v: i64) -> void {
+        sg_node_set_visible(this.handle, v)
+    }
+}
+
+class Row {
+    handle: i64;
+
+    func new(spacing: float) -> void {
+        this.handle = widget_row(spacing)
+    }
+
+    func add(child: i64) -> void {
+        sg_node_add_child(this.handle, child)
+    }
+
+    func set_padding(p: float) -> void {
+        sg_style_set_padding_uniform(this.handle, p)
+    }
+
+    func set_background(color: i64) -> void {
+        sg_style_set_background(this.handle, color)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+
+    func set_flex_grow(grow: float) -> void {
+        sg_node_set_flex_grow(this.handle, grow)
+    }
+
+    func set_align_self(align: i64) -> void {
+        sg_node_set_align_self(this.handle, align)
+    }
+
+    func set_align_items(align: i64) -> void {
+        sg_node_set_align_items(this.handle, align)
+    }
+
+    func set_visible(v: i64) -> void {
+        sg_node_set_visible(this.handle, v)
+    }
+}
+
+class Stack {
+    handle: i64;
+
+    func new() -> void {
+        this.handle = widget_stack()
+    }
+
+    func add(child: i64) -> void {
+        sg_node_add_child(this.handle, child)
+    }
+
+    func set_background(color: i64) -> void {
+        sg_style_set_background(this.handle, color)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+
+    func set_flex_grow(grow: float) -> void {
+        sg_node_set_flex_grow(this.handle, grow)
+    }
+
+    func set_align_self(align: i64) -> void {
+        sg_node_set_align_self(this.handle, align)
+    }
+
+    func set_visible(v: i64) -> void {
+        sg_node_set_visible(this.handle, v)
+    }
+}
+
+// ========================================================================
+// Widget Wrappers
+// ========================================================================
+
+class Text {
+    handle: i64;
+
+    func new(content: string, font: i64, color: i64) -> void {
+        this.handle = widget_text(content, font, color)
+    }
+
+    func set_text(content: string) -> void {
+        widget_text_set(this.handle, content)
+    }
+}
+
+class Button {
+    handle: i64;
+
+    func new(label: string, font: i64) -> void {
+        this.handle = widget_button(label, font, 0, 0)
+    }
+
+    func set_background(color: i64) -> void {
+        sg_style_set_background(this.handle, color)
+    }
+
+    func set_border(color: i64, width: float, radius: float) -> void {
+        sg_style_set_border(this.handle, color, width, radius)
+    }
+
+    func set_padding(p: float) -> void {
+        sg_style_set_padding_uniform(this.handle, p)
+    }
+
+    func set_enabled(e: i64) -> void {
+        widget_button_set_enabled(this.handle, e)
+    }
+
+    func set_on_click(callback: i64, ctx: i64) -> void {
+        widget_button_set_callback(this.handle, callback, ctx)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+}
+
+class TextInput {
+    handle: i64;
+
+    func new(placeholder: string, font: i64) -> void {
+        this.handle = widget_text_input(placeholder, font)
+    }
+
+    func get_value() -> string {
+        return widget_text_input_get_value(this.handle)
+    }
+
+    func set_value(text: string) -> void {
+        widget_text_input_set_value(this.handle, text)
+    }
+
+    func set_on_change(callback: i64, ctx: i64) -> void {
+        widget_text_input_on_change(this.handle, callback, ctx)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+
+    func set_flex_grow(grow: float) -> void {
+        sg_node_set_flex_grow(this.handle, grow)
+    }
+
+    func set_align_self(align: i64) -> void {
+        sg_node_set_align_self(this.handle, align)
+    }
+
+    func set_background(color: i64) -> void {
+        sg_style_set_background(this.handle, color)
+    }
+}
+
+class Checkbox {
+    handle: i64;
+
+    func new(label: string, font: i64, initial: i64) -> void {
+        this.handle = widget_checkbox(label, font, initial)
+    }
+
+    func is_checked() -> i64 {
+        return widget_checkbox_is_checked(this.handle)
+    }
+
+    func set_checked(val: i64) -> void {
+        widget_checkbox_set_checked(this.handle, val)
+    }
+
+    func set_on_change(callback: i64, ctx: i64) -> void {
+        widget_checkbox_on_change(this.handle, callback, ctx)
+    }
+}
+
+class Slider {
+    handle: i64;
+
+    func new(min_val: float, max_val: float, initial: float) -> void {
+        this.handle = widget_slider(min_val, max_val, initial)
+    }
+
+    func get_value() -> float {
+        return widget_slider_get_value(this.handle)
+    }
+
+    func set_value(val: float) -> void {
+        widget_slider_set_value(this.handle, val)
+    }
+
+    func set_on_change(callback: i64, ctx: i64) -> void {
+        widget_slider_on_change(this.handle, callback, ctx)
+    }
+}
+
+class ImageView {
+    handle: i64;
+
+    func new(path: string, fit: i64) -> void {
+        this.handle = widget_image(path, fit)
+    }
+}
+
+class Separator {
+    handle: i64;
+
+    func new(horizontal: i64, color: i64, thickness: float) -> void {
+        this.handle = widget_separator(horizontal, color, thickness)
+    }
+}
+
+class Spacer {
+    handle: i64;
+
+    func new(grow: float) -> void {
+        this.handle = widget_spacer(grow)
+    }
+}
+
+// ========================================================================
+// Card Helper — Wraps content in a styled card
+// ========================================================================
+
+class Card {
+    handle: i64;
+
+    func new() -> void {
+        this.handle = widget_container()
+        sg_style_card(this.handle)
+    }
+
+    func add(child: i64) -> void {
+        sg_node_add_child(this.handle, child)
+    }
+
+    func set_padding(p: float) -> void {
+        sg_style_set_padding_uniform(this.handle, p)
+    }
+
+    func set_elevation(e: i64) -> void {
+        sg_style_elevated(this.handle, e)
+    }
+
+    func set_shadow(ox: float, oy: float, blur: float, color: i64) -> void {
+        sg_style_set_shadow(this.handle, ox, oy, blur, color)
+    }
+
+    func set_opacity(o: float) -> void {
+        sg_style_set_opacity(this.handle, o)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+}
+
+// ========================================================================
+// ScrollView
+// ========================================================================
+
+class ScrollView {
+    handle: i64;
+
+    func new() -> void {
+        this.handle = widget_scroll_view()
+    }
+
+    func set_content(content: i64) -> void {
+        widget_scroll_view_set_content(this.handle, content)
+    }
+
+    func scroll_to(x: float, y: float) -> void {
+        widget_scroll_to(this.handle, x, y)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+
+    func set_flex_grow(grow: float) -> void {
+        sg_node_set_flex_grow(this.handle, grow)
+    }
+
+    func set_align_self(align: i64) -> void {
+        sg_node_set_align_self(this.handle, align)
+    }
+
+    func set_background(color: i64) -> void {
+        sg_style_set_background(this.handle, color)
+    }
+}
+
+// ========================================================================
+// ProgressBar
+// ========================================================================
+
+class ProgressBar {
+    handle: i64;
+
+    func new(min_val: float, max_val: float, value: float) -> void {
+        this.handle = widget_progress_bar(min_val, max_val, value)
+    }
+
+    func set_value(v: float) -> void {
+        widget_progress_set_value(this.handle, v)
+    }
+
+    func set_indeterminate(n: i64) -> void {
+        widget_progress_set_indeterminate(this.handle, n)
+    }
+
+    func set_colors(fill: i64, bg: i64) -> void {
+        widget_progress_set_colors(this.handle, fill, bg)
+    }
+}
+
+// ========================================================================
+// TabPanel — self-contained tabs with auto content switching
+// ========================================================================
+
+class TabPanel {
+    handle: i64;
+
+    func new() -> void {
+        this.handle = 0
+    }
+
+    func new2(l1: string, c1: i64, l2: string, c2: i64) -> void {
+        this.handle = widget_tabpanel(l1, c1, l2, c2, "", 0, "", 0)
+    }
+
+    func new3(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64) -> void {
+        this.handle = widget_tabpanel(l1, c1, l2, c2, l3, c3, "", 0)
+    }
+
+    func new4(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64, l4: string, c4: i64) -> void {
+        this.handle = widget_tabpanel(l1, c1, l2, c2, l3, c3, l4, c4)
+    }
+
+    func get_active() -> i64 {
+        return widget_tabpanel_get_active(this.handle)
+    }
+
+    func set_active(index: i64) -> void {
+        widget_tabpanel_set_active(this.handle, index)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+}
+
+// ========================================================================
+// Color — ARGB color value helpers
+// ========================================================================
+
+class Color {
+    value: i64;
+
+    func from_rgb(r: i64, g: i64, b: i64) -> void {
+        this.value = skia_color_rgb(r, g, b)
+    }
+
+    func from_rgba(r: i64, g: i64, b: i64, a: i64) -> void {
+        this.value = skia_color_rgba(r, g, b, a)
+    }
+
+    func lighten(amount: i64) -> i64 {
+        return sg_color_lighten(this.value, amount)
+    }
+
+    func darken(amount: i64) -> i64 {
+        return sg_color_darken(this.value, amount)
+    }
+
+    func with_alpha(alpha: i64) -> i64 {
+        return sg_color_with_alpha(this.value, alpha)
+    }
+}

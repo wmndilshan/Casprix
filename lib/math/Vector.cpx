@@ -1,0 +1,90 @@
+// High-Performance Vector Library for Casprix
+// Wraps optimized C runtime for linear algebra operations
+
+// External C runtime functions
+extern func nuwan_vector_create(size: int) -> int;
+extern func nuwan_vector_free(handle: int) -> void;
+extern func nuwan_vector_get(handle: int, index: int) -> float;
+extern func nuwan_vector_set(handle: int, index: int, value: float) -> void;
+extern func nuwan_vector_fill(handle: int, value: float) -> void;
+extern func nuwan_vector_copy(handle: int) -> int;
+extern func nuwan_vector_dot(a: int, b: int) -> float;
+extern func nuwan_vector_add(a: int, b: int) -> int;
+extern func nuwan_vector_subtract(a: int, b: int) -> int;
+extern func nuwan_vector_scale(handle: int, scalar: float) -> int;
+extern func nuwan_vector_magnitude(handle: int) -> float;
+extern func nuwan_vector_normalize(handle: int) -> int;
+
+class Vector {
+    private handle: int;
+    private size: int;
+    
+    // Constructor
+    func new(size: int) -> Vector {
+        this.size = size;
+        this.handle = nuwan_vector_create(size);
+        return this;
+    }
+    
+    // Element access
+    func get(index: int) -> float {
+        return nuwan_vector_get(this.handle, index);
+    }
+    
+    func set(index: int, value: float) -> void {
+        nuwan_vector_set(this.handle, index, value);
+    }
+    
+    func getSize() -> int {
+        return this.size;
+    }
+    
+    // Fill all elements with value
+    func fill(value: float) -> void {
+        nuwan_vector_fill(this.handle, value);
+    }
+    
+    // Vector operations
+    func dot(other: Vector) -> float {
+        return nuwan_vector_dot(this.handle, other.handle);
+    }
+    
+    func add(other: Vector) -> Vector {
+        result: Vector = new Vector(this.size);
+        result.handle = nuwan_vector_add(this.handle, other.handle);
+        return result;
+    }
+    
+    func subtract(other: Vector) -> Vector {
+        result: Vector = new Vector(this.size);
+        result.handle = nuwan_vector_subtract(this.handle, other.handle);
+        return result;
+    }
+    
+    func scale(scalar: float) -> Vector {
+        result: Vector = new Vector(this.size);
+        result.handle = nuwan_vector_scale(this.handle, scalar);
+        return result;
+    }
+    
+    func magnitude() -> float {
+        return nuwan_vector_magnitude(this.handle);
+    }
+    
+    func normalize() -> Vector {
+        result: Vector = new Vector(this.size);
+        result.handle = nuwan_vector_normalize(this.handle);
+        return result;
+    }
+    
+    func copy() -> Vector {
+        result: Vector = new Vector(this.size);
+        result.handle = nuwan_vector_copy(this.handle);
+        return result;
+    }
+    
+    // Destructor
+    func destroy() -> void {
+        nuwan_vector_free(this.handle);
+    }
+}

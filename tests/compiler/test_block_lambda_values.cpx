@@ -1,0 +1,14 @@
+let inc = |x: int| -> int {
+    let y: int = x + 1;
+    return y;
+};
+
+let add_pair = |a: int, b: int| -> int {
+    return a + b;
+};
+
+print(inc(2));
+print(add_pair(10, 20));
+print((|x: int| -> int {
+    return x + 7;
+})(3));

@@ -1,0 +1,21 @@
+func bounce(value: dyn[Display]) -> dyn[Display] {
+    return value;
+}
+
+func main() -> int {
+    counter := 1;
+    counter = counter + 1;
+
+    mut total: int = counter;
+    total = total + 1;
+
+    label: dyn[Display] = dyn[Display]("hello");
+    label = bounce(label);
+
+    alloc {
+        scoped := counter;
+        scoped = scoped + 40;
+        print(scoped);
+    }
+    return counter;
+}

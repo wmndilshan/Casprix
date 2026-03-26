@@ -1,0 +1,156 @@
+// todo_app.cpx — Real-world Todo App using the ND Android Framework
+// 
+// Features:
+//   - Add, complete, and delete tasks
+//   - Filter by All / Active / Done
+//   - Task counter badge in AppBar
+//   - Snackbar confirmation on actions
+//   - Empty state illustration
+// 
+// Run on desktop:
+//   casprix examples/android/todo_app.cpx
+// 
+// Build APK:
+//   apk-builder --input examples/android/todo_app.cpx \
+//               --package com.casprix.todo \
+//               --name "Casprix Todo" \
+//               --output todo.apk
+
+import "lib/android/android"
+
+let app   = new AndroidApp("Casprix Todo", 400, 720)
+let NAV   = app.nav()
+let POOL  = app.get_anim_pool()
+let font  = app.get_font()
+let bold  = app.get_font_bold()
+let small = app.get_font_small()
+let title = app.get_font_title()
+
+let main_activity = android_activity_create("TodoActivity")
+
+// ViewModel holds task count state
+let vm    = new ViewModel()
+vm.set_int("total",    0)
+vm.set_int("done",     0)
+vm.set_int("filter",   0)   // 0=All 1=Active 2=Done
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+let screen = new Screen("My Tasks", 0, NAV, title, font)
+
+// ── Quick-add bar ─────────────────────────────────────────────────────────────
+let add_card    = new MaterialCard()
+add_card.filled(MD_SURFACE)
+
+let add_row     = new Row(8.0)
+let task_input  = new MaterialTextField("", "What needs to be done?", small, font)
+task_input.set_min_size(0.0, 0.0)
+
+let add_btn     = new MaterialButton()
+add_btn.filled("  +  ", bold)
+
+add_row.add(task_input.handle)
+add_row.add(add_btn.handle)
+add_card.add(add_row.handle)
+screen.add(add_card.handle)
+
+// ── Filter chips ──────────────────────────────────────────────────────────────
+let filter_row  = new Row(8.0)
+let chip_all    = new Chip("All",    font)
+let chip_active = new Chip("Active", font)
+let chip_done   = new Chip("Done",   font)
+chip_all.select(1)   // All is selected by default
+filter_row.add(chip_all.handle)
+filter_row.add(chip_active.handle)
+filter_row.add(chip_done.handle)
+screen.add(filter_row.handle)
+
+// ── Statistics row ────────────────────────────────────────────────────────────
+let stats_row   = new Row(8.0)
+
+let stat_total_card = new MaterialCard()
+stat_total_card.filled(MD_PRIMARY)
+let stc     = new Column(2.0)
+let st_num  = new Text("0", title, MD_ON_PRIMARY)
+let st_lbl  = new Text("Total", small, 0xCCFFFFFF)
+stc.add(st_num.handle)
+stc.add(st_lbl.handle)
+stat_total_card.add(stc.handle)
+
+let stat_done_card = new MaterialCard()
+stat_done_card.filled(MD_SUCCESS)
+let sdc     = new Column(2.0)
+let sd_num  = new Text("0", title, MD_ON_PRIMARY)
+let sd_lbl  = new Text("Done", small, 0xCCFFFFFF)
+sdc.add(sd_num.handle)
+sdc.add(sd_lbl.handle)
+stat_done_card.add(sdc.handle)
+
+let stat_active_card = new MaterialCard()
+stat_active_card.filled(MD_WARNING)
+let sac     = new Column(2.0)
+let sa_num  = new Text("0", title, MD_ON_PRIMARY)
+let sa_lbl  = new Text("Pending", small, 0xCCFFFFFF)
+sac.add(sa_num.handle)
+sac.add(sa_lbl.handle)
+stat_active_card.add(sac.handle)
+
+stats_row.add(stat_total_card.handle)
+stats_row.add(stat_done_card.handle)
+stats_row.add(stat_active_card.handle)
+screen.add(stats_row.handle)
+
+// ── Task list ─────────────────────────────────────────────────────────────────
+let list_hdr  = new Text("Tasks", bold, MD_ON_SURFACE)
+screen.add(list_hdr.handle)
+
+// Render some sample tasks as ListItems
+let tasks_card = new MaterialCard()
+let tasks_col  = new Column(0.0)
+
+// Task helper: create a task row (checkbox + title + delete button)
+let task1 = new ListItem("☐", "Set up CI/CD pipeline",       "", bold, font, small)
+let task2 = new ListItem("☑", "Write unit tests for API",    "", bold, font, small)
+let task3 = new ListItem("☐", "Design onboarding screens",   "", bold, font, small)
+let task4 = new ListItem("☑", "Fix memory leak in renderer", "", bold, font, small)
+let task5 = new ListItem("☐", "Implement dark mode",          "", bold, font, small)
+let task6 = new ListItem("☐", "Add APK signing to CI",        "", bold, font, small)
+
+tasks_col.add(task1.handle)
+tasks_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+tasks_col.add(task2.handle)
+tasks_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+tasks_col.add(task3.handle)
+tasks_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+tasks_col.add(task4.handle)
+tasks_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+tasks_col.add(task5.handle)
+tasks_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+tasks_col.add(task6.handle)
+
+tasks_card.add(tasks_col.handle)
+screen.add(tasks_card.handle)
+
+// ── Progress bar ──────────────────────────────────────────────────────────────
+let progress_lbl = new Text("2 of 6 tasks completed (33%)", small, MD_ON_SURFACE_MED)
+let progress_bar = new ProgressBar(0.0, 6.0, 2.0)
+progress_bar.set_colors(MD_SUCCESS, MD_OUTLINE_VARIANT)
+
+let prog_card = new MaterialCard()
+prog_card.filled(MD_SURFACE)
+let pc = new Column(6.0)
+pc.add(progress_lbl.handle)
+pc.add(progress_bar.handle)
+prog_card.add(pc.handle)
+screen.add(prog_card.handle)
+
+// ── Floating Action Button ────────────────────────────────────────────────────
+let fab = new FloatingActionButton("✎", title)
+screen.add(fab.handle)
+
+// ── Snackbar ──────────────────────────────────────────────────────────────────
+let snackbar = new Snackbar(screen.handle)
+// snackbar.show("Task added!", 2.5)   ← called when add_btn is tapped
+
+// ── Launch ────────────────────────────────────────────────────────────────────
+app.set_main(main_activity)
+app.run()

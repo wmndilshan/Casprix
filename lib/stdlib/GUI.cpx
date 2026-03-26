@@ -1,0 +1,193 @@
+// Casprix Standard Library - GUI Module
+// Provides cross-platform graphical user interface
+
+class Color {
+    r: int;  // Red (0-255)
+    g: int;  // Green (0-255)
+    b: int;  // Blue (0-255)
+    a: int;  // Alpha (0-255)
+
+    func new(red: int, green: int, blue: int) -> Color {
+        this.r = red;
+        this.g = green;
+        this.b = blue;
+        this.a = 255;
+        return this;
+    }
+}
+
+class Window {
+    handle: int;       // Opaque handle to native window
+    title: string;     // Window title
+    width: int;        // Window width
+    height: int;       // Window height
+    visible: bool;     // Visibility state
+
+    func new(windowTitle: string, w: int, h: int) -> Window {
+        // C binding: nuwan_window_create(windowTitle, w, h)
+        this.title = windowTitle;
+        this.width = w;
+        this.height = h;
+        this.visible = false;
+        return this;
+    }
+
+    // Show the window
+    func show() -> void {
+        // C binding: nuwan_window_show(this.handle)
+        this.visible = true;
+    }
+
+    // Hide the window
+    func hide() -> void {
+        // C binding: nuwan_window_hide(this.handle)
+        this.visible = false;
+    }
+
+    // Set window title
+    func setTitle(newTitle: string) -> void {
+        this.title = newTitle;
+        // C binding: SetWindowText / gtk_window_set_title
+    }
+
+    // Add a widget to the window
+    func addWidget(widget: int) -> void {
+        // C binding: nuwan_window_add_widget(this.handle, widget)
+        // widget is handle to Button/Label/etc
+    }
+}
+
+class Button {
+    handle: int;       // Opaque handle to native button
+    text: string;      // Button text
+    x: int;            // X position
+    y: int;            // Y position
+    width: int;        // Button width
+    height: int;       // Button height
+    enabled: bool;     // Enabled state
+
+    func new(btnText: string, posX: int, posY: int, w: int, h: int) -> Button {
+        // C binding: nuwan_button_create(btnText, posX, posY, w, h)
+        this.text = btnText;
+        this.x = posX;
+        this.y = posY;
+        this.width = w;
+        this.height = h;
+        this.enabled = true;
+        return this;
+    }
+
+    // Set button text
+    func setText(newText: string) -> void {
+        this.text = newText;
+        // C binding: SetWindowText / gtk_button_set_label
+    }
+
+    // Enable/disable button
+    func setEnabled(state: bool) -> void {
+        this.enabled = state;
+        // C binding: EnableWindow / gtk_widget_set_sensitive
+    }
+
+    // Set click callback
+    // Note: Function pointers need special handling
+    func onClick() -> void {
+        // User overrides this method to handle clicks
+    }
+}
+
+class Label {
+    handle: int;       // Opaque handle to native label
+    text: string;      // Label text
+    x: int;
+    y: int;
+    width: int;
+    height: int;
+    textColor: Color;
+    bgColor: Color;
+
+    func new(labelText: string, posX: int, posY: int, w: int, h: int) -> Label {
+        // C binding: nuwan_label_create(labelText, posX, posY, w, h)
+        this.text = labelText;
+        this.x = posX;
+        this.y = posY;
+        this.width = w;
+        this.height = h;
+        return this;
+    }
+
+    // Set label text
+    func setText(newText: string) -> void {
+        this.text = newText;
+        // C binding: SetWindowText / gtk_label_set_text
+    }
+
+    // Set text color
+    func setColor(color: Color) -> void {
+        this.textColor = color;
+        // C binding: platform-specific color setting
+    }
+}
+
+class TextBox {
+    handle: int;       // Opaque handle to native textbox
+    text: string;      // Current text
+    x: int;
+    y: int;
+    width: int;
+    height: int;
+    multiline: bool;   // Single or multi-line
+    readonly: bool;    // Read-only flag
+    maxLength: int;    // Maximum text length
+
+    func new(posX: int, posY: int, w: int, h: int, multi: bool) -> TextBox {
+        // C binding: nuwan_textbox_create(posX, posY, w, h, multi)
+        this.x = posX;
+        this.y = posY;
+        this.width = w;
+        this.height = h;
+        this.multiline = multi;
+        this.readonly = false;
+        this.maxLength = 1000;
+        return this;
+    }
+
+    // Get current text
+    func getText() -> string {
+        // C binding: nuwan_textbox_get_text(this.handle)
+        return this.text;
+    }
+
+    // Set text
+    func setText(newText: string) -> void {
+        this.text = newText;
+        // C binding: nuwan_textbox_set_text(this.handle, newText)
+    }
+
+    // Set read-only mode
+    func setReadOnly(state: bool) -> void {
+        this.readonly = state;
+        // C binding: SendMessage(EM_SETREADONLY) / gtk_text_set_editable
+    }
+}
+
+// static GUI utilities
+func GUIInit() -> void {
+    // C binding: nuwan_gui_init()
+    // Initializes GUI subsystem
+}
+
+func GUIRun() -> void {
+    // C binding: nuwan_gui_run()
+    // Starts main event loop (blocking)
+}
+
+func GUIQuit() -> void {
+    // C binding: nuwan_gui_quit()
+    // Exits event loop
+}
+
+func GUICleanup() -> void {
+    // C binding: nuwan_gui_cleanup()
+    // Cleanup GUI resources
+}

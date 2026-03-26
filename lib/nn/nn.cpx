@@ -1,0 +1,847 @@
+// Casprix Neural Network Support Library
+// High-level wrapper for the AVX2-optimized LLM runtime
+// // Provides:
+//   - TransformerModel: Create, train, and run transformer models
+//   - Adam optimizer with learning rate scheduling
+//   - DataLoader for batched training
+//   - TextGenerator for autoregressive text generation
+//   - Loss functions and training utilities
+// // All operations dispatch to hand-tuned AVX2 NASM kernels when available:
+//   - 6x16 GEMM micro-kernel with L2 cache blocking
+//   - 2x unrolled elementwise ops (16 floats/iter)
+//   - Dual-accumulator reductions for latency hiding
+//   - Fused softmax/cross-entropy backward kernels
+// // Usage:
+//   import "nn"
+//   let model: TransformerModel = TransformerModel.create(config)
+//   let trainer: Trainer = new Trainer(model, train_config)
+//   trainer.train(train_data, val_data)
+
+// ============================================================================
+// EXTERNAL C RUNTIME BINDINGS
+// ============================================================================
+
+// --- Model ---
+extern func nuwan_transformer_create(vocab_size: int, hidden_dim: int,
+    num_layers: int, num_heads: int, ffn_dim: int, max_seq_len: int) -> int
+extern func nuwan_transformer_forward(model: int, token_ids: int,
+    batch: int, seq_len: int) -> int
+extern func nuwan_transformer_save(model: int, path: string) -> bool
+extern func nuwan_transformer_load(path: string) -> int
+extern func nuwan_transformer_destroy(model: int) -> void
+extern func nuwan_transformer_get_num_params(model: int) -> int
+extern func nuwan_transformer_get_hidden_dim(model: int) -> int
+extern func nuwan_transformer_get_vocab_size(model: int) -> int
+extern func nuwan_transformer_get_num_layers(model: int) -> int
+
+// --- Optimizer ---
+extern func nuwan_adam_create(num_params: int, lr: float,
+    beta1: float, beta2: float) -> int
+extern func nuwan_adam_set_weight_decay(handle: int, weight_decay: float) -> void
+extern func nuwan_adam_set_epsilon(handle: int, epsilon: float) -> void
+extern func nuwan_adam_set_lr(handle: int, lr: float) -> void
+extern func nuwan_adam_get_lr(handle: int) -> float
+extern func nuwan_adam_get_step(handle: int) -> int
+extern func nuwan_adam_destroy(handle: int) -> void
+
+// --- Training ---
+extern func nuwan_train_step(model: int, optimizer: int, tokens: int,
+    targets: int, batch: int, seq_len: int) -> float
+extern func nuwan_eval_step(model: int, tokens: int, targets: int,
+    batch: int, seq_len: int) -> float
+extern func nuwan_cross_entropy_loss(logits: int, targets: int,
+    batch: int, vocab_size: int) -> float
+
+// --- Learning Rate Schedule ---
+extern func nuwan_lr_schedule(step: int, warmup_steps: int,
+    max_steps: int, max_lr: float, min_lr: float) -> float
+
+// --- Data Loader ---
+extern func nuwan_dataloader_create(dataset: int, batch_size: int,
+    shuffle: int) -> int
+extern func nuwan_dataloader_next_batch(handle: int, batch_out: int,
+    targets_out: int) -> int
+extern func nuwan_dataloader_reset(handle: int) -> void
+extern func nuwan_dataloader_destroy(handle: int) -> void
+
+// --- Generation ---
+extern func nuwan_generate(model: int, prompt_tokens: int,
+    prompt_len: int, max_new_tokens: int, temperature: float,
+    out_len: int) -> int
+extern func nuwan_generate_greedy(model: int, prompt_tokens: int,
+    prompt_len: int, max_new_tokens: int, out_len: int) -> int
+
+// --- Tokenizer (re-export from llm/Tokenizer for convenience) ---
+extern func nuwan_tokenizer_create(vocab_size: int) -> int
+extern func nuwan_tokenizer_train(handle: int, text: string, min_freq: int) -> void
+extern func nuwan_tokenizer_encode(handle: int, text: string) -> array<int>
+extern func nuwan_tokenizer_decode(handle: int, tokens: array<int>) -> string
+extern func nuwan_tokenizer_save(handle: int, path: string) -> bool
+extern func nuwan_tokenizer_load(path: string) -> int
+extern func nuwan_tokenizer_destroy(handle: int) -> void
+
+// --- Dataset ---
+extern func nuwan_dataset_create(num_seqs: int, seq_len: int,
+    vocab_size: int) -> int
+extern func nuwan_dataset_save(handle: int, path: string) -> bool
+extern func nuwan_dataset_load(path: string) -> int
+extern func nuwan_dataset_shuffle(handle: int) -> void
+extern func nuwan_dataset_get_sequence(handle: int, index: int) -> array<int>
+extern func nuwan_dataset_get_num_sequences(handle: int) -> int
+extern func nuwan_dataset_get_seq_length(handle: int) -> int
+extern func nuwan_dataset_destroy(handle: int) -> void
+extern func nuwan_dataset_split(handle: int, train_r: float,
+    val_r: float, test_r: float) -> array<int>
+
+
+// ============================================================================
+// MODEL CONFIGURATION
+// ============================================================================
+
+class ModelConfig {
+    vocab_size: int;
+    hidden_dim: int;
+    num_layers: int;
+    num_heads: int;
+    ffn_dim: int;
+    max_seq_len: int;
+
+    // Default: small 15M parameter model
+    func new() -> void {
+        this.vocab_size = 8192
+        this.hidden_dim = 256
+        this.num_layers = 6
+        this.num_heads = 8
+        this.ffn_dim = 1024
+        this.max_seq_len = 256
+    }
+
+    // Custom configuration
+    func new(vocab_size: int, hidden_dim: int, num_layers: int,
+             num_heads: int, ffn_dim: int, max_seq_len: int) -> void {
+        this.vocab_size = vocab_size
+        this.hidden_dim = hidden_dim
+        this.num_layers = num_layers
+        this.num_heads = num_heads
+        this.ffn_dim = ffn_dim
+        this.max_seq_len = max_seq_len
+    }
+
+    // Estimate total parameter count
+    func estimateParams() -> int {
+        // Embeddings: token + position
+        let params: int = this.vocab_size * this.hidden_dim
+        params = params + this.max_seq_len * this.hidden_dim
+
+        // Per layer: attention (4 weight matrices) + FFN (2 weight + 2 bias) + 2 LN
+        let head_dim: int = this.hidden_dim / this.num_heads
+        let attn: int = 4 * this.hidden_dim * this.hidden_dim
+        let ffn: int = this.hidden_dim * this.ffn_dim + this.ffn_dim
+        ffn = ffn + this.ffn_dim * this.hidden_dim + this.hidden_dim
+        let ln: int = 4 * this.hidden_dim  # 2 layernorms * (gamma + beta)
+        params = params + this.num_layers * (attn + ffn + ln)
+
+        // Final layernorm + LM head
+        params = params + 2 * this.hidden_dim
+        params = params + this.hidden_dim * this.vocab_size
+
+        return params
+    }
+
+    func display() -> void {
+        print("ModelConfig:")
+        print("  vocab_size:   " + this.vocab_size)
+        print("  hidden_dim:   " + this.hidden_dim)
+        print("  num_layers:   " + this.num_layers)
+        print("  num_heads:    " + this.num_heads)
+        print("  ffn_dim:      " + this.ffn_dim)
+        print("  max_seq_len:  " + this.max_seq_len)
+        print("  params:       ~" + (this.estimateParams() / 1000000) + "M")
+    }
+
+    // Preset configurations
+    static func tiny() -> ModelConfig {
+        return new ModelConfig(8192, 128, 4, 4, 512, 256)
+    }
+
+    static func small() -> ModelConfig {
+        return new ModelConfig(8192, 256, 6, 8, 1024, 256)
+    }
+
+    static func medium() -> ModelConfig {
+        return new ModelConfig(16384, 512, 12, 8, 2048, 512)
+    }
+
+    static func large() -> ModelConfig {
+        return new ModelConfig(32000, 1024, 24, 16, 4096, 1024)
+    }
+}
+
+
+// ============================================================================
+// TRANSFORMER MODEL
+// ============================================================================
+
+class TransformerModel {
+    handle: int;
+    config: ModelConfig
+
+    // Create model from configuration
+    func new(config: ModelConfig) -> void {
+        this.config = config
+        this.handle = nuwan_transformer_create(
+            config.vocab_size, config.hidden_dim, config.num_layers,
+            config.num_heads, config.ffn_dim, config.max_seq_len
+        )
+    }
+
+    // Create from existing handle (used by load)
+    func new(handle: int) -> void {
+        this.handle = handle
+        this.config = new ModelConfig(
+            nuwan_transformer_get_vocab_size(handle),
+            nuwan_transformer_get_hidden_dim(handle),
+            nuwan_transformer_get_num_layers(handle),
+            0, 0, 0  # heads, ffn_dim, max_seq not queryable from handle
+        )
+    }
+
+    // Create with config preset
+    static func create(config: ModelConfig) -> TransformerModel {
+        return new TransformerModel(config)
+    }
+
+    // Forward pass: tokens [batch, seq_len] -> logits [batch, seq_len, vocab]
+    func forward(token_ids: array<int>, batch: int, seq_len: int) -> array<float> {
+        let logits_ptr: int = nuwan_transformer_forward(
+            this.handle, token_ids, batch, seq_len
+        )
+        return logits_ptr
+    }
+
+    // Get parameter count
+    func numParams() -> int {
+        return nuwan_transformer_get_num_params(this.handle)
+    }
+
+    // Save model checkpoint
+    func save(path: string) -> bool {
+        return nuwan_transformer_save(this.handle, path)
+    }
+
+    // Load model from checkpoint
+    static func load(path: string) -> TransformerModel {
+        let handle: int = nuwan_transformer_load(path)
+        return new TransformerModel(handle)
+    }
+
+    // Free model memory
+    func destroy() -> void {
+        nuwan_transformer_destroy(this.handle)
+    }
+
+    func printInfo() -> void {
+        print("TransformerModel:")
+        print("  params:      " + this.numParams())
+        print("  hidden_dim:  " + nuwan_transformer_get_hidden_dim(this.handle))
+        print("  vocab_size:  " + nuwan_transformer_get_vocab_size(this.handle))
+        print("  num_layers:  " + nuwan_transformer_get_num_layers(this.handle))
+    }
+}
+
+
+// ============================================================================
+// ADAM OPTIMIZER
+// ============================================================================
+
+class Adam {
+    handle: int;
+    learning_rate: float;
+    beta1: float
+    beta2: float
+    weight_decay: float;
+    epsilon: float;
+
+    // Default Adam: lr=3e-4, beta1=0.9, beta2=0.999
+    func new(num_params: int) -> void {
+        this.learning_rate = 0.0003
+        this.beta1 = 0.9
+        this.beta2 = 0.999
+        this.weight_decay = 0.0
+        this.epsilon = 0.00000001
+        this.handle = nuwan_adam_create(num_params, this.learning_rate,
+                                        this.beta1, this.beta2)
+    }
+
+    // Custom learning rate
+    func new(num_params: int, lr: float) -> void {
+        this.learning_rate = lr
+        this.beta1 = 0.9
+        this.beta2 = 0.999
+        this.weight_decay = 0.0
+        this.epsilon = 0.00000001
+        this.handle = nuwan_adam_create(num_params, lr, this.beta1, this.beta2)
+    }
+
+    // Full customization
+    func new(num_params: int, lr: float, beta1: float, beta2: float) -> void {
+        this.learning_rate = lr
+        this.beta1 = beta1
+        this.beta2 = beta2
+        this.weight_decay = 0.0
+        this.epsilon = 0.00000001
+        this.handle = nuwan_adam_create(num_params, lr, beta1, beta2)
+    }
+
+    // Set weight decay (AdamW)
+    func setWeightDecay(wd: float) -> Adam {
+        this.weight_decay = wd
+        nuwan_adam_set_weight_decay(this.handle, wd)
+        return this
+    }
+
+    // Set epsilon
+    func setEpsilon(eps: float) -> Adam {
+        this.epsilon = eps
+        nuwan_adam_set_epsilon(this.handle, eps)
+        return this
+    }
+
+    // Update learning rate (for scheduling)
+    func setLR(lr: float) -> void {
+        this.learning_rate = lr
+        nuwan_adam_set_lr(this.handle, lr)
+    }
+
+    // Get current learning rate
+    func getLR() -> float {
+        return nuwan_adam_get_lr(this.handle)
+    }
+
+    // Get current step count
+    func getStep() -> int {
+        return nuwan_adam_get_step(this.handle)
+    }
+
+    func destroy() -> void {
+        nuwan_adam_destroy(this.handle)
+    }
+}
+
+
+// ============================================================================
+// LEARNING RATE SCHEDULES
+// ============================================================================
+
+class LRSchedule {
+    warmup_steps: int;
+    max_steps: int;
+    max_lr: float;
+    min_lr: float;
+
+    // Warmup + cosine decay
+    func new(warmup_steps: int, max_steps: int, max_lr: float, min_lr: float) -> void {
+        this.warmup_steps = warmup_steps
+        this.max_steps = max_steps
+        this.max_lr = max_lr
+        this.min_lr = min_lr
+    }
+
+    // Convenience: warmup is 10% of total steps
+    func new(max_steps: int, max_lr: float) -> void {
+        this.warmup_steps = max_steps / 10
+        this.max_steps = max_steps
+        this.max_lr = max_lr
+        this.min_lr = max_lr / 10  # min_lr = max_lr * 0.1
+    }
+
+    // Get learning rate at step
+    func get(step: int) -> float {
+        return nuwan_lr_schedule(step, this.warmup_steps, this.max_steps,
+                                  this.max_lr, this.min_lr)
+    }
+
+    // Apply schedule to optimizer at current step
+    func apply(optimizer: Adam, step: int) -> float {
+        let lr: float = this.get(step)
+        optimizer.setLR(lr)
+        return lr
+    }
+}
+
+
+// ============================================================================
+// DATA LOADER
+// ============================================================================
+
+class DataLoader {
+    handle: int;
+    batch_size: int;
+    dataset_handle: int;
+
+    func new(dataset_handle: int, batch_size: int, shuffle: bool) -> void {
+        this.batch_size = batch_size
+        this.dataset_handle = dataset_handle
+        let shuffle_int: int = 0
+        if shuffle {
+            shuffle_int = 1
+        }
+        this.handle = nuwan_dataloader_create(dataset_handle, batch_size, shuffle_int)
+    }
+
+    // Get next batch. Returns false at epoch end
+    func nextBatch(batch_out: int, targets_out: int) -> bool {
+        let result: int = nuwan_dataloader_next_batch(this.handle, batch_out, targets_out)
+        return result == 1
+    }
+
+    // Reset to start of dataset
+    func reset() -> void {
+        nuwan_dataloader_reset(this.handle)
+    }
+
+    func destroy() -> void {
+        nuwan_dataloader_destroy(this.handle)
+    }
+}
+
+
+// ============================================================================
+// TRAINING CONFIGURATION
+// ============================================================================
+
+class TrainingConfig {
+    batch_size: int;
+    learning_rate: float;
+    num_steps: int;
+    warmup_steps: int;
+    weight_decay: float;
+    beta1: float
+    beta2: float
+    max_grad_norm: float;
+    log_interval: int;
+    val_interval: int;
+    save_interval: int;
+    checkpoint_dir: string;
+
+    // Default training config
+    func new() -> void {
+        this.batch_size = 32
+        this.learning_rate = 0.0003
+        this.num_steps = 100000
+        this.warmup_steps = 2000
+        this.weight_decay = 0.01
+        this.beta1 = 0.9
+        this.beta2 = 0.999
+        this.max_grad_norm = 1.0
+        this.log_interval = 100
+        this.val_interval = 1000
+        this.save_interval = 5000
+        this.checkpoint_dir = "checkpoints/"
+    }
+
+    func print() -> void {
+        print("TrainingConfig:")
+        print("  batch_size:     " + this.batch_size)
+        print("  learning_rate:  " + this.learning_rate)
+        print("  num_steps:      " + this.num_steps)
+        print("  warmup_steps:   " + this.warmup_steps)
+        print("  weight_decay:   " + this.weight_decay)
+        print("  beta1:          " + this.beta1)
+        print("  beta2:          " + this.beta2)
+        print("  max_grad_norm:  " + this.max_grad_norm)
+        print("  log_interval:   " + this.log_interval)
+        print("  val_interval:   " + this.val_interval)
+        print("  save_interval:  " + this.save_interval)
+        print("  checkpoint_dir: " + this.checkpoint_dir)
+    }
+}
+
+
+// ============================================================================
+// TRAINER
+// ============================================================================
+
+class Trainer {
+    model: TransformerModel
+    optimizer: Adam
+    lr_schedule: LRSchedule
+    config: TrainingConfig
+    step: int;
+    best_val_loss: float;
+
+    func new(model: TransformerModel, config: TrainingConfig) -> void {
+        this.model = model
+        this.config = config
+        this.step = 0
+        this.best_val_loss = 999999.0
+
+        // Create optimizer
+        let num_params: int = model.numParams()
+        this.optimizer = new Adam(num_params, config.learning_rate,
+                                  config.beta1, config.beta2)
+        this.optimizer.setWeightDecay(config.weight_decay)
+
+        // Create LR schedule
+        this.lr_schedule = new LRSchedule(config.warmup_steps,
+                                           config.num_steps,
+                                           config.learning_rate,
+                                           config.learning_rate / 10)
+    }
+
+    // Full training loop
+    func train(train_data: int, val_data: int) -> void {
+        print("=== Training Started ===")
+        print("")
+        this.model.printInfo()
+        print("")
+        this.config.print()
+        print("")
+
+        let loader: DataLoader = new DataLoader(train_data, this.config.batch_size, true)
+
+        while this.step < this.config.num_steps {
+            // Update learning rate
+            let lr: float = this.lr_schedule.apply(this.optimizer, this.step)
+
+            // Get batch and run train step
+            let batch_ptr: int = 0
+            let targets_ptr: int = 0
+            let has_batch: bool = loader.nextBatch(batch_ptr, targets_ptr)
+
+            if !has_batch {
+                // Epoch finished, reset
+                loader.reset()
+                has_batch = loader.nextBatch(batch_ptr, targets_ptr)
+            }
+
+            // Forward + backward + optimizer
+            let loss: float = nuwan_train_step(
+                this.model.handle, this.optimizer.handle,
+                batch_ptr, targets_ptr,
+                this.config.batch_size, 0  # seq_len from dataset
+            )
+
+            // Log training progress
+            if this.step % this.config.log_interval == 0 {
+                print("step=" + this.step + " loss=" + loss + " lr=" + lr)
+            }
+
+            // Validation
+            if this.step % this.config.val_interval == 0 && this.step > 0 {
+                let val_loss: float = this.evaluate(val_data)
+                print("  val_loss=" + val_loss)
+
+                if val_loss < this.best_val_loss {
+                    this.best_val_loss = val_loss
+                    let path: string = this.config.checkpoint_dir + "best.ckpt"
+                    this.model.save(path)
+                    print("  saved best checkpoint: " + path)
+                }
+            }
+
+            // Periodic checkpoint
+            if this.step % this.config.save_interval == 0 && this.step > 0 {
+                let path: string = this.config.checkpoint_dir + "step_" + this.step + ".ckpt"
+                this.model.save(path)
+                print("  saved checkpoint: " + path)
+            }
+
+            this.step = this.step + 1
+        }
+
+        print("")
+        print("=== Training Complete ===")
+        print("  total steps:    " + this.step)
+        print("  best val loss:  " + this.best_val_loss)
+
+        loader.destroy()
+    }
+
+    // Evaluate on validation set
+    func evaluate(val_data: int) -> float {
+        let loader: DataLoader = new DataLoader(val_data, this.config.batch_size, false)
+        let total_loss: float = 0.0
+        let num_batches: int = 0
+
+        let batch_ptr: int = 0
+        let targets_ptr: int = 0
+
+        while loader.nextBatch(batch_ptr, targets_ptr) {
+            let loss: float = nuwan_eval_step(
+                this.model.handle, batch_ptr, targets_ptr,
+                this.config.batch_size, 0
+            )
+            total_loss = total_loss + loss
+            num_batches = num_batches + 1
+        }
+
+        loader.destroy()
+
+        if num_batches > 0 {
+            return total_loss / num_batches
+        }
+        return 0.0
+    }
+
+    func destroy() -> void {
+        this.optimizer.destroy()
+    }
+}
+
+
+// ============================================================================
+// TEXT GENERATOR
+// ============================================================================
+
+class TextGenerator {
+    model: TransformerModel
+    tokenizer_handle: int;
+    temperature: float;
+    max_tokens: int;
+
+    func new(model: TransformerModel, tokenizer_handle: int) -> void {
+        this.model = model
+        this.tokenizer_handle = tokenizer_handle
+        this.temperature = 0.8
+        this.max_tokens = 200
+    }
+
+    // Set sampling temperature (0 = greedy, higher = more random)
+    func setTemperature(temp: float) -> TextGenerator {
+        this.temperature = temp
+        return this
+    }
+
+    // Set maximum tokens to generate
+    func setMaxTokens(max_tok: int) -> TextGenerator {
+        this.max_tokens = max_tok
+        return this
+    }
+
+    // Generate text from prompt string
+    func generate(prompt: string) -> string {
+        // Encode prompt
+        let tokens: array<int> = nuwan_tokenizer_encode(this.tokenizer_handle, prompt)
+        let prompt_len: int = tokens.size()
+
+        // Generate
+        let out_len: int = 0
+        let output_tokens: int = nuwan_generate(
+            this.model.handle, tokens, prompt_len,
+            this.max_tokens, this.temperature, out_len
+        )
+
+        // Decode back to text
+        let text: string = nuwan_tokenizer_decode(this.tokenizer_handle, output_tokens)
+        return text
+    }
+
+    // Greedy decode (deterministic, best for evaluation)
+    func generateGreedy(prompt: string) -> string {
+        let tokens: array<int> = nuwan_tokenizer_encode(this.tokenizer_handle, prompt)
+        let prompt_len: int = tokens.size()
+
+        let out_len: int = 0
+        let output_tokens: int = nuwan_generate_greedy(
+            this.model.handle, tokens, prompt_len,
+            this.max_tokens, out_len
+        )
+
+        let text: string = nuwan_tokenizer_decode(this.tokenizer_handle, output_tokens)
+        return text
+    }
+
+    // Generate from raw token IDs
+    func generateFromTokens(prompt_tokens: array<int>) -> array<int> {
+        let out_len: int = 0
+        let output: int = nuwan_generate(
+            this.model.handle, prompt_tokens, prompt_tokens.size(),
+            this.max_tokens, this.temperature, out_len
+        )
+        return output
+    }
+}
+
+
+// ============================================================================
+// LOSS FUNCTIONS
+// ============================================================================
+
+class Loss {
+    // Cross-entropy loss between logits and target token IDs
+    static func crossEntropy(logits: int, targets: int, batch: int,
+                              vocab_size: int) -> float {
+        return nuwan_cross_entropy_loss(logits, targets, batch, vocab_size)
+    }
+}
+
+
+// ============================================================================
+// DATASET UTILITIES (re-exported for convenience)
+// ============================================================================
+
+class NNDataset {
+    handle: int;
+    num_sequences: int;
+    seq_length: int;
+
+    func new(num_seqs: int, seq_len: int, vocab_size: int) -> void {
+        this.handle = nuwan_dataset_create(num_seqs, seq_len, vocab_size)
+        this.num_sequences = num_seqs
+        this.seq_length = seq_len
+    }
+
+    static func load(path: string) -> NNDataset {
+        let ds: NNDataset = new NNDataset(0, 0, 0)
+        ds.handle = nuwan_dataset_load(path)
+        ds.num_sequences = nuwan_dataset_get_num_sequences(ds.handle)
+        ds.seq_length = nuwan_dataset_get_seq_length(ds.handle)
+        return ds
+    }
+
+    func save(path: string) -> bool {
+        return nuwan_dataset_save(this.handle, path)
+    }
+
+    func shuffle() -> void {
+        nuwan_dataset_shuffle(this.handle)
+    }
+
+    func getSequence(index: int) -> array<int> {
+        return nuwan_dataset_get_sequence(this.handle, index)
+    }
+
+    func getNumSequences() -> int {
+        return this.num_sequences
+    }
+
+    func getSeqLength() -> int {
+        return this.seq_length
+    }
+
+    // Split into train/val/test
+    func split(train_ratio: float, val_ratio: float,
+               test_ratio: float) -> array<int> {
+        return nuwan_dataset_split(this.handle, train_ratio, val_ratio, test_ratio)
+    }
+
+    func destroy() -> void {
+        nuwan_dataset_destroy(this.handle)
+    }
+
+    func printInfo() -> void {
+        print("NNDataset:")
+        print("  sequences:  " + this.num_sequences)
+        print("  seq_length: " + this.seq_length)
+    }
+}
+
+
+// ============================================================================
+// TOKENIZER (re-exported for convenience)
+// ============================================================================
+
+class NNTokenizer {
+    handle: int;
+    vocab_size: int;
+
+    func new(vocab_size: int) -> void {
+        this.vocab_size = vocab_size
+        this.handle = nuwan_tokenizer_create(vocab_size)
+    }
+
+    func train(text: string, min_freq: int) -> void {
+        nuwan_tokenizer_train(this.handle, text, min_freq)
+    }
+
+    func encode(text: string) -> array<int> {
+        return nuwan_tokenizer_encode(this.handle, text)
+    }
+
+    func decode(tokens: array<int>) -> string {
+        return nuwan_tokenizer_decode(this.handle, tokens)
+    }
+
+    func save(path: string) -> bool {
+        return nuwan_tokenizer_save(this.handle, path)
+    }
+
+    static func load(path: string) -> NNTokenizer {
+        let tok: NNTokenizer = new NNTokenizer(0)
+        tok.handle = nuwan_tokenizer_load(path)
+        return tok
+    }
+
+    func destroy() -> void {
+        nuwan_tokenizer_destroy(this.handle)
+    }
+}
+
+
+// ============================================================================
+// CONVENIENCE: QUICK TRAIN PIPELINE
+// ============================================================================
+
+class Pipeline {
+    // One-shot training: load data, create model, train, save
+    static func train(data_path: string, checkpoint_path: string,
+                       config: ModelConfig) -> TransformerModel {
+        print("=== Neural Network Training Pipeline ===")
+        print("")
+
+        // Load dataset
+        print("Loading dataset: " + data_path)
+        let dataset: NNDataset = NNDataset.load(data_path)
+        dataset.printInfo()
+        print("")
+
+        // Split 90/5/5
+        let splits: array<int> = dataset.split(0.9, 0.05, 0.05)
+        let train_data: int = splits[0]
+        let val_data: int = splits[1]
+
+        // Create model
+        print("Creating model...")
+        config.print()
+        let model: TransformerModel = TransformerModel.create(config)
+        model.printInfo()
+        print("")
+
+        // Train
+        let train_config: TrainingConfig = new TrainingConfig()
+        let trainer: Trainer = new Trainer(model, train_config)
+        trainer.train(train_data, val_data)
+
+        // Save final checkpoint
+        print("Saving final model: " + checkpoint_path)
+        model.save(checkpoint_path)
+
+        trainer.destroy()
+
+        return model
+    }
+
+    // One-shot generation: load model + tokenizer, generate text
+    static func generate(model_path: string, tokenizer_path: string,
+                          prompt: string) -> string {
+        print("Loading model: " + model_path)
+        let model: TransformerModel = TransformerModel.load(model_path)
+
+        print("Loading tokenizer: " + tokenizer_path)
+        let tok: NNTokenizer = NNTokenizer.load(tokenizer_path)
+
+        let gen: TextGenerator = new TextGenerator(model, tok.handle)
+        gen.setTemperature(0.8)
+        gen.setMaxTokens(200)
+
+        print("Generating from: " + prompt)
+        print("")
+        let text: string = gen.generate(prompt)
+
+        tok.destroy()
+        model.destroy()
+
+        return text
+    }
+}

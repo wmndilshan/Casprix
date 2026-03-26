@@ -1,0 +1,204 @@
+// Low-Level Socket Wrapper for Casprix
+// High-performance networking with cross-platform support
+
+// External socket runtime functions
+extern func nuwan_socket_init() -> int;
+extern func nuwan_socket_cleanup() -> void;
+extern func nuwan_socket_create(domain: int, type: int, protocol: int) -> int;
+extern func nuwan_socket_bind(sockfd: int, addr: string, port: int) -> int;
+extern func nuwan_socket_listen(sockfd: int, backlog: int) -> int;
+extern func nuwan_socket_accept(sockfd: int, client_addr: string, addr_len: int) -> int;
+extern func nuwan_socket_connect(sockfd: int, addr: string, port: int) -> int;
+extern func nuwan_socket_send(sockfd: int, buf: string, len: int) -> int;
+extern func nuwan_socket_recv(sockfd: int, buf: string, len: int) -> int;
+extern func nuwan_socket_close(sockfd: int) -> int;
+extern func nuwan_socket_set_blocking(sockfd: int, blocking: int) -> int;
+extern func nuwan_socket_set_reuse_addr(sockfd: int, reuse: int) -> int;
+extern func nuwan_socket_set_nodelay(sockfd: int, nodelay: int) -> int;
+extern func nuwan_socket_get_last_error() -> string;
+
+// Socket domain constants
+AF_INET: int = 2;
+
+// Socket type constants  
+SOCK_STREAM: int = 1;  // TCP
+SOCK_DGRAM: int = 2;   // UDP
+
+class Socket {
+    private handle: int;
+    private isConnected: bool;
+    private domain: int;
+    private type: int;
+    
+    // Constructor
+    func new(domain: int, type: int, protocol: int) -> Socket {
+        // Initialize socket subsystem on first use
+        nuwan_socket_init();
+        
+        this.domain = domain;
+        this.type = type;
+        this.handle = nuwan_socket_create(domain, type, protocol);
+        this.isConnected = false;
+        
+        return this;
+    }
+    
+    // Bind to address and port
+    func bind(address: string, port: int) -> bool {
+        result: int = nuwan_socket_bind(this.handle, address, port);
+        return result == 0;
+    }
+    
+    // Listen for connections (for server sockets)
+    func listen(backlog: int) -> bool {
+        result: int = nuwan_socket_listen(this.handle, backlog);
+        return result == 0;
+    }
+    
+    // Accept incoming connection
+    func accept() -> Socket {
+        clientAddr: string = "0.0.0.0";
+        clientHandle: int = nuwan_socket_accept(this.handle, clientAddr, 16);
+        
+        client: Socket = new Socket(this.domain, this.type, 0);
+        client.handle = clientHandle;
+        client.isConnected = true;
+        
+        return client;
+    }
+    
+    // Connect to remote server
+    func connect(address: string, port: int) -> bool {
+        result: int = nuwan_socket_connect(this.handle, address, port);
+        if result == 0 {
+            this.isConnected = true;
+            return true;
+        }
+        return false;
+    }
+    
+    // Send data
+    func send(data: string) -> int {
+        return nuwan_socket_send(this.handle, data, 1024);
+    }
+    
+    // Receive data
+    func receive(buffer: string, maxLen: int) -> int {
+        return nuwan_socket_recv(this.handle, buffer, maxLen);
+    }
+    
+    // Socket options
+    func setBlocking(blocking: bool) -> bool {
+        value: int = 0;
+        if blocking {
+            value = 1;
+        }
+        result: int = nuwan_socket_set_blocking(this.handle, value);
+        return result == 0;
+    }
+    
+    func setReuseAddr(reuse: bool) -> bool {
+        value: int = 0;
+        if reuse {
+            value = 1;
+        }
+        result: int = nuwan_socket_set_reuse_addr(this.handle, value);
+        return result == 0;
+    }
+    
+    func setNoDelay(nodelay: bool) -> bool {
+        value: int = 0;
+        if nodelay {
+            value = 1;
+        }
+        result: int = nuwan_socket_set_nodelay(this.handle, value);
+        return result == 0;
+    }
+    
+    // Close socket
+    func close() -> void {
+        nuwan_socket_close(this.handle);
+        this.isConnected = false;
+    }
+    
+    // Get connection status
+    func connected() -> bool {
+        return this.isConnected;
+    }
+}
+
+// High-level TCP Server
+class TcpServer {
+    private socket: Socket;
+    private port: int;
+    private isListening: bool;
+    
+    func new(port: int) -> TcpServer {
+        this.port = port;
+        this.socket = new Socket(AF_INET, SOCK_STREAM, 0);
+        this.isListening = false;
+        
+        // Set socket options for better performance
+        this.socket.setReuseAddr(true);
+        this.socket.setNoDelay(true);
+        
+        return this;
+    }
+    
+    func start() -> bool {
+        // Bind to all interfaces
+        if this.socket.bind("0.0.0.0", this.port) {
+            if this.socket.listen(10) {
+                this.isListening = true;
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    func acceptClient() -> Socket {
+        return this.socket.accept();
+    }
+    
+    func stop() -> void {
+        this.socket.close();
+        this.isListening = false;
+    }
+    
+    func listening() -> bool {
+        return this.isListening;
+    }
+}
+
+// High-level TCP Client
+class TcpClient {
+    private socket: Socket;
+    
+    func new() -> TcpClient {
+        this.socket = new Socket(AF_INET, SOCK_STREAM, 0);
+        this.socket.setNoDelay(true);
+        return this;
+    }
+    
+    func connect(host: string, port: int) -> bool {
+        return this.socket.connect(host, port);
+    }
+    
+    func send(message: string) -> int {
+        return this.socket.send(message);
+    }
+    
+    func receive() -> string {
+        buffer: string = "";
+        this.socket.receive(buffer, 4096);
+        return buffer;
+    }
+    
+    func close() -> void {
+        this.socket.close();
+    }
+    
+    func connected() -> bool {
+        return this.socket.connected();
+    }
+}

@@ -1,0 +1,48 @@
+// Casprix Network Server Example
+// Simple TCP echo server
+
+import "casprix/stdlib/Network.cpx";
+
+// Echo server that sends back what it receives
+class EchoServer {
+    let server: Server;
+    let port: int;
+    mut running: bool;
+
+    func new(serverPort: int) -> EchoServer {
+        this.port = serverPort;
+        this.server = new Server(serverPort, 10);
+        this.running = false;
+        return this;
+    }
+
+    func start() -> void {
+        this.running = true;
+        this.server.start();
+
+        // Main server loop (simplified)
+        // while (this.running) {
+        //     client: Socket = this.server.accept();
+        //     this.handleClient(client);
+        // }
+    }
+
+    func handleClient(client: Socket) -> void {
+        // Echo back received data
+        // data: string = client.recv(1024);
+        // client.send(data);
+        client.close();
+    }
+
+    func stop() -> void {
+        this.running = false;
+        this.server.stop();
+    }
+}
+
+// Main
+NetworkInit();
+print(8080);  // Server port placeholder
+// server: EchoServer = new EchoServer(8080);
+// server.start();
+NetworkCleanup();

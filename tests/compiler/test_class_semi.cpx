@@ -1,0 +1,4 @@
+class Test {
+    mut x: int;
+    mut y: int;
+}

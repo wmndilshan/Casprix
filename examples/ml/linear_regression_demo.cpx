@@ -1,0 +1,66 @@
+﻿// Linear Regression Demo - Machine Learning Example
+
+import "lib/math/Vector.cpx"
+import "lib/math/Matrix.cpx"
+import "lib/math/Stats.cpx"
+import "lib/ml/LinearRegression.cpx"
+
+func main() -> void {
+    print("=== Linear Regression Demo ===");
+    
+    // Create training data: y = 2x + 1
+    X: Matrix = new Matrix(10, 1);
+    y: Vector = new Vector(10);
+    
+    // Generate data points
+    for (i: int = 0; i < 10; i = i + 1) {
+        x_val: float = i;
+        y_val: float = 2.0 * x_val + 1.0;
+        
+        X.set(i, 0, x_val);
+        y.set(i, y_val);
+    }
+    
+    print("Training data generated: y = 2x + 1");
+    
+    // Create and train model
+    model: LinearRegression = new LinearRegression(1);
+    print("Training model with gradient descent...");
+    
+    model.train(X, y, 0.01, 1000);
+    
+    // Evaluate model
+    score: float = model.score(X, y);
+    print("Model R^2 score:");
+    print(score);
+    
+    // Make predictions
+    print("");
+    print("Making predictions:");
+    
+    for (i: int = 0; i < 5; i = i + 1) {
+        test: Vector = new Vector(1);
+        test_x: float = 15.0 + i;
+        test.set(0, test_x);
+        
+        prediction: float = model.predict(test);
+        expected: float = 2.0 * test_x + 1.0;
+        
+        print("x =");
+        print(test_x);
+        print("  Predicted:");
+        print(prediction);
+        print("  Expected:");
+        print(expected);
+        
+        test.destroy();
+    }
+    
+    // Cleanup
+    model.destroy();
+    X.destroy();
+    y.destroy();
+    
+    print("");
+    print("Demo complete!");
+}

@@ -1,0 +1,98 @@
+﻿// Math Library - Mathematical operations and functions
+// Provides advanced mathematical functions
+
+// Power function
+func Power(base: int, exponent: int) -> int {
+    if exponent == 0 {
+        return 1;
+    }
+    if exponent == 1 {
+        return base;
+    }
+    result: int = 1;
+    for (i: int = 0; i < exponent; i = i + 1) {
+        result = result * base;
+    }
+    return result;
+}
+
+// Square root (integer approximation)
+func Sqrt(n: int) -> int {
+    if n <= 0 {
+        return 0;
+    }
+    if n == 1 {
+        return 1;
+    }
+    x: int = n;
+    y: int = 1;
+    while x > y {
+        x = (x + y) / 2;
+        y = n / x;
+    }
+    return x;
+}
+
+// Factorial
+func Factorial(n: int) -> int {
+    if n <= 1 {
+        return 1;
+    }
+    result: int = 1;
+    for (i: int = 2; i <= n; i = i + 1) {
+        result = result * i;
+    }
+    return result;
+}
+
+// Greatest Common Divisor
+func GCD(a: int, b: int) -> int {
+    while b != 0 {
+        temp: int = b;
+        b = a % b;
+        a = temp;
+    }
+    return a;
+}
+
+// Least Common Multiple
+func LCM(a: int, b: int) -> int {
+    return (a * b) / GCD(a, b);
+}
+
+// Check if number is prime
+func IsPrime(n: int) -> bool {
+    if n < 2 {
+        return false;
+    }
+    if n == 2 {
+        return true;
+    }
+    if n % 2 == 0 {
+        return false;
+    }
+    for (i: int = 3; i * i <= n; i = i + 2) {
+        if n % i == 0 {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Fibonacci number
+func Fibonacci(n: int) -> int {
+    if n <= 1 {
+        return n;
+    }
+    a: int = 0;
+    b: int = 1;
+    for (i: int = 2; i <= n; i = i + 1) {
+        temp: int = a + b;
+        a = b;
+        b = temp;
+    }
+    return b;
+}
+
+
+

@@ -1,0 +1,117 @@
+// Casprix Tokenizer Library
+// Bindings for BPE tokenizer
+
+class Tokenizer {
+    field handle: int  # Pointer to C Tokenizer struct
+
+    // Create tokenizer with specified vocab size
+    func new(vocab_size: int) -> void {
+        // Call external C function
+        this.handle = nuwan_tokenizer_create(vocab_size)
+    }
+
+    // Train tokenizer on text corpus
+    func train(text: string, min_freq: int) -> void {
+        nuwan_tokenizer_train(this.handle, text, min_freq)
+    }
+
+    // Encode text to token IDs
+    func encode(text: string) -> Array<int> {
+        // Returns array of token IDs
+        return nuwan_tokenizer_encode(this.handle, text)
+    }
+
+    // Decode token IDs to text
+    func decode(tokens: Array<int>) -> string {
+        return nuwan_tokenizer_decode(this.handle, tokens)
+    }
+
+    // Save tokenizer to file
+    func save(path: string) -> bool {
+        return nuwan_tokenizer_save(this.handle, path)
+    }
+
+    // Load tokenizer from file
+    static func load(path: string) -> Tokenizer {
+        let tok: Tokenizer = new Tokenizer(0)
+        tok.handle = nuwan_tokenizer_load(path)
+        return tok
+    }
+
+    // Destroy tokenizer (free memory)
+    func destroy() -> void {
+        nuwan_tokenizer_destroy(this.handle)
+    }
+}
+
+// Dataset utilities
+class Dataset {
+    field handle: int  # Pointer to C Dataset struct
+    field num_sequences: int
+    field seq_length: int
+
+    // Create new dataset
+    func new(num_seqs: int, seq_len: int, vocab_size: int) -> void {
+        this.handle = nuwan_dataset_create(num_seqs, seq_len, vocab_size)
+        this.num_sequences = num_seqs
+        this.seq_length = seq_len
+    }
+
+    // Save dataset to binary file
+    func save(path: string) -> bool {
+        return nuwan_dataset_save(this.handle, path)
+    }
+
+    // Load dataset from binary file
+    static func load(path: string) -> Dataset {
+        let ds: Dataset = new Dataset(0, 0, 0)
+        ds.handle = nuwan_dataset_load(path)
+        // TODO: Read num_sequences and seq_length from header
+        return ds
+    }
+
+    // Shuffle dataset in-place
+    func shuffle() -> void {
+        nuwan_dataset_shuffle(this.handle)
+    }
+
+    // Get sequence at index
+    func getSequence(index: int) -> Array<int> {
+        return nuwan_dataset_get_sequence(this.handle, index)
+    }
+
+    // Destroy dataset
+    func destroy() -> void {
+        nuwan_dataset_destroy(this.handle)
+    }
+}
+
+// Dataset splitting
+class DatasetSplitter {
+    static func split(input: Dataset,
+                     train_ratio: float,
+                     val_ratio: float,
+                     test_ratio: float) -> Array<Dataset> {
+        // Returns [train, val, test]
+        return nuwan_dataset_split(input.handle, train_ratio, val_ratio, test_ratio)
+    }
+}
+
+// External C function declarations
+// These would be implemented in runtime/llm/tokenizer_bindings.c
+
+extern func nuwan_tokenizer_create(vocab_size: int) -> int
+extern func nuwan_tokenizer_train(handle: int, text: string, min_freq: int) -> void
+extern func nuwan_tokenizer_encode(handle: int, text: string) -> Array<int>
+extern func nuwan_tokenizer_decode(handle: int, tokens: Array<int>) -> string
+extern func nuwan_tokenizer_save(handle: int, path: string) -> bool
+extern func nuwan_tokenizer_load(path: string) -> int
+extern func nuwan_tokenizer_destroy(handle: int) -> void
+
+extern func nuwan_dataset_create(num_seqs: int, seq_len: int, vocab_size: int) -> int
+extern func nuwan_dataset_save(handle: int, path: string) -> bool
+extern func nuwan_dataset_load(path: string) -> int
+extern func nuwan_dataset_shuffle(handle: int) -> void
+extern func nuwan_dataset_get_sequence(handle: int, index: int) -> Array<int>
+extern func nuwan_dataset_destroy(handle: int) -> void
+extern func nuwan_dataset_split(handle: int, train_r: float, val_r: float, test_r: float) -> Array<Dataset>

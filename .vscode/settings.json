@@ -1,0 +1,25 @@
+{
+  "files.associations": {
+    "any": "cpp",
+    "array": "cpp",
+    "compare": "cpp",
+    "functional": "cpp",
+    "ratio": "cpp",
+    "scoped_allocator": "cpp",
+    "tuple": "cpp",
+    "type_traits": "cpp",
+    "utility": "cpp",
+    "variant": "cpp",
+    "bitset": "cpp",
+    "algorithm": "cpp",
+    "vector": "cpp",
+    "string": "cpp",
+    "string_view": "cpp",
+    "span": "cpp"
+  },
+  "casprix.compilerPath": "${workspaceFolder}/build/casprix.exe",
+  "casprix.checkOnSave": true,
+  "casprix.checkOnType": false,
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": "active"
+}

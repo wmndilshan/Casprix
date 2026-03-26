@@ -1,0 +1,53 @@
+// Casprix Language Examples - Closures
+// Planned closure surface demo.
+// Pipe-lambda syntax is normalized here, but first-class closure calls are not
+// fully supported by the current compiler front end yet.
+
+print("=== Counter Example ===")
+
+func makeCounter() -> lambda() -> int {
+    let count: int = 0
+    return || => count = count + 1
+}
+
+let counter1 = makeCounter()
+let counter2 = makeCounter()
+
+print(counter1())
+print(counter1())
+print(counter2())
+print(counter1())
+
+print("\n=== Adder Factory ===")
+
+func makeAdder(x: int) -> lambda(int) -> int {
+    return |y: int| => x + y
+}
+
+let add5 = makeAdder(5)
+let add10 = makeAdder(10)
+
+print(add5(3))
+print(add10(3))
+
+print("\n=== Multiple Captures ===")
+
+func mathClosure(a: int, b: int) -> lambda(int) -> int {
+    let multiplier: int = a * b
+    return |x: int| => (x + a) * b + multiplier
+}
+
+let math = mathClosure(2, 3)
+print(math(5))
+
+print("\n=== Nested Closures ===")
+
+func outer(x: int) -> lambda(int) -> lambda(int) -> int {
+    return |y: int| => |z: int| => x + y + z
+}
+
+let f1 = outer(1)
+let f2 = f1(2)
+print(f2(3))
+
+print("All closure examples completed")

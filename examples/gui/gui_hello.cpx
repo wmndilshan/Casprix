@@ -1,0 +1,52 @@
+// Casprix GUI Example
+// Hello World GUI application
+
+import "casprix/stdlib/GUI.cpx";
+
+// Simple Hello World window
+class HelloApp {
+    let window: Window;
+    let button: Button;
+    let label: Label;
+    mut clickCount: int;
+
+    func new() -> HelloApp {
+        this.clickCount = 0;
+
+        // Create window
+        this.window = new Window("Hello Casprix!", 400, 300);
+
+        // Create label
+        this.label = new Label("Click the button!", 50, 50, 300, 30);
+
+        // Create button
+        this.button = new Button("Click Me", 150, 100, 100, 40);
+
+        return this;
+    }
+
+    func run() -> void {
+        // Add widgets to window
+        // this.window.addWidget(this.label.handle);
+        // this.window.addWidget(this.button.handle);
+
+        // Show window
+        this.window.show();
+
+        // Start event loop
+        GUIRun();
+    }
+
+    func onButtonClick() -> void {
+        // this.clickCount = this.clickCount + 1;
+        // msg: string = "Clicked " + this.clickCount + " times!";
+        // this.label.setText(msg);
+    }
+}
+
+// Main
+GUIInit();
+print(1);  // GUI placeholder
+// app: HelloApp = new HelloApp();
+// app.run();
+GUICleanup();

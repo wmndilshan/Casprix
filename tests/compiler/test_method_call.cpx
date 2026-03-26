@@ -1,0 +1,5 @@
+import "lib/skia/skia"
+
+func main() -> int {
+    return 0
+}

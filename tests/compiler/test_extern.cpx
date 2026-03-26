@@ -1,0 +1,11 @@
+extern func printf(fmt: string) -> void
+
+func main() -> int {
+    let x: int = 42
+    
+    if x > 40 {
+        printf("x is greater than 40\n")
+    }
+    
+    return 0
+}

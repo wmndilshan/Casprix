@@ -1,0 +1,69 @@
+# EditorConfig — https://editorconfig.org
+# Ensures consistent formatting across editors and IDEs.
+
+root = true
+
+# ── Defaults ──────────────────────────────────────────────────────────────────
+[*]
+charset                  = utf-8
+end_of_line              = lf
+insert_final_newline     = true
+trim_trailing_whitespace = true
+indent_style             = space
+indent_size              = 4
+
+# ── C / C++ ───────────────────────────────────────────────────────────────────
+[*.{c,h,cpp,hpp,cc,hh}]
+indent_style    = space
+indent_size     = 4
+max_line_length = 100
+
+# ── Casprix source ────────────────────────────────────────────────────────────
+[*.{cpx,nd}]
+indent_style    = space
+indent_size     = 4
+max_line_length = 100
+
+# ── Assembly ──────────────────────────────────────────────────────────────────
+[*.{asm,s,S}]
+indent_style = space
+indent_size  = 4
+
+# ── CMake ─────────────────────────────────────────────────────────────────────
+[CMakeLists.txt]
+indent_style = space
+indent_size  = 4
+
+[*.cmake]
+indent_style = space
+indent_size  = 4
+
+# ── Makefile (tabs required by make) ─────────────────────────────────────────
+[Makefile]
+indent_style = tab
+
+[makefile]
+indent_style = tab
+
+# ── YAML / JSON ───────────────────────────────────────────────────────────────
+[*.{yml,yaml}]
+indent_style = space
+indent_size  = 2
+
+[*.json]
+indent_style = space
+indent_size  = 2
+
+# ── Markdown ──────────────────────────────────────────────────────────────────
+[*.md]
+trim_trailing_whitespace = false
+max_line_length          = off
+
+# ── Shell scripts ─────────────────────────────────────────────────────────────
+[*.sh]
+indent_style = space
+indent_size  = 2
+
+# ── Windows-only scripts (CRLF) ───────────────────────────────────────────────
+[*.{bat,cmd,ps1}]
+end_of_line = crlf

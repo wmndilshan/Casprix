@@ -1,0 +1,171 @@
+// ============================================================================
+// Casperix Numeric Types & Operations Demo
+// Demonstrates fixed-width numerics, type promotion, and precision control
+// ============================================================================
+
+// ============================================================================
+// Integer Bit Widths
+// ============================================================================
+
+func test_integer_ranges() -> void {
+    // Signed integer ranges
+    let min_i8: i8 = -128
+    let max_i8: i8 = 127
+
+    let min_i16: i16 = -32768
+    let max_i16: i16 = 32767
+
+    let min_i32: i32 = -2147483648
+    let max_i32: i32 = 2147483647
+
+    print("=== Integer Ranges ===")
+    print(max_i8)
+    print(max_i16)
+    print(max_i32)
+
+    // Unsigned ranges
+    let max_u8: u8 = 255
+    let max_u16: u16 = 65535
+    let max_u32: u32 = 4294967295
+
+    print("=== Unsigned Ranges ===")
+    print(max_u8)
+    print(max_u16)
+    print(max_u32)
+}
+
+// ============================================================================
+// Floating Point Precision
+// ============================================================================
+
+func test_float_precision() -> void {
+    let pi_f32: f32 = 3.14159265
+    let pi_f64: f64 = 3.141592653589793
+
+    print("=== Float Precision ===")
+    print(pi_f32)
+    print(pi_f64)
+
+    // Arithmetic with different float widths
+    let a: f32 = 1.5
+    let b: f64 = 2.5
+
+    // Mixed-width arithmetic promotes to f64
+    let c: f64 = a + b
+    print(c)
+}
+
+// ============================================================================
+// Type Promotion Rules
+// ============================================================================
+
+func test_promotion() -> void {
+    // Integer widening: narrower -> wider
+    let small: i8 = 42
+    let medium: i32 = small
+    let large: i64 = medium
+
+    print("=== Type Promotion ===")
+    print(large)
+
+    // Int -> Float promotion
+    let int_val: i32 = 100
+    let float_val: f64 = int_val
+    print(float_val)
+
+    // Unsigned -> signed (safe widening)
+    let unsigned_val: u16 = 50000
+    let signed_val: i32 = unsigned_val
+    print(signed_val)
+}
+
+// ============================================================================
+// Struct with Mixed Numeric Types
+// ============================================================================
+
+struct Vec3 {
+    x: f32
+    y: f32
+    z: f32
+}
+
+struct Pixel {
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+}
+
+struct Matrix2x2 {
+    m00: f64
+    m01: f64
+    m10: f64
+    m11: f64
+}
+
+// ============================================================================
+// Enum for Type-Safe Error Handling
+// ============================================================================
+
+enum MathError {
+    DivisionByZero
+    Overflow
+    Underflow
+    InvalidInput(string)
+}
+
+// ============================================================================
+// Numeric Computation
+// ============================================================================
+
+func power(base: f64, exp: i32) -> f64 {
+    result: f64 = 1.0
+    for (i: i32 = 0; i < exp; i = i + 1) {
+        result = result * base
+    }
+    return result
+}
+
+func abs_val(x: f64) -> f64 {
+    if x < 0.0 {
+        return 0.0 - x
+    }
+    return x
+}
+
+func fibonacci(n: i64) -> i64 {
+    if n <= 1 {
+        return n
+    }
+    a: i64 = 0
+    b: i64 = 1
+    for (i: i64 = 2; i <= n; i = i + 1) {
+        temp: i64 = a + b
+        a = b
+        b = temp
+    }
+    return b
+}
+
+// ============================================================================
+// Main Program
+// ============================================================================
+
+test_integer_ranges()
+test_float_precision()
+test_promotion()
+
+print("=== Power Function ===")
+p := power(2.0, 10)
+print(p)
+
+p2 := power(3.14, 3)
+print(p2)
+
+print("=== Fibonacci (i64) ===")
+for (i: i64 = 0; i <= 30; i = i + 5) {
+    fib := fibonacci(i)
+    print(fib)
+}
+
+print("=== Numeric Types Demo Complete ===")

@@ -1,0 +1,64 @@
+// Casprix Compiler Test - Generics
+
+// Test 1: Generic class
+print("Test 1: Generic class")
+
+class List<T> {
+    mut items: Array<T>
+    mut count: int
+
+    func new() {
+        this.count = 0
+    }
+
+    func add(item: T) -> void {
+        this.items[this.count] = item
+        this.count = this.count + 1
+    }
+
+    func get(index: int) -> T {
+        return this.items[index]
+    }
+}
+
+let int_list = new List<int>()
+int_list.add(42)
+int_list.add(100)
+print(int_list.get(0))  # Should print 42
+
+let str_list = new List<string>()
+str_list.add("Hello")
+str_list.add("World")
+print(str_list.get(0))  # Should print "Hello"
+
+// Test 2: Generic function
+print("Test 2: Generic function")
+
+func swap<T>(a: T, b: T) -> Tuple<T, T> {
+    return (b, a)
+}
+
+let result1 = swap<int>(1, 2)
+print(result1)  # Should print (2, 1)
+
+let result2 = swap<string>("A", "B")
+print(result2)  # Should print ("B", "A")
+
+// Test 3: Multiple type parameters
+print("Test 3: Multiple type parameters")
+
+class Pair<K, V> {
+    let key: K
+    let value: V
+
+    func new(k: K, v: V) {
+        this.key = k
+        this.value = v
+    }
+}
+
+let pair = new Pair<string, int>("age", 25)
+print(pair.key)    # Should print "age"
+print(pair.value)  # Should print 25
+
+print("All generic tests passed!")

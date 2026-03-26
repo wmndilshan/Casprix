@@ -1,0 +1,317 @@
+// Casprix Modern Threading Library - Task-based Concurrency
+// High-level abstractions for parallel programming
+
+// Task - represents an asynchronous operation
+class Task {
+    handle: int;       // Opaque C handle
+    state: int;        // 0=pending, 1=running, 2=completed, 3=failed
+    result: int;       // Result value
+    error: string;     // Error message if failed
+
+    func new() -> Task {
+        this.state = 0;
+        return this;
+    }
+
+    func await() -> int {
+        // Wait for task completion and return result
+        // C binding: task_await(this.handle)
+        return this.result;
+    }
+
+    func isCompleted() -> bool {
+        // C binding: task_is_completed(this.handle)
+        return this.state;  // >= 2
+    }
+
+    func getResult() -> int {
+        return this.result;
+    }
+
+    func getError() -> string {
+        return this.error;
+    }
+}
+
+// Task scheduler for managing parallel work
+class TaskScheduler {
+    maxThreads: int;
+    activeThreads: int;
+    queueSize: int;
+
+    func new(threads: int) -> TaskScheduler {
+        this.maxThreads = threads;
+        this.activeThreads = 0;
+        this.queueSize = 0;
+        // C binding: task_scheduler_create(threads)
+        return this;
+    }
+
+    func scheduleTask(callback: int) -> Task {
+        task: Task = new Task();
+        // C binding: scheduler_enqueue(this.handle, callback, task)
+        this.queueSize = this.queueSize;  // + 1
+        return task;
+    }
+
+    func shutdown() -> void {
+        // C binding: scheduler_shutdown(this.handle)
+        // Waits for all tasks to complete
+    }
+
+    func getActiveCount() -> int {
+        return this.activeThreads;
+    }
+}
+
+// Thread pool for reusable workers
+class ThreadPool {
+    size: int;
+    workers: int;      // Array of worker threads
+    taskQueue: int;    // Queue handle
+
+    func new(poolSize: int) -> ThreadPool {
+        this.size = poolSize;
+        // C binding: thread_pool_create(poolSize)
+        return this;
+    }
+
+    func submit(callback: int) -> Task {
+        task: Task = new Task();
+        // C binding: pool_submit(this.handle, callback, task)
+        return task;
+    }
+
+    func submitMany(callbacks: int, count: int) -> int {
+        // C binding: pool_submit_many(this.handle, callbacks, count)
+        // Returns array of tasks
+        return 0;
+    }
+
+    func awaitAll() -> void {
+        // Wait for all tasks in pool to complete
+        // C binding: pool_await_all(this.handle)
+    }
+
+    func shutdown() -> void {
+        // C binding: pool_shutdown(this.handle)
+    }
+}
+
+// Async/Await pattern support
+class Async {
+    // static utility class for async operations
+
+    // Run function asynchronously and return Task
+    func run(callback: int) -> Task {
+        task: Task = new Task();
+        // C binding: async_run(callback, task)
+        return task;
+    }
+
+    // Run multiple tasks in parallel
+    func parallel(callbacks: int, count: int) -> int {
+        // C binding: async_parallel(callbacks, count)
+        // Returns array of tasks
+        return 0;
+    }
+
+    // Wait for any task to complete
+    func waitAny(tasks: int, count: int) -> int {
+        // C binding: async_wait_any(tasks, count)
+        // Returns index of completed task
+        return 0;
+    }
+
+    // Wait for all tasks to complete
+    func waitAll(tasks: int, count: int) -> void {
+        // C binding: async_wait_all(tasks, count)
+    }
+}
+
+// Concurrent data structures
+class ConcurrentQueue {
+    capacity: int;
+    size: int;
+    handle: int;       // C handle to thread-safe queue
+
+    func new(maxCapacity: int) -> ConcurrentQueue {
+        this.capacity = maxCapacity;
+        this.size = 0;
+        // C binding: concurrent_queue_create(maxCapacity)
+        return this;
+    }
+
+    func enqueue(item: int) -> bool {
+        // C binding: queue_enqueue(this.handle, item)
+        // Returns false if queue is full
+        return true;
+    }
+
+    func dequeue() -> int {
+        // C binding: queue_dequeue(this.handle)
+        // Blocks if queue is empty
+        return 0;
+    }
+
+    func tryDequeue() -> int {
+        // C binding: queue_try_dequeue(this.handle)
+        // Returns immediately, 0 if empty
+        return 0;
+    }
+
+    func getSize() -> int {
+        return this.size;
+    }
+}
+
+class ConcurrentMap {
+    handle: int;       // C handle to thread-safe map
+    size: int;
+
+    func new() -> ConcurrentMap {
+        this.size = 0;
+        // C binding: concurrent_map_create()
+        return this;
+    }
+
+    func put(key: string, value: int) -> void {
+        // C binding: map_put(this.handle, key, value)
+    }
+
+    func get(key: string) -> int {
+        // C binding: map_get(this.handle, key)
+        return 0;
+    }
+
+    func remove(key: string) -> bool {
+        // C binding: map_remove(this.handle, key)
+        return true;
+    }
+
+    func containsKey(key: string) -> bool {
+        // C binding: map_contains(this.handle, key)
+        return false;
+    }
+
+    func getSize() -> int {
+        return this.size;
+    }
+}
+
+// Futures and Promises
+class Future {
+    task: Task;
+    completed: bool;
+
+    func new() -> Future {
+        this.task = new Task();
+        this.completed = false;
+        return this;
+    }
+
+    func get() -> int {
+        // Blocking get
+        return this.task.await();
+    }
+
+    func getWithTimeout(milliseconds: int) -> int {
+        // C binding: future_get_timeout(this.handle, milliseconds)
+        // Returns 0 if timeout
+        return 0;
+    }
+
+    func isDone() -> bool {
+        return this.task.isCompleted();
+    }
+}
+
+// Barrier for thread synchronization
+class Barrier {
+    threadCount: int;
+    handle: int;
+
+    func new(threads: int) -> Barrier {
+        this.threadCount = threads;
+        // C binding: barrier_create(threads)
+        return this;
+    }
+
+    func await() -> void {
+        // Block until all threads reach barrier
+        // C binding: barrier_await(this.handle)
+    }
+
+    func reset() -> void {
+        // Reset barrier for reuse
+        // C binding: barrier_reset(this.handle)
+    }
+}
+
+// Semaphore for resource limiting
+class Semaphore {
+    permits: int;
+    handle: int;
+
+    func new(initialPermits: int) -> Semaphore {
+        this.permits = initialPermits;
+        // C binding: semaphore_create(initialPermits)
+        return this;
+    }
+
+    func acquire() -> void {
+        // Acquire permit, blocks if none available
+        // C binding: semaphore_acquire(this.handle)
+    }
+
+    func release() -> void {
+        // Release permit
+        // C binding: semaphore_release(this.handle)
+    }
+
+    func tryAcquire() -> bool {
+        // Try to acquire without blocking
+        // C binding: semaphore_try_acquire(this.handle)
+        return false;
+    }
+
+    func availablePermits() -> int {
+        return this.permits;
+    }
+}
+
+// Read-Write lock for shared data
+class ReadWriteLock {
+    handle: int;
+    readers: int;
+    writer: bool;
+
+    func new() -> ReadWriteLock {
+        this.readers = 0;
+        this.writer = false;
+        // C binding: rwlock_create()
+        return this;
+    }
+
+    func readLock() -> void {
+        // Acquire read lock (multiple readers allowed)
+        // C binding: rwlock_read_lock(this.handle)
+        this.readers = this.readers;  // + 1
+    }
+
+    func readUnlock() -> void {
+        // C binding: rwlock_read_unlock(this.handle)
+        this.readers = this.readers;  // - 1
+    }
+
+    func writeLock() -> void {
+        // Acquire write lock (exclusive)
+        // C binding: rwlock_write_lock(this.handle)
+        this.writer = true;
+    }
+
+    func writeUnlock() -> void {
+        // C binding: rwlock_write_unlock(this.handle)
+        this.writer = false;
+    }
+}

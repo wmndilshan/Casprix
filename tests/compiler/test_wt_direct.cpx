@@ -1,0 +1,13 @@
+import "lib/skia/skia"
+
+let app_h = sg_app_create("Direct TabPanel Test", 800, 600)
+
+let col1 = widget_column(8.0)
+let col2 = widget_column(8.0)
+
+let tabs = widget_tabpanel("Tab 1", col1, "Tab 2", col2, "", 0, "", 0)
+
+let root = widget_column(0.0)
+sg_node_add_child(root, tabs)
+sg_app_set_root(app_h, root)
+sg_app_run(app_h)

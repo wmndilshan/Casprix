@@ -1,0 +1,29 @@
+﻿// Example: Using Core library
+import "lib/core/core.cpx";
+
+print("Core Library Demo");
+print("=================");
+
+a: int = -10;
+b: int = 20;
+
+print("Abs(-10) =");
+print(Abs(a));
+
+print("Max(-10, 20) =");
+print(Max(a, b));
+
+print("Min(-10, 20) =");
+print(Min(a, b));
+
+print("IsZero(0) =");
+print(IsZero(0));
+
+print("IsPositive(20) =");
+print(IsPositive(b));
+
+print("IsNegative(-10) =");
+print(IsNegative(a));
+
+
+

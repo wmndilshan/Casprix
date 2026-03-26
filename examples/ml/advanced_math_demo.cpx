@@ -1,0 +1,112 @@
+﻿// Advanced Math Functions Demo - Trigonometry and Calculus
+
+import "lib/math/MathAdvanced.cpx"
+
+func main() -> void {
+    print("=== Advanced Math Functions Demo ===");
+    
+    // Mathematical constants
+    print("");
+    print("Mathematical Constants:");
+    pi: float = MathAdvanced.PI();
+    print("π =");
+    print(pi);
+    
+    e: float = MathAdvanced.E();
+    print("e =");
+    print(e);
+    
+    phi: float = MathAdvanced.PHI();
+    print("φ (golden ratio) =");
+    print(phi);
+    
+    // Trigonometric functions
+    print("");
+    print("Trigonometric Functions:");
+    
+    angle: float = MathAdvanced.degToRad(45.0);
+    print("45° in radians:");
+    print(angle);
+    
+    sinVal: float = MathAdvanced.sin(angle);
+    print("sin(45°) =");
+    print(sinVal);
+    
+    cosVal: float = MathAdvanced.cos(angle);
+    print("cos(45°) =");
+    print(cosVal);
+    
+    tanVal: float = MathAdvanced.tan(angle);
+    print("tan(45°) =");
+    print(tanVal);
+    
+    // Exponential and logarithmic
+    print("");
+    print("Exponential and Logarithmic:");
+    
+    expVal: float = MathAdvanced.exp(1.0);
+    print("e^1 =");
+    print(expVal);
+    
+    logVal: float = MathAdvanced.log(e);
+    print("ln(e) =");
+    print(logVal);
+    
+    powVal: float = MathAdvanced.pow(2.0, 10.0);
+    print("2^10 =");
+    print(powVal);
+    
+    sqrtVal: float = MathAdvanced.sqrt(16.0);
+    print("√16 =");
+    print(sqrtVal);
+    
+    // Rounding functions
+    print("");
+    print("Rounding Functions:");
+    
+    num: float = 3.7;
+    print("Number: 3.7");
+    
+    ceilVal: float = MathAdvanced.ceil(num);
+    print("ceil =");
+    print(ceilVal);
+    
+    floorVal: float = MathAdvanced.floor(num);
+    print("floor =");
+    print(floorVal);
+    
+    roundVal: float = MathAdvanced.round(num);
+    print("round =");
+    print(roundVal);
+    
+    // Utility functions
+    print("");
+    print("Utility Functions:");
+    
+    clamped: float = MathAdvanced.clamp(15.0, 0.0, 10.0);
+    print("clamp(15, 0, 10) =");
+    print(clamped);
+    
+    lerped: float = MathAdvanced.lerp(0.0, 100.0, 0.5);
+    print("lerp(0, 100, 0.5) =");
+    print(lerped);
+    
+    hyp: float = MathAdvanced.hypot(3.0, 4.0);
+    print("hypot(3, 4) =");
+    print(hyp);
+    
+    // Special functions
+    print("");
+    print("Special Functions:");
+    
+    fact: float = MathAdvanced.factorial(5);
+    print("5! =");
+    print(fact);
+    
+    gammaVal: float = MathAdvanced.gamma(5.0);
+    print("Γ(5) =");
+    print(gammaVal);
+    
+    print("");
+    print("Demo complete!");
+}

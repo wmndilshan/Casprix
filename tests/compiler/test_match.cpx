@@ -1,0 +1,37 @@
+// test_match.cpx — Tests match expression / pattern matching
+// Run: casprix tests/compiler/test_match.cpx
+
+func describe(n: Int) -> Int {
+    match n {
+        0 => {
+            print("zero")
+        }
+        1 => {
+            print("one")
+        }
+        2 => {
+            print("two")
+        }
+        _ => {
+            print("other")
+        }
+    }
+    return 0
+}
+
+func main() -> Int {
+    describe(0)   // "zero"
+    describe(1)   // "one"
+    describe(2)   // "two"
+    describe(99)  // "other"
+
+    // match as an explicit expression on a computed value
+    x: Int = 5
+    y: Int = x * 2   // 10
+    match y {
+        10 => { print("ten") }
+        20 => { print("twenty") }
+        _  => { print("unknown") }
+    }
+    return 0
+}

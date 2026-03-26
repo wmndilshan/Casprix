@@ -1,0 +1,235 @@
+// Casprix Exception Handling Library
+// Try/Catch/Finally with stack unwinding
+
+// Exception base class
+class Exception {
+    message: string;
+    stackTrace: string;
+    errorCode: int;
+
+    func new(msg: string) -> Exception {
+        this.message = msg;
+        this.errorCode = 0;
+        return this;
+    }
+
+    func new(msg: string, code: int) -> Exception {
+        this.message = msg;
+        this.errorCode = code;
+        return this;
+    }
+
+    func getMessage() -> string {
+        return this.message;
+    }
+
+    func getErrorCode() -> int {
+        return this.errorCode;
+    }
+
+    func getStackTrace() -> string {
+        return this.stackTrace;
+    }
+
+    func toString() -> string {
+        return this.message;
+    }
+}
+
+// Standard exception types
+class NullPointerException extends Exception {
+    func new(msg: string) -> NullPointerException {
+        this.message = msg;
+        this.errorCode = 1;
+        return this;
+    }
+}
+
+class IndexOutOfBoundsException extends Exception {
+    index: int;
+
+    func new(idx: int) -> IndexOutOfBoundsException {
+        this.index = idx;
+        this.message = "Index out of bounds";
+        this.errorCode = 2;
+        return this;
+    }
+
+    func getIndex() -> int {
+        return this.index;
+    }
+}
+
+class IllegalArgumentException extends Exception {
+    func new(msg: string) -> IllegalArgumentException {
+        this.message = msg;
+        this.errorCode = 3;
+        return this;
+    }
+}
+
+class IllegalStateException extends Exception {
+    func new(msg: string) -> IllegalStateException {
+        this.message = msg;
+        this.errorCode = 4;
+        return this;
+    }
+}
+
+class IOException extends Exception {
+    filename: string;
+
+    func new(msg: string) -> IOException {
+        this.message = msg;
+        this.errorCode = 5;
+        return this;
+    }
+
+    func new(msg: string, file: string) -> IOException {
+        this.message = msg;
+        this.filename = file;
+        this.errorCode = 5;
+        return this;
+    }
+
+    func getFilename() -> string {
+        return this.filename;
+    }
+}
+
+class NetworkException extends Exception {
+    func new(msg: string) -> NetworkException {
+        this.message = msg;
+        this.errorCode = 6;
+        return this;
+    }
+}
+
+class TimeoutException extends Exception {
+    timeoutMs: int;
+
+    func new(ms: int) -> TimeoutException {
+        this.timeoutMs = ms;
+        this.message = "Operation timed out";
+        this.errorCode = 7;
+        return this;
+    }
+
+    func getTimeout() -> int {
+        return this.timeoutMs;
+    }
+}
+
+class ParseException extends Exception {
+    line: int;
+    column: int;
+
+    func new(msg: string, ln: int, col: int) -> ParseException {
+        this.message = msg;
+        this.line = ln;
+        this.column = col;
+        this.errorCode = 8;
+        return this;
+    }
+
+    func getLine() -> int {
+        return this.line;
+    }
+
+    func getColumn() -> int {
+        return this.column;
+    }
+}
+
+// Exception handler utilities
+class ExceptionHandler {
+    // static utility methods for exception handling
+
+    // Throw an exception (in full implementation)
+    func throw(ex: Exception) -> void {
+        // C binding: nuwan_throw_exception(ex)
+        // This will unwind the stack and jump to nearest catch block
+    }
+
+    // Rethrow current exception
+    func rethrow() -> void {
+        // C binding: nuwan_rethrow_exception()
+    }
+
+    // Get current exception
+    func getCurrentException() -> Exception {
+        // C binding: nuwan_get_current_exception()
+        return new Exception("No exception");
+    }
+
+    // Check if exception is of type
+    func isInstanceOf(ex: Exception, typeName: string) -> bool {
+        // C binding: nuwan_exception_instanceof(ex, typeName)
+        return false;
+    }
+}
+
+// Example usage (pseudo-code showing syntax):
+/*
+
+// Try-Catch
+Try {
+    // Risky operation
+    result: int = riskyOperation();
+
+    if (result < 0) {
+        Throw new IllegalArgumentException("Invalid result");
+    }
+
+} Catch (ex: IllegalArgumentException) {
+    print("Caught illegal argument: ");
+    print(ex.getMessage());
+
+} Catch (ex: Exception) {
+    print("Caught general exception: ");
+    print(ex.getMessage());
+}
+
+// Try-Catch-Finally
+Try {
+    file: File = openFile("data.txt");
+    content: string = file.read();
+
+} Catch (ex: IOException) {
+    print("IO Error: ");
+    print(ex.getMessage());
+
+} Finally {
+    // Always executed, even if exception thrown
+    if (file != null) {
+        file.close();
+    }
+}
+
+// Nested Try-Catch
+Try {
+    Try {
+        dangerousOperation();
+    } Catch (ex: NullPointerException) {
+        print("Null pointer in inner try");
+        Throw ex;  // Rethrow to outer
+    }
+} Catch (ex: Exception) {
+    print("Caught in outer: ");
+    print(ex.getMessage());
+}
+
+// Multiple exception types
+Try {
+    processData();
+} Catch (ex: IndexOutOfBoundsException) {
+    print("Index error");
+} Catch (ex: NullPointerException) {
+    print("Null pointer");
+} Catch (ex: IOException) {
+    print("IO error");
+} Finally {
+    cleanup();
+}
+
+*/

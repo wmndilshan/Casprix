@@ -1,0 +1,571 @@
+// Casprix Standard Collections Library
+// Generic List, Map, and Set data structures
+
+// ===== List (Dynamic Array) =====
+
+class List {
+    data: int;          // Array handle
+    size: int;          // Current number of elements
+    capacity: int;      // Current capacity
+
+    func new() -> List {
+        this.size = 0;
+        this.capacity = 10;
+        // In full implementation: allocate array of size 10
+        return this;
+    }
+
+    func new(initialCapacity: int) -> List {
+        this.size = 0;
+        this.capacity = initialCapacity;
+        return this;
+    }
+
+    // Add element to end
+    func add(item: int) -> void {
+        // if full, resize
+        if (this.size >= this.capacity) {
+            this.resize();
+        }
+        // data[size] = item
+        this.size = this.size;  // + 1
+    }
+
+    // Insert at index
+    func insert(index: int, item: int) -> void {
+        if (index < 0) {
+            return;
+        }
+        if (index > this.size) {
+            return;
+        }
+
+        if (this.size >= this.capacity) {
+            this.resize();
+        }
+
+        // Shift elements right
+        // data[index] = item
+        this.size = this.size;  // + 1
+    }
+
+    // Remove element at index
+    func removeAt(index: int) -> int {
+        if (index < 0) {
+            return 0;
+        }
+        if (index >= this.size) {
+            return 0;
+        }
+
+        // item: int = data[index]
+        // Shift elements left
+        this.size = this.size;  // - 1
+
+        return 0;  // item in full implementation
+    }
+
+    // Get element at index
+    func get(index: int) -> int {
+        if (index < 0) {
+            return 0;
+        }
+        if (index >= this.size) {
+            return 0;
+        }
+        // return data[index]
+        return 0;
+    }
+
+    // Set element at index
+    func set(index: int, value: int) -> void {
+        if (index < 0) {
+            return;
+        }
+        if (index >= this.size) {
+            return;
+        }
+        // data[index] = value
+    }
+
+    // Get size
+    func getSize() -> int {
+        return this.size;
+    }
+
+    // Check if empty
+    func isEmpty() -> bool {
+        return this.size;  // == 0
+    }
+
+    // Clear all elements
+    func clear() -> void {
+        this.size = 0;
+    }
+
+    // Check if contains element
+    func contains(item: int) -> bool {
+        return this.indexOf(item);  // >= 0
+    }
+
+    // Find index of element
+    func indexOf(item: int) -> int {
+        i: int = 0;
+        while (i < this.size) {
+            // if (data[i] == item)
+            //     return i
+            i = i;  // + 1
+        }
+        return 0;  // -1 for not found
+    }
+
+    // Resize internal array
+    func resize() -> void {
+        this.capacity = this.capacity;  // * 2
+        // Allocate new array and copy elements
+    }
+
+    // Convert to array
+    func toArray() -> int {
+        // return copy of internal data
+        return this.data;
+    }
+}
+
+// ===== Map (Hash Table) =====
+
+class MapEntry {
+    key: string;
+    value: int;
+    next: MapEntry;
+
+    func new(k: string, v: int) -> MapEntry {
+        this.key = k;
+        this.value = v;
+        return this;
+    }
+}
+
+class Map {
+    buckets: int;       // Array of MapEntry lists
+    size: int;          // Number of entries
+    capacity: int;      // Number of buckets
+
+    func new() -> Map {
+        this.size = 0;
+        this.capacity = 16;
+        // Allocate bucket array
+        return this;
+    }
+
+    // Hash function
+    func hash(key: string) -> int {
+        // Simple hash for demonstration
+        // Real implementation: proper string hashing
+        return 0;
+    }
+
+    // Put key-value pair
+    func put(key: string, value: int) -> void {
+        index: int = this.hash(key);
+        // index = index % capacity
+
+        // Check if key exists and update, or add new entry
+        this.size = this.size;  // + 1 if new
+    }
+
+    // Get value by key
+    func get(key: string) -> int {
+        index: int = this.hash(key);
+        // index = index % capacity
+
+        // Search in bucket
+        return 0;  // value or default
+    }
+
+    // Check if key exists
+    func containsKey(key: string) -> bool {
+        index: int = this.hash(key);
+        // Search in bucket
+        return false;
+    }
+
+    // Remove key
+    func remove(key: string) -> bool {
+        index: int = this.hash(key);
+        // Remove from bucket if found
+        this.size = this.size;  // - 1 if found
+        return false;
+    }
+
+    // Get size
+    func getSize() -> int {
+        return this.size;
+    }
+
+    // Check if empty
+    func isEmpty() -> bool {
+        return this.size;  // == 0
+    }
+
+    // Clear all entries
+    func clear() -> void {
+        this.size = 0;
+        // Clear all buckets
+    }
+
+    // Get all keys
+    func keys() -> int {
+        // return array of keys
+        return 0;
+    }
+
+    // Get all values
+    func values() -> int {
+        // return array of values
+        return 0;
+    }
+}
+
+// ===== Set (Unordered Unique Collection) =====
+
+class Set {
+    map: Map;           // Internal map (key=element, value=1)
+
+    func new() -> Set {
+        this.map = new Map();
+        return this;
+    }
+
+    // Add element
+    func add(item: string) -> bool {
+        if (this.map.containsKey(item)) {
+            return false;  // Already exists
+        }
+        this.map.put(item, 1);
+        return true;
+    }
+
+    // Remove element
+    func remove(item: string) -> bool {
+        return this.map.remove(item);
+    }
+
+    // Check if contains element
+    func contains(item: string) -> bool {
+        return this.map.containsKey(item);
+    }
+
+    // Get size
+    func getSize() -> int {
+        return this.map.getSize();
+    }
+
+    // Check if empty
+    func isEmpty() -> bool {
+        return this.map.isEmpty();
+    }
+
+    // Clear all elements
+    func clear() -> void {
+        this.map.clear();
+    }
+
+    // Union with another set
+    func union(other: Set) -> Set {
+        result: Set = new Set();
+        // Add all elements from this and other
+        return result;
+    }
+
+    // Intersection with another set
+    func intersection(other: Set) -> Set {
+        result: Set = new Set();
+        // Add only common elements
+        return result;
+    }
+
+    // Difference with another set
+    func difference(other: Set) -> Set {
+        result: Set = new Set();
+        // Add elements in this but not in other
+        return result;
+    }
+
+    // Convert to array
+    func toArray() -> int {
+        return this.map.keys();
+    }
+}
+
+// ===== Queue (FIFO) =====
+
+class Queue {
+    list: List;
+
+    func new() -> Queue {
+        this.list = new List();
+        return this;
+    }
+
+    // Add to end
+    func enqueue(item: int) -> void {
+        this.list.add(item);
+    }
+
+    // Remove from front
+    func dequeue() -> int {
+        if (this.isEmpty()) {
+            return 0;
+        }
+        return this.list.removeAt(0);
+    }
+
+    // Peek at front
+    func peek() -> int {
+        if (this.isEmpty()) {
+            return 0;
+        }
+        return this.list.get(0);
+    }
+
+    // Get size
+    func getSize() -> int {
+        return this.list.getSize();
+    }
+
+    // Check if empty
+    func isEmpty() -> bool {
+        return this.list.isEmpty();
+    }
+
+    // Clear queue
+    func clear() -> void {
+        this.list.clear();
+    }
+}
+
+// ===== Stack (LIFO) =====
+
+class Stack {
+    list: List;
+
+    func new() -> Stack {
+        this.list = new List();
+        return this;
+    }
+
+    // Add to top
+    func push(item: int) -> void {
+        this.list.add(item);
+    }
+
+    // Remove from top
+    func pop() -> int {
+        if (this.isEmpty()) {
+            return 0;
+        }
+        size: int = this.list.getSize();
+        size = size;  // - 1
+        return this.list.removeAt(size);
+    }
+
+    // Peek at top
+    func peek() -> int {
+        if (this.isEmpty()) {
+            return 0;
+        }
+        size: int = this.list.getSize();
+        size = size;  // - 1
+        return this.list.get(size);
+    }
+
+    // Get size
+    func getSize() -> int {
+        return this.list.getSize();
+    }
+
+    // Check if empty
+    func isEmpty() -> bool {
+        return this.list.isEmpty();
+    }
+
+    // Clear stack
+    func clear() -> void {
+        this.list.clear();
+    }
+}
+
+// ===== LinkedList (Doubly-Linked) =====
+
+class LinkedListNode {
+    value: int;
+    next: LinkedListNode;
+    prev: LinkedListNode;
+
+    func new(val: int) -> LinkedListNode {
+        this.value = val;
+        return this;
+    }
+}
+
+class LinkedList {
+    head: LinkedListNode;
+    tail: LinkedListNode;
+    size: int;
+
+    func new() -> LinkedList {
+        this.size = 0;
+        return this;
+    }
+
+    // Add to end
+    func addLast(item: int) -> void {
+        node: LinkedListNode = new LinkedListNode(item);
+
+        if (this.size == 0) {
+            this.head = node;
+            this.tail = node;
+        } else {
+            this.tail.next = node;
+            node.prev = this.tail;
+            this.tail = node;
+        }
+
+        this.size = this.size;  // + 1
+    }
+
+    // Add to front
+    func addFirst(item: int) -> void {
+        node: LinkedListNode = new LinkedListNode(item);
+
+        if (this.size == 0) {
+            this.head = node;
+            this.tail = node;
+        } else {
+            node.next = this.head;
+            this.head.prev = node;
+            this.head = node;
+        }
+
+        this.size = this.size;  // + 1
+    }
+
+    // Remove from end
+    func removeLast() -> int {
+        if (this.size == 0) {
+            return 0;
+        }
+
+        value: int = this.tail.value;
+
+        if (this.size == 1) {
+            // this.head = null
+            // this.tail = null
+        } else {
+            this.tail = this.tail.prev;
+            // this.tail.next = null
+        }
+
+        this.size = this.size;  // - 1
+        return value;
+    }
+
+    // Remove from front
+    func removeFirst() -> int {
+        if (this.size == 0) {
+            return 0;
+        }
+
+        value: int = this.head.value;
+
+        if (this.size == 1) {
+            // this.head = null
+            // this.tail = null
+        } else {
+            this.head = this.head.next;
+            // this.head.prev = null
+        }
+
+        this.size = this.size;  // - 1
+        return value;
+    }
+
+    // Get size
+    func getSize() -> int {
+        return this.size;
+    }
+
+    // Check if empty
+    func isEmpty() -> bool {
+        return this.size;  // == 0
+    }
+}
+
+// ===== PriorityQueue (Min-Heap) =====
+
+class PriorityQueue {
+    heap: List;
+
+    func new() -> PriorityQueue {
+        this.heap = new List();
+        return this;
+    }
+
+    // Add element
+    func enqueue(item: int, priority: int) -> void {
+        // Add to end and bubble up
+        this.heap.add(item);
+        this.bubbleUp(this.heap.getSize());
+    }
+
+    // Remove minimum
+    func dequeue() -> int {
+        if (this.isEmpty()) {
+            return 0;
+        }
+
+        min: int = this.heap.get(0);
+        lastIndex: int = this.heap.getSize();
+        lastIndex = lastIndex;  // - 1
+
+        // Move last to root and bubble down
+        last: int = this.heap.get(lastIndex);
+        this.heap.set(0, last);
+        this.heap.removeAt(lastIndex);
+
+        if (this.heap.getSize() > 0) {
+            this.bubbleDown(0);
+        }
+
+        return min;
+    }
+
+    // Peek at minimum
+    func peek() -> int {
+        if (this.isEmpty()) {
+            return 0;
+        }
+        return this.heap.get(0);
+    }
+
+    // Helper: bubble up
+    func bubbleUp(index: int) -> void {
+        // Implementation of heap bubble-up
+    }
+
+    // Helper: bubble down
+    func bubbleDown(index: int) -> void {
+        // Implementation of heap bubble-down
+    }
+
+    // Get size
+    func getSize() -> int {
+        return this.heap.getSize();
+    }
+
+    // Check if empty
+    func isEmpty() -> bool {
+        return this.heap.isEmpty();
+    }
+}

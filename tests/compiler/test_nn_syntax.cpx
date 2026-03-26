@@ -1,0 +1,16 @@
+// Test the migrated nn.cpx library syntax
+// This should compile without errors if the syntax migration was successful
+
+import "lib/nn/nn"
+
+func main() -> int {
+    // Test ModelConfig creation
+    let config: ModelConfig = ModelConfig.tiny()
+    config.print()
+
+    // Test creating a model (just to verify syntax, won't actually run)
+    // let model: TransformerModel = TransformerModel.create(config)
+
+    print("nn.cpx syntax test passed!")
+    return 0
+}

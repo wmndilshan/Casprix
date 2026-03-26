@@ -1,0 +1,85 @@
+// IO Library - Standard Input/Output operations
+// Provides input/output functions with error handling
+
+// print functions with automatic newline
+func PrintString(s: string) -> void {
+    print(s);
+}
+
+func PrintInt(n: int) -> void {
+    print(n);
+}
+
+func PrintFloat(f: float) -> void {
+    print(f);
+}
+
+func PrintBool(b: bool) -> void {
+    print(b);
+}
+
+func PrintLn(x: string) -> void {
+    print(x);
+    print("\n");
+}
+
+func PrintLn(x: int) -> void {
+    print(x);
+    print("\n");
+}
+
+func PrintLn(x: float) -> void {
+    print(x);
+    print("\n");
+}
+
+func PrintLn(x: bool) -> void {
+    print(x);
+    print("\n");
+}
+
+// print without newline (for formatted output)
+func PrintStringNoNewline(s: string) -> void {
+    // Implementation will use printf without \n
+    print(s);
+}
+
+// Error logging functions
+func LogError(message: string) -> void {
+    print("ERROR: ");
+    print(message);
+}
+
+func LogWarning(message: string) -> void {
+    print("WARNING: ");
+    print(message);
+}
+
+func LogInfo(message: string) -> void {
+    print("INFO: ");
+    print(message);
+}
+
+func LogDebug(message: string) -> void {
+    print("DEBUG: ");
+    print(message);
+}
+
+// Input functions (placeholder - requires runtime support)
+func ReadString() -> string {
+    // TODO: Implement with scanf or similar
+    return "";
+}
+
+func ReadInt() -> int {
+    // TODO: Implement with scanf
+    return 0;
+}
+
+func ReadFloat() -> float {
+    // TODO: Implement with scanf
+    return 0.0;
+}
+
+
+

@@ -1,0 +1,5 @@
+mut count: int = 0;
+let next = |x: int| -> int {
+    count = count + x;
+    return count;
+};

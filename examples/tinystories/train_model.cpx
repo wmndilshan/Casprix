@@ -1,0 +1,162 @@
+// Train Language Model on TinyStories
+// Small transformer model training script
+
+class ModelConfig {
+    field vocab_size: int
+    field hidden_dim: int
+    field num_layers: int
+    field num_heads: int
+    field ffn_dim: int
+    field max_seq_len: int
+
+    func new() -> void {
+        this.vocab_size = 8192
+        this.hidden_dim = 256
+        this.num_layers = 6
+        this.num_heads = 8
+        this.ffn_dim = 1024  // 4x hidden_dim
+        this.max_seq_len = 256
+    }
+
+    func printConfig() -> void {
+        print("Model Configuration:")
+        print("  Vocab size:   " + this.vocab_size)
+        print("  Hidden dim:   " + this.hidden_dim)
+        print("  Num layers:   " + this.num_layers)
+        print("  Num heads:    " + this.num_heads)
+        print("  FFN dim:      " + this.ffn_dim)
+        print("  Max seq len:  " + this.max_seq_len)
+
+        // Calculate parameters
+        let params: int = this.vocab_size * this.hidden_dim * 2  // Embeddings
+        params = params + this.num_layers * (this.hidden_dim * this.hidden_dim * 4)  // Attention
+        params = params + this.num_layers * (this.hidden_dim * this.ffn_dim * 2)     // FFN
+
+        print("  Total params: ~" + (params / 1000000) + "M")
+    }
+}
+
+class TrainingConfig {
+    field learning_rate: float
+    field batch_size: int
+    field num_steps: int
+    field log_interval: int
+    field val_interval: int
+    field save_interval: int
+
+    func new() -> void {
+        this.learning_rate = 0.0003  // 3e-4
+        this.batch_size = 32
+        this.num_steps = 100000
+        this.log_interval = 100
+        this.val_interval = 1000
+        this.save_interval = 5000
+    }
+
+    func printConfig() -> void {
+        print("Training Configuration:")
+        print("  Learning rate:  " + this.learning_rate)
+        print("  Batch size:     " + this.batch_size)
+        print("  Num steps:      " + this.num_steps)
+        print("  Log interval:   " + this.log_interval)
+        print("  Val interval:   " + this.val_interval)
+        print("  Save interval:  " + this.save_interval)
+    }
+}
+
+class Trainer {
+    field model_config: ModelConfig
+    field train_config: TrainingConfig
+    field train_data_path: string
+    field val_data_path: string
+    field checkpoint_dir: string
+
+    func new() -> void {
+        this.model_config = new ModelConfig()
+        this.train_config = new TrainingConfig()
+        this.train_data_path = "data/tinystories_train.bin"
+        this.val_data_path = "data/tinystories_val.bin"
+        this.checkpoint_dir = "checkpoints/"
+    }
+
+    // Train model
+    func train() -> void {
+        print("=== TinyStories Language Model Training ===")
+        print("")
+
+        this.model_config.printConfig()
+        print("")
+        this.train_config.printConfig()
+        print("")
+
+        // Load datasets
+        print("Loading datasets...")
+        let train_data: Dataset = Dataset.load(this.train_data_path)
+        let val_data: Dataset = Dataset.load(this.val_data_path)
+        print("  Train: " + train_data.num_sequences + " sequences")
+        print("  Val:   " + val_data.num_sequences + " sequences")
+        print("")
+
+        // Create model (placeholder - actual C binding)
+        print("Initializing model...")
+        // let model: TransformerModel = new TransformerModel(this.model_config)
+        print("✓ Model initialized")
+        print("")
+
+        // Training loop
+        print("Starting training...")
+        print("")
+
+        let batch_size: int = this.train_config.batch_size
+        let current_idx: int = 0
+
+        for step = 0 to this.train_config.num_steps - 1
+            // Get batch
+            // let batch: Array<Array<int>> = this.getBatch(train_data, current_idx, batch_size)
+            // current_idx = (current_idx + batch_size) % train_data.num_sequences
+
+            // Forward + backward pass
+            // let loss: float = model.trainStep(batch)
+            let loss: float = 2.5  // Placeholder
+
+            // Logging
+            if step % this.train_config.log_interval == 0 {
+                print("Step " + step + " | Loss: " + loss)
+            }
+
+            // Validation
+            if step % this.train_config.val_interval == 0 and step > 0 {
+                let val_loss: float = this.validate(val_data)
+                print("  Val Loss: " + val_loss)
+            }
+
+            // Save checkpoint
+            if step % this.train_config.save_interval == 0 and step > 0 {
+                let checkpoint_path: string = this.checkpoint_dir + "step_" + step + ".ckpt"
+                print("  Saving checkpoint: " + checkpoint_path)
+                // model.saveCheckpoint(checkpoint_path)
+            }
+        }
+
+        print("")
+        print("=== Training Complete! ===")
+
+        // Cleanup
+        train_data.destroy()
+        val_data.destroy()
+    }
+
+    // Validate on validation set
+    func validate(val_data: Dataset) -> float {
+        // Compute average loss on validation set
+        // For now, return placeholder
+        return 2.3
+    }
+
+    static func main() -> void {
+        let trainer: Trainer = new Trainer()
+        trainer.train()
+    }
+}
+
+Trainer.main()

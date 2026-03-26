@@ -1,0 +1,62 @@
+// Casprix Compiler - Optimization Benchmarks
+
+// Benchmark 1: Loop optimization
+print("Benchmark 1: Array sum")
+
+func sum_array(arr: Array<int>, n: int) -> int {
+    let total: int = 0
+    for i = 0 to n {
+        total = total + arr[i]  # Should optimize to register
+    }
+    return total
+}
+
+let arr: Array<int> = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+let result = sum_array(arr, 10)
+print(result)  # Should print 55
+
+// Benchmark 2: Function inlining
+print("Benchmark 2: Sum of squares")
+
+func square(x: int) -> int {
+    return x * x  # Should inline
+}
+
+func sum_squares(n: int) -> int {
+    let total: int = 0
+    for i = 1 to n {
+        total = total + square(i)  # Inline square()
+    }
+    return total
+}
+
+print(sum_squares(10))  # Should print 385
+
+// Benchmark 3: Register allocation stress
+print("Benchmark 3: Complex calculation")
+
+func complex_calc(a, b, c, d, e, f, g, h: int) -> int {
+    let x1: int = a * b + c
+    let x2: int = d * e + f
+    let x3: int = g * h + a
+    let x4: int = b + c + d
+    let x5: int = e + f + g
+    return x1 + x2 + x3 + x4 + x5
+}
+
+print(complex_calc(1, 2, 3, 4, 5, 6, 7, 8))  # Should use registers efficiently
+
+// Benchmark 4: Peephole optimization
+print("Benchmark 4: Arithmetic optimizations")
+
+func arithmetic_test() -> int {
+    let x: int = 0       # xor rax, rax (peephole)
+    x = x + 5
+    x = x + 3            # Should combine to add 8
+    x = x * 8            # Should become shl (strength reduction)
+    return x
+}
+
+print(arithmetic_test())  # Should print 64
+
+print("All benchmarks completed!")

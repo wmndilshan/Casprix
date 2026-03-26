@@ -1,0 +1,51 @@
+﻿// TCP Echo Server Demo - High-Performance Networking
+
+import "lib/net/Socket.cpx"
+
+func main() -> void {
+    print("=== TCP Echo Server Demo ===");
+    
+    // Create server on port 8080
+    server: TcpServer = new TcpServer(8080);
+    
+    print("Starting server on port 8080...");
+    success: bool = server.start();
+    
+    if success {
+        print("Server is listening!");
+        print("Waiting for connections...");
+        
+        // Accept one client connection (simplified demo)
+        client: Socket = server.acceptClient();
+        
+        print("Client connected!");
+        
+        // Receive message
+        buffer: string = "";
+        bytesReceived: int = client.receive(buffer, 1024);
+        
+        if bytesReceived > 0 {
+            print("Received:");
+            print(buffer);
+            
+            // Echo back
+            client.send("Echo: ");
+            client.send(buffer);
+            
+            print("Echoed message back to client");
+        }
+        
+        // Close client connection
+        client.close();
+        print("Client disconnected");
+        
+        // Stop server
+        server.stop();
+        print("Server stopped");
+    } else {
+        print("Failed to start server!");
+    }
+    
+    print("");
+    print("Demo complete!");
+}

@@ -1,0 +1,49 @@
+// GUI Library Test Application
+// Demonstrates modern syntax and GUI functionality
+
+import "stdlib/GUI.cpx";
+
+func main() -> void {
+    // Show initial message
+    ShowInfo("Casprix GUI Test", "Welcome to Casprix GUI Library Test!");
+    
+    // Create application instance
+    app: GUIApp = new GUIApp();
+    
+    // Create main window
+    window: Window = new Window(app, "Casprix GUI Demo", 500, 400);
+    window.Create();
+    
+    // Create label
+    label: Label = new Label(window, "Enter your name:", 20, 20, 200, 25);
+    
+    // Create text box
+    textBox: TextBox = new TextBox(window, 20, 50, 250, 25);
+    textBox.SetText("Type here...");
+    
+    // Create buttons
+    btnHello: Button = new Button(window, "Say Hello", 20, 90, 100, 30, 1001);
+    btnClear: Button = new Button(window, "Clear", 130, 90, 100, 30, 1002);
+    btnAbout: Button = new Button(window, "About", 240, 90, 100, 30, 1003);
+    
+    // Create status label
+    statusLabel: Label = new Label(window, "Ready", 20, 140, 450, 25);
+    
+    // Show window
+    window.Show();
+    
+    // Demo: Show a warning
+    ShowWarning("Demo", "This is a demo GUI application built with Casprix!");
+    
+    // Demo: Ask a question
+    result: int = AskYesNo("Question", "Do you like the Casprix GUI library?");
+    
+    if result == 6 {  // IDYES = 6
+        statusLabel.SetText("Status: User likes Casprix GUI!");
+    } else {
+        statusLabel.SetText("Status: We will improve it!");
+    }
+    
+    // Run message loop
+    app.Run();
+}

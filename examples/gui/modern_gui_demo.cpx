@@ -1,0 +1,337 @@
+// Casprix Modern UI Demo
+// Showcases: TabPanel, ProgressBar, ScrollView, Cards, Form inputs,
+//            Checkboxes, Sliders, Buttons, Separators, Color utilities
+
+import "lib/skia/ui"
+
+// ── Color palette ────────────────────────────────────────────────────────
+
+let WHITE      = 0xFFFFFFFF
+let BG         = 0xFFF5F5F5
+let PRIMARY    = 0xFF1976D2
+let PRIMARY_LT = 0xFF42A5F5
+let PRIMARY_DK = 0xFF0D47A1
+let ACCENT     = 0xFFE91E63
+let SUCCESS    = 0xFF4CAF50
+let WARN       = 0xFFFF9800
+let DARK       = 0xFF212121
+let GRAY       = 0xFF757575
+let GRAY_LT    = 0xFFBDBDBD
+let SEP        = 0xFFE0E0E0
+
+// ── App and fonts ────────────────────────────────────────────────────────
+
+let app        = new App("Casprix Modern UI Demo", 960, 700)
+let font       = app.get_font()
+let font_bold  = skia_font_create("Segoe UI", 15.0)
+let font_title = skia_font_create("Segoe UI", 20.0)
+let font_small = skia_font_create("Segoe UI", 12.0)
+let font_h2    = skia_font_create("Segoe UI", 13.0)
+skia_font_set_bold(font_bold, 1)
+skia_font_set_bold(font_title, 1)
+
+// ════════════════════════════════════════════════════════════════════════
+// TAB 1 — Widgets: form inputs + progress bars
+// ════════════════════════════════════════════════════════════════════════
+
+let tab1 = new Column(16.0)
+tab1.set_padding(20.0)
+tab1.set_background(BG)
+
+// -- Form card --
+let form_card = new Card()
+form_card.set_padding(20.0)
+form_card.set_elevation(1)
+
+let form_col   = new Column(12.0)
+let form_hdr   = new Text("Sign In", font_title, DARK)
+let form_sub   = new Text("Enter your credentials to continue.", font_small, GRAY)
+let sep_form   = new Separator(1, SEP, 1.0)
+let lbl_user   = new Text("Username", font_h2, DARK)
+let username   = new TextInput("e.g. john_doe", font)
+let lbl_pass   = new Text("Password", font_h2, DARK)
+let password   = new TextInput("Password", font)
+
+let btn_row    = new Row(10.0)
+let btn_sign   = new Button("Sign In", font_bold)
+btn_sign.set_background(PRIMARY)
+btn_sign.set_border(PRIMARY_DK, 1.0, 6.0)
+btn_sign.set_padding(10.0)
+btn_sign.set_min_size(120.0, 0.0)
+
+let btn_cancel = new Button("Cancel", font)
+btn_cancel.set_background(0xFFEEEEEE)
+btn_cancel.set_border(GRAY_LT, 1.0, 6.0)
+btn_cancel.set_padding(10.0)
+
+btn_row.add(btn_sign.handle)
+btn_row.add(btn_cancel.handle)
+
+form_col.add(form_hdr.handle)
+form_col.add(form_sub.handle)
+form_col.add(sep_form.handle)
+form_col.add(lbl_user.handle)
+form_col.add(username.handle)
+form_col.add(lbl_pass.handle)
+form_col.add(password.handle)
+form_col.add(btn_row.handle)
+form_card.add(form_col.handle)
+
+// -- Progress bars card --
+let prog_card = new Card()
+prog_card.set_padding(20.0)
+prog_card.set_elevation(1)
+
+let prog_col  = new Column(10.0)
+let prog_hdr  = new Text("Task Progress", font_bold, DARK)
+let sep_prog  = new Separator(1, SEP, 1.0)
+
+let pb_lbl1 = new Text("Build   ", font_small, GRAY)
+let pb1     = new ProgressBar(0.0, 100.0, 78.0)
+pb1.set_colors(SUCCESS, SEP)
+let pb_row1 = new Row(8.0)
+pb_row1.add(pb_lbl1.handle)
+pb_row1.add(pb1.handle)
+
+let pb_lbl2 = new Text("Tests   ", font_small, GRAY)
+let pb2     = new ProgressBar(0.0, 100.0, 45.0)
+pb2.set_colors(PRIMARY, SEP)
+let pb_row2 = new Row(8.0)
+pb_row2.add(pb_lbl2.handle)
+pb_row2.add(pb2.handle)
+
+let pb_lbl3 = new Text("Deploy  ", font_small, GRAY)
+let pb3     = new ProgressBar(0.0, 100.0, 12.0)
+pb3.set_colors(WARN, SEP)
+let pb_row3 = new Row(8.0)
+pb_row3.add(pb_lbl3.handle)
+pb_row3.add(pb3.handle)
+
+let pb_lbl4 = new Text("Review  ", font_small, GRAY)
+let pb4     = new ProgressBar(0.0, 100.0, 95.0)
+pb4.set_colors(ACCENT, SEP)
+let pb_row4 = new Row(8.0)
+pb_row4.add(pb_lbl4.handle)
+pb_row4.add(pb4.handle)
+
+prog_col.add(prog_hdr.handle)
+prog_col.add(sep_prog.handle)
+prog_col.add(pb_row1.handle)
+prog_col.add(pb_row2.handle)
+prog_col.add(pb_row3.handle)
+prog_col.add(pb_row4.handle)
+prog_card.add(prog_col.handle)
+
+tab1.add(form_card.handle)
+tab1.add(prog_card.handle)
+
+// ════════════════════════════════════════════════════════════════════════
+// TAB 2 — Controls: checkboxes + sliders
+// ════════════════════════════════════════════════════════════════════════
+
+let tab2 = new Column(16.0)
+tab2.set_padding(20.0)
+tab2.set_background(BG)
+
+// -- Checkboxes card --
+let chk_card = new Card()
+chk_card.set_padding(20.0)
+chk_card.set_elevation(1)
+
+let chk_col  = new Column(10.0)
+let chk_hdr  = new Text("Preferences", font_bold, DARK)
+let sep_chk  = new Separator(1, SEP, 1.0)
+let chk1     = new Checkbox("Enable desktop notifications", font, 1)
+let chk2     = new Checkbox("Dark mode", font, 0)
+let chk3     = new Checkbox("Auto-save every 5 minutes", font, 1)
+let chk4     = new Checkbox("Show line numbers in editor", font, 1)
+let chk5     = new Checkbox("Telemetry and analytics", font, 0)
+
+chk_col.add(chk_hdr.handle)
+chk_col.add(sep_chk.handle)
+chk_col.add(chk1.handle)
+chk_col.add(chk2.handle)
+chk_col.add(chk3.handle)
+chk_col.add(chk4.handle)
+chk_col.add(chk5.handle)
+chk_card.add(chk_col.handle)
+
+// -- Sliders card --
+let sld_card = new Card()
+sld_card.set_padding(20.0)
+sld_card.set_elevation(1)
+
+let sld_col  = new Column(14.0)
+let sld_hdr  = new Text("Audio and Display", font_bold, DARK)
+let sep_sld  = new Separator(1, SEP, 1.0)
+let lbl_vol  = new Text("Volume", font_h2, DARK)
+let lbl_bass = new Text("Bass boost", font_h2, DARK)
+let lbl_bri  = new Text("Brightness", font_h2, DARK)
+let lbl_zoom = new Text("UI Zoom %", font_h2, DARK)
+
+let sld_vol  = new Slider(0.0, 100.0, 72.0)
+let sld_bass = new Slider(0.0, 100.0, 50.0)
+let sld_bri  = new Slider(10.0, 100.0, 80.0)
+let sld_zoom = new Slider(50.0, 200.0, 100.0)
+
+sld_col.add(sld_hdr.handle)
+sld_col.add(sep_sld.handle)
+sld_col.add(lbl_vol.handle)
+sld_col.add(sld_vol.handle)
+sld_col.add(lbl_bass.handle)
+sld_col.add(sld_bass.handle)
+sld_col.add(lbl_bri.handle)
+sld_col.add(sld_bri.handle)
+sld_col.add(lbl_zoom.handle)
+sld_col.add(sld_zoom.handle)
+sld_card.add(sld_col.handle)
+
+tab2.add(chk_card.handle)
+tab2.add(sld_card.handle)
+
+// ════════════════════════════════════════════════════════════════════════
+// TAB 3 — Dashboard: project cards grid
+// ════════════════════════════════════════════════════════════════════════
+
+let tab3 = new Column(20.0)
+tab3.set_padding(20.0)
+tab3.set_background(BG)
+
+let dash_hdr = new Text("Project Dashboard", font_title, DARK)
+let dash_sub = new Text("Q1 2026 Sprint Overview", font_small, GRAY)
+let sep_dash = new Separator(1, SEP, 1.0)
+
+// Card Alpha
+let col_a = new Column(10.0)
+let card_a = new Card()
+card_a.set_padding(16.0)
+card_a.set_elevation(2)
+let txt_a1  = new Text("Project Alpha", font_bold, DARK)
+let txt_a2  = new Text("Status: Active", font_small, GRAY)
+let sep_a   = new Separator(1, SEP, 1.0)
+let pb_ca   = new ProgressBar(0.0, 100.0, 65.0)
+pb_ca.set_colors(PRIMARY, SEP)
+let txt_a3  = new Text("65% complete", font_small, PRIMARY)
+let btn_a   = new Button("Open", font_small)
+btn_a.set_background(PRIMARY)
+btn_a.set_border(PRIMARY_DK, 1.0, 4.0)
+btn_a.set_padding(6.0)
+col_a.add(txt_a1.handle)
+col_a.add(txt_a2.handle)
+col_a.add(sep_a.handle)
+col_a.add(pb_ca.handle)
+col_a.add(txt_a3.handle)
+col_a.add(btn_a.handle)
+card_a.add(col_a.handle)
+
+// Card Beta
+let col_b = new Column(10.0)
+let card_b = new Card()
+card_b.set_padding(16.0)
+card_b.set_elevation(2)
+let txt_b1  = new Text("Project Beta", font_bold, DARK)
+let txt_b2  = new Text("Status: Review", font_small, GRAY)
+let sep_b   = new Separator(1, SEP, 1.0)
+let pb_cb   = new ProgressBar(0.0, 100.0, 88.0)
+pb_cb.set_colors(SUCCESS, SEP)
+let txt_b3  = new Text("88% complete", font_small, SUCCESS)
+let btn_b   = new Button("Open", font_small)
+btn_b.set_background(SUCCESS)
+btn_b.set_border(0xFF388E3C, 1.0, 4.0)
+btn_b.set_padding(6.0)
+col_b.add(txt_b1.handle)
+col_b.add(txt_b2.handle)
+col_b.add(sep_b.handle)
+col_b.add(pb_cb.handle)
+col_b.add(txt_b3.handle)
+col_b.add(btn_b.handle)
+card_b.add(col_b.handle)
+
+// Card Gamma
+let col_c = new Column(10.0)
+let card_c = new Card()
+card_c.set_padding(16.0)
+card_c.set_elevation(2)
+let txt_c1  = new Text("Project Gamma", font_bold, DARK)
+let txt_c2  = new Text("Status: Blocked", font_small, GRAY)
+let sep_c   = new Separator(1, SEP, 1.0)
+let pb_cc   = new ProgressBar(0.0, 100.0, 22.0)
+pb_cc.set_colors(WARN, SEP)
+let txt_c3  = new Text("22% complete", font_small, WARN)
+let btn_c   = new Button("Open", font_small)
+btn_c.set_background(WARN)
+btn_c.set_border(0xFFF57C00, 1.0, 4.0)
+btn_c.set_padding(6.0)
+col_c.add(txt_c1.handle)
+col_c.add(txt_c2.handle)
+col_c.add(sep_c.handle)
+col_c.add(pb_cc.handle)
+col_c.add(txt_c3.handle)
+col_c.add(btn_c.handle)
+card_c.add(col_c.handle)
+
+let grid = new Row(16.0)
+grid.add(card_a.handle)
+grid.add(card_b.handle)
+grid.add(card_c.handle)
+
+let scroll = new ScrollView()
+scroll.set_content(grid.handle)
+scroll.set_min_size(0.0, 300.0)
+
+tab3.add(dash_hdr.handle)
+tab3.add(dash_sub.handle)
+tab3.add(sep_dash.handle)
+tab3.add(scroll.handle)
+
+// ════════════════════════════════════════════════════════════════════════
+// Assemble TabPanel
+// ════════════════════════════════════════════════════════════════════════
+
+let tabs = new TabPanel()
+tabs.new3("Widgets", tab1.handle, "Controls", tab2.handle, "Dashboard", tab3.handle)
+tabs.set_min_size(0.0, 520.0)
+
+// ── Header bar ──────────────────────────────────────────────────────────
+
+let header      = new Row(0.0)
+header.set_background(PRIMARY_DK)
+header.set_padding(16.0)
+
+let hdr_title   = new Text("Casprix Modern UI", font_title, WHITE)
+let hdr_ver     = new Text("v1.0.0", font_small, 0xAAFFFFFF)
+let hdr_space   = new Spacer(1.0)
+
+header.add(hdr_title.handle)
+header.add(hdr_space.handle)
+header.add(hdr_ver.handle)
+
+// ── Status bar ──────────────────────────────────────────────────────────
+
+let status      = new Row(0.0)
+status.set_background(0xFF37474F)
+status.set_padding(6.0)
+
+let st_ready    = new Text("Ready", font_small, 0xAAFFFFFF)
+let st_space    = new Spacer(1.0)
+let st_info     = new Text("CPX 1.0  |  x86-64", font_small, 0x66FFFFFF)
+
+status.add(st_ready.handle)
+status.add(st_space.handle)
+status.add(st_info.handle)
+
+// ── Root layout ─────────────────────────────────────────────────────────
+
+let sep_hdr = new Separator(1, PRIMARY_DK, 2.0)
+let sep_bot = new Separator(1, SEP, 1.0)
+
+let root = new Column(0.0)
+root.set_background(BG)
+root.add(header.handle)
+root.add(sep_hdr.handle)
+root.add(tabs.handle)
+root.add(sep_bot.handle)
+root.add(status.handle)
+
+app.set_root(root.handle)
+app.run()

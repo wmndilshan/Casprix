@@ -1,0 +1,29 @@
+// Casperix Test: Async/Await
+// Planned surface demo; async/await is not accepted by the current parser yet.
+
+async func fetchData(id: int) -> String {
+    print("Fetching data for ID: ")
+    print(id)
+    return "Data for ID"
+}
+
+async func processData() -> void {
+    let data = await fetchData(42)
+    print(data)
+}
+
+func main() -> int {
+    // Spawn async tasks
+    spawn {
+        await processData()
+    }
+    
+    spawn {
+        let result = await fetchData(100)
+        print(result)
+    }
+    
+    await all  // Wait for all tasks
+    
+    return 0
+}

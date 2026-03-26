@@ -1,0 +1,100 @@
+// Simple test for LLM runtime components
+// Tests tokenizer, dataset, and basic operations
+
+class LLMRuntimeTest {
+    static func testTokenizer() -> void {
+        print("=== Testing Tokenizer ===")
+
+        // Create tokenizer
+        let tok: Tokenizer = new Tokenizer(8192)
+        print("✓ Created tokenizer (vocab_size=8192)")
+
+        // Test encoding
+        let text: string = "Once upon a time, there was a little girl."
+        print("Input text: " + text)
+
+        let tokens: Array<int> = tok.encode(text)
+        print("Encoded to " + tokens.size() + " tokens")
+
+        // Test decoding
+        let decoded: string = tok.decode(tokens)
+        print("Decoded: " + decoded)
+
+        // Save and load
+        tok.save("test_tokenizer.bin")
+        print("✓ Saved tokenizer")
+
+        let tok2: Tokenizer = Tokenizer.load("test_tokenizer.bin")
+        print("✓ Loaded tokenizer")
+
+        tok.destroy()
+        tok2.destroy()
+        print("✓ Tokenizer test complete!")
+        print("")
+    }
+
+    static func testDataset() -> void {
+        print("=== Testing Dataset ===")
+
+        // Create small dataset
+        let ds: Dataset = new Dataset(100, 64, 8192)
+        print("✓ Created dataset (100 sequences, length 64)")
+
+        // Shuffle
+        ds.shuffle()
+        print("✓ Shuffled dataset")
+
+        // Save and load
+        ds.save("test_dataset.bin")
+        print("✓ Saved dataset")
+
+        let ds2: Dataset = Dataset.load("test_dataset.bin")
+        print("✓ Loaded dataset")
+        print("  Num sequences: " + ds2.num_sequences)
+        print("  Seq length: " + ds2.seq_length)
+
+        ds.destroy()
+        ds2.destroy()
+        print("✓ Dataset test complete!")
+        print("")
+    }
+
+    static func testSplit() -> void {
+        print("=== Testing Dataset Split ===")
+
+        let ds: Dataset = new Dataset(1000, 64, 8192)
+        print("Created dataset with 1000 sequences")
+
+        let splits: Array<Dataset> = DatasetSplitter.split(ds, 0.8, 0.1, 0.1)
+
+        print("Split into:")
+        print("  Train: " + splits[0].num_sequences + " sequences")
+        print("  Val:   " + splits[1].num_sequences + " sequences")
+        print("  Test:  " + splits[2].num_sequences + " sequences")
+
+        splits[0].destroy()
+        splits[1].destroy()
+        splits[2].destroy()
+        ds.destroy()
+
+        print("✓ Split test complete!")
+        print("")
+    }
+
+    static func main() -> void {
+        print("========================================")
+        print("  LLM Runtime Component Tests")
+        print("========================================")
+        print("")
+
+        testTokenizer()
+        testDataset()
+        testSplit()
+
+        print("========================================")
+        print("  All Tests Complete!")
+        print("========================================")
+    }
+}
+
+LLMRuntimeTest.main()

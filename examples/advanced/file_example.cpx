@@ -1,0 +1,26 @@
+﻿// Example: File operations
+import "lib/file/file.cpx";
+
+print("File Operations Demo");
+print("====================");
+
+// Note: These functions are placeholders until runtime is fully integrated
+// In a real implementation, you would use:
+// handle: int = FileOpenWrite("test.txt");
+// FileWrite(handle, "Hello, World!");
+// FileClose(handle);
+
+print("File operations module loaded");
+print("Functions available:");
+print("  - FileOpenRead(filename)");
+print("  - FileOpenWrite(filename)");
+print("  - FileClose(handle)");
+print("  - FileReadLine(handle)");
+print("  - FileWrite(handle, content)");
+print("  - FileExists(filename)");
+print("  - FileSize(filename)");
+print("  - FileDelete(filename)");
+print("  - FileCopy(source, dest)");
+
+
+

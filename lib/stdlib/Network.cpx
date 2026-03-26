@@ -1,0 +1,104 @@
+// Casprix Standard Library - Network Module
+// Provides TCP/UDP networking capabilities
+
+class Socket {
+    handle: int;       // Opaque handle to C socket structure
+    connected: bool;   // Connection status
+    socketType: int;   // 0=TCP, 1=UDP
+    remoteAddr: string;
+    remotePort: int;
+
+    // Create a new TCP socket
+    func new() -> Socket {
+        // C binding: nuwan_socket_create(NUWAN_SOCKET_TCP)
+        this.socketType = 0;
+        this.connected = false;
+        return this;
+    }
+
+    // Connect to remote host
+    func connect(host: string, port: int) -> bool {
+        // C binding: nuwan_socket_connect(this.handle, host, port)
+        this.remoteAddr = host;
+        this.remotePort = port;
+        this.connected = true;
+        return true;
+    }
+
+    // Send data
+    func send(data: string) -> int {
+        // C binding: nuwan_socket_send(this.handle, data, len)
+        // Returns number of bytes sent
+        return 0;
+    }
+
+    // Receive data
+    func recv(maxBytes: int) -> string {
+        // C binding: nuwan_socket_recv(this.handle, buffer, maxBytes)
+        // Returns received data as string
+        return "";
+    }
+
+    // Close connection
+    func close() -> void {
+        // C binding: nuwan_socket_close(this.handle)
+        this.connected = false;
+    }
+
+    // Check if connected
+    func isConnected() -> bool {
+        return this.connected;
+    }
+}
+
+class Server {
+    handle: int;           // Opaque handle to C server structure
+    port: int;             // Server port
+    maxConnections: int;   // Maximum simultaneous connections
+    listening: bool;       // Server status
+
+    // Create a new server
+    func new(serverPort: int, maxConn: int) -> Server {
+        // C binding: nuwan_server_create(serverPort, maxConn)
+        this.port = serverPort;
+        this.maxConnections = maxConn;
+        this.listening = false;
+        return this;
+    }
+
+    // Start listening for connections
+    func start() -> bool {
+        // C binding: nuwan_server_start(this.handle)
+        this.listening = true;
+        return true;
+    }
+
+    // Accept a client connection (blocking)
+    func accept() -> Socket {
+        // C binding: nuwan_server_accept_client(this.handle)
+        // Returns a new Socket object for the client
+        return new Socket();
+    }
+
+    // Stop server
+    func stop() -> void {
+        // C binding: nuwan_server_stop(this.handle)
+        this.listening = false;
+    }
+
+    // Check if server is running
+    func isListening() -> bool {
+        return this.listening;
+    }
+}
+
+// static network utilities
+func NetworkInit() -> void {
+    // C binding: nuwan_network_init()
+    // Must be called before using network features
+}
+
+func NetworkCleanup() -> void {
+    // C binding: nuwan_network_cleanup()
+    // Should be called when done with network
+}

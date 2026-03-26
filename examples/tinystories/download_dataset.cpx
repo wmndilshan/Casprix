@@ -1,0 +1,31 @@
+// TinyStories Dataset - Simple Text Generator
+// Creates a small sample dataset for testing
+
+func main() -> void {
+    print("=== Creating TinyStories Sample ===")
+    print("")
+
+    // For now, create a simple sample dataset
+    // In production, this would download from HuggingFace
+
+    print("Generating sample stories...")
+
+    // Sample stories (simplified for testing)
+    let story1: string = "Once upon a time, there was a little girl named Lily. She loved to play in the park. One day, she found a beautiful flower. Lily was very happy and showed the flower to her mom."
+
+    let story2: string = "Tom had a red ball. He played with the ball every day. One day, the ball rolled away. Tom ran after it and found it near a big tree. He was glad to have his ball back."
+
+    let story3: string = "There was a cat and a dog. They were best friends. They played together in the garden. The cat liked to climb trees and the dog liked to run. They had fun every day."
+
+    print("Created 3 sample stories")
+    print("")
+
+    // In a real implementation, would save to file:
+    // File.write("data/tinystories_sample.txt", story1 + "\n\n" + story2 + "\n\n" + story3)
+
+    print("✓ Sample generation complete!")
+    print("Note: For full training, download TinyStories manually from:")
+    print("https://huggingface.co/datasets/roneneldan/TinyStories")
+}
+
+main()

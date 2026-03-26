@@ -1,0 +1,78 @@
+// Train BPE Tokenizer on TinyStories
+// Creates vocabulary for language model training
+
+class TokenizerTrainer {
+    field input_file: string
+    field output_file: string
+    field vocab_size: int
+
+    func new() -> void {
+        this.input_file = "data/tinystories_raw.txt"
+        this.output_file = "data/tokenizer.bin"
+        this.vocab_size = 8192  // 8K vocabulary
+    }
+
+    // Load and sample text for training
+    func loadTrainingText() -> string {
+        print("Loading text from: " + this.input_file)
+
+        // Read file
+        let text: string = File.readAll(this.input_file)
+
+        print("✓ Loaded " + text.length() + " characters")
+
+        // For faster training, sample first 10M characters
+        if text.length() > 10000000 {
+            text = text.substring(0, 10000000)
+            print("  (sampling first 10M characters for faster training)")
+        }
+
+        return text
+    }
+
+    // Train tokenizer
+    func train() -> void {
+        print("=== BPE Tokenizer Training ===")
+        print("Vocabulary size: " + this.vocab_size)
+        print("")
+
+        // Load training text
+        let text: string = this.loadTrainingText()
+
+        // Train tokenizer
+        print("Training BPE tokenizer...")
+        let tokenizer: Tokenizer = new Tokenizer(this.vocab_size)
+        tokenizer.train(text, 2)  // min_freq = 2
+
+        print("✓ Training complete!")
+
+        // Test encoding/decoding
+        print("")
+        print("Testing tokenizer:")
+        let test_text: string = "Once upon a time, there was a little girl."
+        print("Input: " + test_text)
+
+        let tokens: array<int> = tokenizer.encode(test_text)
+        print("Tokens: " + tokens.size() + " tokens")
+
+        let decoded: string = tokenizer.decode(tokens)
+        print("Decoded: " + decoded)
+
+        // Save tokenizer
+        print("")
+        print("Saving tokenizer to: " + this.output_file)
+        tokenizer.save(this.output_file)
+
+        print("✓ Tokenizer saved!")
+
+        // Cleanup
+        tokenizer.destroy()
+    }
+
+    static func main() -> void {
+        let trainer: TokenizerTrainer = new TokenizerTrainer()
+        trainer.train()
+    }
+}
+
+TokenizerTrainer.main()

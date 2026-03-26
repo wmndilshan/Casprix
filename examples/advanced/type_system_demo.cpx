@@ -1,0 +1,231 @@
+// ============================================================================
+// Casperix Type System Demonstration
+// Comprehensive showcase of all data types and features
+// ============================================================================
+
+// ============================================================================
+// 1. Primitive Numeric Types
+// ============================================================================
+
+// Signed Integers: i8, i16, i32, i64, i128
+let byte_val: i8 = 127
+let short_val: i16 = 32000
+let int_val: i32 = 2147483647
+let long_val: i64 = 9223372036854775807
+let big_val: i128 = 170141183460469231731687303715884105727
+
+// Unsigned Integers: u8, u16, u32, u64, u128
+let ubyte: u8 = 255
+let ushort: u16 = 65535
+let uint: u32 = 4294967295
+let ulong: u64 = 18446744073709551615
+let ubig: u128 = 340282366920938463463374607431768211455
+
+// Floating Point: f16, f32, f64, bf16
+let half: f16 = 3.14
+let single: f32 = 3.14159265
+let double: f64 = 3.141592653589793
+let brain: bf16 = 1.0
+
+// Legacy aliases: 'int' = i32, 'float' = f64
+let legacy_int: int = 42
+let legacy_float: float = 2.71828
+
+print("=== Primitive Numeric Types ===")
+print(int_val)
+print(double)
+print(legacy_int)
+
+// ============================================================================
+// 2. Boolean & Character Types
+// ============================================================================
+
+let flag: bool = true
+let active: bool = false
+let letter: char = 65
+
+print("=== Boolean & Character ===")
+print(flag)
+print(letter)
+
+// ============================================================================
+// 3. String Types
+// ============================================================================
+
+// Immutable string
+let name: string = "Casperix"
+let greeting: string = "Hello, World!"
+
+// Mutable string buffer
+let buf: strbuf = "mutable buffer"
+
+print("=== Strings ===")
+print(name)
+print(greeting)
+
+// ============================================================================
+// 4. Type Inference
+// ============================================================================
+
+// Using := for type inference
+x := 10           // i32 inferred
+y := 3.14          // f64 inferred
+msg := "inferred"  // string inferred
+ok := true         // bool inferred
+
+// Using let without explicit type
+let auto_int = 42
+let auto_float = 2.718
+let auto_str = "auto"
+
+print("=== Type Inference ===")
+print(x)
+print(y)
+print(msg)
+
+// ============================================================================
+// 5. Struct Types (Value Types)
+// ============================================================================
+
+struct Point {
+    x: f32
+    y: f32
+}
+
+struct Color {
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+}
+
+struct User {
+    id: i32
+    name: string
+    active: bool
+}
+
+print("=== Struct Definitions ===")
+print("Structs defined: Point, Color, User")
+
+// ============================================================================
+// 6. Enum Types (Tagged Unions / ADTs)
+// ============================================================================
+
+enum Direction {
+    North
+    South
+    East
+    West
+}
+
+enum Result {
+    Ok(i32)
+    Err(string)
+}
+
+enum Option {
+    Some(i32)
+    None
+}
+
+enum Shape {
+    Circle(f64)
+    Rectangle(f64, f64)
+    Triangle(f64, f64, f64)
+}
+
+print("=== Enum Definitions ===")
+print("Enums defined: Direction, Result, Option, Shape")
+
+// ============================================================================
+// 7. Union Types (Unsafe, Untagged)
+// ============================================================================
+
+union Data {
+    i: i32
+    f: f32
+    b: bool
+}
+
+union Register {
+    val64: u64
+    val32: u32
+    val16: u16
+    val8: u8
+}
+
+print("=== Union Definitions ===")
+print("Unions defined: Data, Register")
+
+// ============================================================================
+// 8. Function Types with New Numeric Types
+// ============================================================================
+
+func add_i32(a: i32, b: i32) -> i32 {
+    return a + b
+}
+
+func add_f64(a: f64, b: f64) -> f64 {
+    return a + b
+}
+
+func add_u8(a: u8, b: u8) -> u8 {
+    return a + b
+}
+
+func sigmoid(x: f32) -> f32 {
+    return 1.0
+}
+
+// Mixed-width arithmetic (auto-promotion)
+func mixed_arithmetic(a: i32, b: f64) -> f64 {
+    return a + b
+}
+
+print("=== Function Types ===")
+result := add_i32(10, 20)
+print(result)
+
+fresult := add_f64(1.5, 2.5)
+print(fresult)
+
+// ============================================================================
+// 9. Factorial with i64 for large values
+// ============================================================================
+
+func factorial(n: i64) -> i64 {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+print("=== Factorial (i64) ===")
+for (i: i64 = 1; i <= 20; i = i + 1) {
+    f := factorial(i)
+    print(f)
+}
+
+// ============================================================================
+// 10. AI/ML focused: bf16 + tensor syntax demos
+// ============================================================================
+
+// These demonstrate the syntax that would be used for AI workloads:
+//
+// Tensor declarations (future codegen):
+//   let weights: tensor<f32>[784, 128] = tensor.zeros(784, 128)
+//   let input: tensor<f16>[1, 784] = tensor.rand(1, 784)
+//   let output = weights.matmul(input)
+//
+// SIMD vector operations (future codegen):
+//   let v1: vec4<f32> = [1.0, 2.0, 3.0, 4.0]
+//   let v2: vec4<f32> = [5.0, 6.0, 7.0, 8.0]
+//   let v3 = v1 + v2    // element-wise SIMD add
+//   let dot = v1.dot(v2) // dot product
+//
+// Matrix operations:
+//   let m: mat4<f32> = mat4.identity()
+//   let rotated = m.rotate(0.5, 0.0, 1.0, 0.0)
+
+print("=== Type System Demo Complete ===")

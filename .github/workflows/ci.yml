@@ -1,0 +1,252 @@
+# =============================================================
+# ci.yml — Casprix Continuous Integration
+#
+# Jobs
+# ─────────────────────────────────────────────────────────────
+#   lint          Static analysis (cppcheck) on push/PR
+#   build-linux   CMake Release build on ubuntu-latest
+#   build-windows CMake Release build on windows-latest (MSYS2/MinGW)
+#   test-linux    CTest suite after linux build
+#   test-windows  CTest suite after windows build
+#
+# Caching
+#   CMake configure output is cached per-OS by CMakeLists.txt hash
+#   MSYS2 package cache is preserved between runs
+# =============================================================
+
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CMAKE_BUILD_TYPE: Release
+  BUILD_DIR: build
+
+# ─────────────────────────────────────────────────────────────
+# Lint (fast gate — runs on both push and PR)
+# ─────────────────────────────────────────────────────────────
+jobs:
+  lint:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --error-exitcode=1 \
+            --enable=warning,performance,portability \
+            --suppress=missingIncludeSystem \
+            --suppress=unusedFunction \
+            -I include/ \
+            -I runtime/ \
+            src/
+
+# ─────────────────────────────────────────────────────────────
+# Linux build
+# ─────────────────────────────────────────────────────────────
+  build-linux:
+    name: Build (Linux)
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build build-essential nasm \
+            zlib1g-dev libssl-dev
+
+      - name: Cache CMake configure
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BUILD_DIR }}
+          key: cmake-linux-${{ hashFiles('CMakeLists.txt', 'runtime/CMakeLists.txt') }}
+          restore-keys: cmake-linux-
+
+      - name: Configure
+        run: |
+          cmake -B $BUILD_DIR \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
+            -DBUILD_TESTS=ON \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Build
+        run: cmake --build $BUILD_DIR --parallel
+
+      - name: Upload compiler binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: casprix-linux
+          path: ${{ env.BUILD_DIR }}/casprix
+          if-no-files-found: warn
+          retention-days: 7
+
+# ─────────────────────────────────────────────────────────────
+# Windows build
+# ─────────────────────────────────────────────────────────────
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          cache: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-zlib
+
+      - name: Cache CMake configure
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BUILD_DIR }}
+          key: cmake-windows-${{ hashFiles('CMakeLists.txt', 'runtime/CMakeLists.txt') }}
+          restore-keys: cmake-windows-
+
+      - name: Configure
+        shell: msys2 {0}
+        run: |
+          cmake -B $BUILD_DIR \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
+            -DBUILD_TESTS=ON
+
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build $BUILD_DIR --parallel
+
+      - name: Upload compiler binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: casprix-windows
+          path: ${{ env.BUILD_DIR }}/casprix.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+# ─────────────────────────────────────────────────────────────
+# Tests — depend on successful builds
+# ─────────────────────────────────────────────────────────────
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    needs: build-linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build build-essential nasm zlib1g-dev
+
+      - name: Restore CMake cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BUILD_DIR }}
+          key: cmake-linux-${{ hashFiles('CMakeLists.txt', 'runtime/CMakeLists.txt') }}
+
+      - name: Rebuild (if cache miss)
+        run: |
+          cmake -B $BUILD_DIR -G Ninja \
+            -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE -DBUILD_TESTS=ON
+          cmake --build $BUILD_DIR --parallel
+
+      - name: Run CTest
+        run: |
+          ctest --test-dir $BUILD_DIR \
+            --output-on-failure \
+            --parallel 4 \
+            --timeout 120
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-linux
+          path: ${{ env.BUILD_DIR }}/Testing/
+          retention-days: 7
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    needs: build-windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          cache: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-zlib
+
+      - name: Restore CMake cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BUILD_DIR }}
+          key: cmake-windows-${{ hashFiles('CMakeLists.txt', 'runtime/CMakeLists.txt') }}
+
+      - name: Rebuild (if cache miss)
+        shell: msys2 {0}
+        run: |
+          cmake -B $BUILD_DIR -G Ninja \
+            -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE -DBUILD_TESTS=ON
+          cmake --build $BUILD_DIR --parallel
+
+      - name: Run CTest
+        shell: msys2 {0}
+        run: |
+          ctest --test-dir $BUILD_DIR \
+            --output-on-failure \
+            --parallel 4 \
+            --timeout 120
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows
+          path: ${{ env.BUILD_DIR }}/Testing/
+          retention-days: 7

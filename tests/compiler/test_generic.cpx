@@ -1,0 +1,5 @@
+extern func test() -> Array<int>
+
+func main() -> int {
+    return 0
+}

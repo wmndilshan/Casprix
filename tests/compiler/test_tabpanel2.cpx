@@ -1,0 +1,8 @@
+import "lib/skia/ui"
+
+let app = new App("Simple Test", 800, 600)
+let col1 = new Column(8.0)
+let root = new Column(0.0)
+root.add(col1.handle)
+app.set_root(root.handle)
+app.run()

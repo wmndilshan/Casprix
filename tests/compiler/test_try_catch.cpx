@@ -1,0 +1,37 @@
+// test_try_catch.cpx — Tests try/catch/finally and throw
+// Run: casprix tests/compiler/test_try_catch.cpx
+
+class RuntimeError {
+    public let message: String = "";
+}
+
+func risky(x: Int) -> Int {
+    if x == 0 {
+        throw new RuntimeError()
+    }
+    return 100 / x
+}
+
+func main() -> Int {
+    // Basic try/catch
+    try {
+        result: Int = risky(5)
+        print(result)   // 20
+    } catch (e: RuntimeError) {
+        print("Caught RuntimeError")
+    } finally {
+        print("finally block always runs")
+    }
+
+    // Catch in action
+    try {
+        result: Int = risky(0)  // throws
+        print(result)
+    } catch (e: RuntimeError) {
+        print("Caught division-by-zero error")
+    } finally {
+        print("cleanup done")
+    }
+
+    return 0
+}

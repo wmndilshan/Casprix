@@ -1,0 +1,33 @@
+// test_bitwise.cpx — Tests all bitwise operators
+// Run: casprix tests/compiler/test_bitwise.cpx
+
+func main() -> Int {
+    a: Int = 0b1010   // 10
+    b: Int = 0b1100   // 12
+
+    // Bitwise AND
+    r_and: Int = a & b     // 0b1000 = 8
+    print(r_and)
+
+    // Bitwise OR (via | operator)
+    r_or: Int = a | b      // 0b1110 = 14
+    print(r_or)
+
+    // Bitwise XOR
+    r_xor: Int = a ^ b     // 0b0110 = 6
+    print(r_xor)
+
+    // Bitwise NOT
+    r_not: Int = ~a        // bitwise complement of 10
+    print(r_not)
+
+    // Left shift
+    r_shl: Int = a << 2    // 10 * 4 = 40
+    print(r_shl)
+
+    // Right shift
+    r_shr: Int = a >> 1    // 10 / 2 = 5
+    print(r_shr)
+
+    return 0
+}

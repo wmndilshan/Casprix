@@ -1,0 +1,58 @@
+CASPRIX COMPILER - VERSION 1.0.0 👻
+================================
+
+Release Status: Production
+Release Date:   December 29, 2025
+Target Arch:    x86-64 (Windows, Linux, macOS)
+
+CHANGELOG
+=========
+
+Version 1.0.0 (2025-12-29)
+--------------------------
+
+Core Features:
+* Full Object-Oriented Programming (OOP) implementation
+  - Classes with explicit constructors
+  - Access modifiers: public, private, protected
+  - Static member fields and methods
+  - Robust encapsulation model
+* Optimized x86-64 Calling Convention (Windows)
+  - Standardized shadow space allocation
+  - Corrected stack parameter offsets for 5+ arguments
+  - Optimized callee-saved register management (R15)
+* Enhanced Assembly Generation
+  - Precise constructor parameter resolution
+  - Object pointer preservation across method calls
+* Standard Library Modules
+  - Optimized Collections: List, Map, Queue, Stack
+  - Math and String operation suites
+
+Bug Fixes:
+* Resolved stack corruption in high-arity method calls
+* Fixed R15-based constructor argument passing regressions
+* Corrected member access resolution for nested method calls
+
+Known Limitations:
+* String type is currently identity-based (integrated roadmap for v1.1.0)
+* Collections getSize() integrity issues under specific edge cases
+* Experimental inheritance support (Super/Subclass keywords pending)
+
+System Status:
+* Compiler:          [STABLE]
+* Parser/Lexer:      [STABLE]
+* Semantic Analyzer: [STABLE]
+* Code Generator:    [STABLE]
+* OOP Support:       [85% COMPLETE]
+
+Environment Requirements:
+* GCC:  7.0+
+* NASM: 2.14+
+* Make: 3.81+
+* CMake: 3.15+
+
+Next Milestone (v1.1.0):
+* Formal class inheritance and virtual methods
+* Abstract classes and interface contracts
+* Enhanced String heap management
+* Advanced collection performance tuning

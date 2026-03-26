@@ -1,0 +1,220 @@
+﻿// Simplified Collections - Working version without recursive types
+// This version compiles successfully
+
+// ==========================================
+// LIST
+// ==========================================
+
+class List {
+    data: int;        // Placeholder - would be array
+    size: int;
+    capacity: int;
+
+    func new() -> List {
+        this.size = 0;
+        this.capacity = 100;
+        return this;
+    }
+
+    func add(item: int) -> void {
+        // Would add to internal array
+        this.size = this.size;  // + 1 (placeholder)
+    }
+
+    func get(index: int) -> int {
+        // Would retrieve from array
+        return 0;  // Placeholder
+    }
+
+    func getSize() -> int {
+        return this.size;
+    }
+
+    func isEmpty() -> bool {
+        if (this.size == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    func clear() -> void {
+        this.size = 0;
+    }
+}
+
+// ==========================================
+// MAP ENTRY
+// ==========================================
+
+class MapEntry {
+    key: int;
+    value: int;
+    hash: int;
+
+    func new(k: int, v: int) -> MapEntry {
+        this.key = k;
+        this.value = v;
+        this.hash = k;  // Simple hash
+        return this;
+    }
+}
+
+// ==========================================
+// MAP
+// ==========================================
+
+class Map {
+    size: int;
+    capacity: int;
+
+    func new() -> Map {
+        this.size = 0;
+        this.capacity = 100;
+        return this;
+    }
+
+    func put(key: int, value: int) -> void {
+        this.size = this.size;  // + 1 (placeholder)
+    }
+
+    func get(key: int) -> int {
+        return 0;  // Placeholder
+    }
+
+    func containsKey(key: int) -> bool {
+        return false;  // Placeholder
+    }
+
+    func getSize() -> int {
+        return this.size;
+    }
+}
+
+// ==========================================
+// QUEUE
+// ==========================================
+
+class Queue {
+    data: int;
+    front: int;
+    rear: int;
+    size: int;
+    capacity: int;
+
+    func new() -> Queue {
+        this.front = 0;
+        this.rear = 0;
+        this.size = 0;
+        this.capacity = 100;
+        return this;
+    }
+
+    func enqueue(item: int) -> void {
+        this.size = this.size;  // + 1
+    }
+
+    func dequeue() -> int {
+        if (this.size > 0) {
+            this.size = this.size;  // - 1
+        }
+        return 0;  // Placeholder
+    }
+
+    func isEmpty() -> bool {
+        if (this.size == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    func getSize() -> int {
+        return this.size;
+    }
+}
+
+// ==========================================
+// STACK
+// ==========================================
+
+class Stack {
+    data: int;
+    top: int;
+    capacity: int;
+
+    func new() -> Stack {
+        this.top = 0;
+        this.capacity = 100;
+        return this;
+    }
+
+    func push(item: int) -> void {
+        this.top = this.top;  // + 1
+    }
+
+    func pop() -> int {
+        if (this.top > 0) {
+            this.top = this.top;  // - 1
+        }
+        return 0;  // Placeholder
+    }
+
+    func peek() -> int {
+        return 0;  // Placeholder
+    }
+
+    func isEmpty() -> bool {
+        if (this.top == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    func getSize() -> int {
+        return this.top;
+    }
+}
+
+// ==========================================
+// PRIORITY QUEUE
+// ==========================================
+
+class PriorityQueue {
+    size: int;
+    capacity: int;
+
+    func new() -> PriorityQueue {
+        this.size = 0;
+        this.capacity = 100;
+        return this;
+    }
+
+    func add(priority: int, item: int) -> void {
+        this.size = this.size;  // + 1
+    }
+
+    func poll() -> int {
+        if (this.size > 0) {
+            this.size = this.size;  // - 1
+        }
+        return 0;  // Placeholder
+    }
+
+    func peek() -> int {
+        return 0;  // Placeholder
+    }
+
+    func isEmpty() -> bool {
+        if (this.size == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    func getSize() -> int {
+        return this.size;
+    }
+}

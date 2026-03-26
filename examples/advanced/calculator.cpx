@@ -1,0 +1,56 @@
+﻿// Advanced Example: Calculator using multiple libraries
+import "lib/core/core.cpx";
+import "lib/math/math.cpx";
+import "lib/io/io.cpx";
+
+// Simple calculator functions
+func Add(a: int, b: int) -> int {
+    return a + b;
+}
+
+func Subtract(a: int, b: int) -> int {
+    return a - b;
+}
+
+func Multiply(a: int, b: int) -> int {
+    return a * b;
+}
+
+func Divide(a: int, b: int) -> int {
+    if b == 0 {
+        LogError("Division by zero!");
+        return 0;
+    }
+    return a / b;
+}
+
+// Main calculator
+print("=== Calculator ===");
+x: int = 15;
+y: int = 5;
+
+print("x =");
+print(x);
+print("y =");
+print(y);
+
+print("x + y =");
+print(Add(x, y));
+
+print("x - y =");
+print(Subtract(x, y));
+
+print("x * y =");
+print(Multiply(x, y));
+
+print("x / y =");
+print(Divide(x, y));
+
+print("x^y =");
+print(Power(x, y));
+
+print("GCD(x, y) =");
+print(GCD(x, y));
+
+
+

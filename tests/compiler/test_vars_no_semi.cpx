@@ -1,0 +1,4 @@
+﻿x: int = 5
+y: int = 10
+sum: int = x + y
+print(sum)

@@ -1,0 +1,52 @@
+# =============================================================
+# CODEOWNERS — Casprix
+#
+# GitHub automatically requests reviews from these owners when
+# a pull request touches the listed paths.
+#
+# Format: <pattern>  <@owner or @team>
+# Patterns follow .gitignore rules; last matching rule wins.
+# =============================================================
+
+# Global fallback — all files not matched below
+*                           @casprix-lang/core
+
+# Compiler frontend
+src/compiler/frontend/      @casprix-lang/compiler
+src/compiler/sema/          @casprix-lang/compiler
+src/compiler/ir/            @casprix-lang/compiler
+
+# Code generation & optimisation
+src/compiler/codegen/       @casprix-lang/codegen
+src/compiler/opt/           @casprix-lang/codegen
+src/compiler/lowering/      @casprix-lang/codegen
+
+# Runtime — memory & object model
+runtime/memory/             @casprix-lang/runtime
+runtime/object.c            @casprix-lang/runtime
+runtime/object.h            @casprix-lang/runtime
+
+# Runtime — AI / ML stack
+runtime/ai/                 @casprix-lang/ai
+
+# Runtime — GUI / Skia
+runtime/skia/               @casprix-lang/gui
+lib/skia/                   @casprix-lang/gui
+examples/gui/               @casprix-lang/gui
+
+# Standard library
+lib/                        @casprix-lang/stdlib
+include/                    @casprix-lang/stdlib
+
+# Package manager
+pkg/                        @casprix-lang/pkgmgr
+
+# CI & build system — requires extra scrutiny
+.github/workflows/          @casprix-lang/infra
+CMakeLists.txt              @casprix-lang/infra
+Makefile                    @casprix-lang/infra
+
+# Documentation
+docs/                       @casprix-lang/docs
+*.md                        @casprix-lang/docs
+CHANGELOG.md                @casprix-lang/core

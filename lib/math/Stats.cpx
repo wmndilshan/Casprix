@@ -1,0 +1,85 @@
+// Statistics Library for Casprix
+// Wraps high-performance C statistics runtime
+
+// External functions
+extern func nuwan_stats_mean(handle: int) -> float;
+extern func nuwan_stats_median(handle: int) -> float;
+extern func nuwan_stats_variance(handle: int) -> float;
+extern func nuwan_stats_stddev(handle: int) -> float;
+extern func nuwan_stats_min(handle: int) -> float;
+extern func nuwan_stats_max(handle: int) -> float;
+extern func nuwan_stats_sum(handle: int) -> float;
+extern func nuwan_stats_normal_pdf(x: float, mean: float, stddev: float) -> float;
+extern func nuwan_stats_normal_cdf(x: float, mean: float, stddev: float) -> float;
+extern func nuwan_stats_seed(seed: int) -> void;
+extern func nuwan_stats_random_uniform() -> float;
+extern func nuwan_stats_random_normal(mean: float, stddev: float) -> float;
+extern func nuwan_stats_random_int(min: int, max: int) -> int;
+extern func nuwan_stats_correlation(x: int, y: int) -> float;
+extern func nuwan_stats_covariance(x: int, y: int) -> float;
+
+class Stats {
+    // Descriptive statistics - work with Vector objects
+    static func mean(data: Vector) -> float {
+        return nuwan_stats_mean(data.handle);
+    }
+
+    static func median(data: Vector) -> float {
+        return nuwan_stats_median(data.handle);
+    }
+
+    static func variance(data: Vector) -> float {
+        return nuwan_stats_variance(data.handle);
+    }
+
+    static func stdDev(data: Vector) -> float {
+        return nuwan_stats_stddev(data.handle);
+    }
+
+    static func min(data: Vector) -> float {
+        return nuwan_stats_min(data.handle);
+    }
+
+    static func max(data: Vector) -> float {
+        return nuwan_stats_max(data.handle);
+    }
+
+    static func sum(data: Vector) -> float {
+        return nuwan_stats_sum(data.handle);
+    }
+
+    // Probability distributions
+    static func normalPDF(x: float, mean: float, stddev: float) -> float {
+        return nuwan_stats_normal_pdf(x, mean, stddev);
+    }
+
+    static func normalCDF(x: float, mean: float, stddev: float) -> float {
+        return nuwan_stats_normal_cdf(x, mean, stddev);
+    }
+
+    // Random number generation
+    static func setSeed(seed: int) -> void {
+        nuwan_stats_seed(seed);
+    }
+
+    static func randomUniform() -> float {
+        return nuwan_stats_random_uniform();
+    }
+
+    static func randomNormal(mean: float, stddev: float) -> float {
+        return nuwan_stats_random_normal(mean, stddev);
+    }
+
+    static func randomInt(min: int, max: int) -> int {
+        return nuwan_stats_random_int(min, max);
+    }
+
+    // Correlation and covariance
+    static func correlation(x: Vector, y: Vector) -> float {
+        return nuwan_stats_correlation(x.handle, y.handle);
+    }
+
+    static func covariance(x: Vector, y: Vector) -> float {
+        return nuwan_stats_covariance(x.handle, y.handle);
+    }
+}

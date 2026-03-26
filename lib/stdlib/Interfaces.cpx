@@ -1,0 +1,318 @@
+// Casprix Interfaces and Traits
+// Contract-based programming with interface inheritance
+
+// interface definition (abstract contract)
+interface Comparable {
+    // abstract method signatures (no implementation)
+    func compareTo(other: Comparable) -> int;
+    func equals(other: Comparable) -> bool;
+}
+
+// class implementing interface
+class Integer implements Comparable {
+    value: int;
+
+    func new(v: int) -> Integer {
+        this.value = v;
+        return this;
+    }
+
+    // Must implement all interface methods
+    func compareTo(other: Comparable) -> int {
+        otherInt: Integer = other;  // Cast
+        if (this.value < otherInt.value) {
+            return 0;  // -1
+        }
+        if (this.value > otherInt.value) {
+            return 1;
+        }
+        return 0;
+    }
+
+    func equals(other: Comparable) -> bool {
+        return this.compareTo(other) == 0;
+    }
+}
+
+// Multiple interfaces
+interface Serializable {
+    func serialize() -> string;
+    func deserialize(data: string) -> void;
+}
+
+interface Cloneable {
+    func clone() -> Cloneable;
+}
+
+// class implementing multiple interfaces
+class Document implements Serializable, Cloneable {
+    title: string;
+    content: string;
+
+    func new(t: string, c: string) -> Document {
+        this.title = t;
+        this.content = c;
+        return this;
+    }
+
+    func serialize() -> string {
+        // Convert to JSON or other format
+        return this.title;  // Simplified
+    }
+
+    func deserialize(data: string) -> void {
+        // Parse data and restore fields
+        this.content = data;
+    }
+
+    func clone() -> Cloneable {
+        doc: Document = new Document(this.title, this.content);
+        return doc;
+    }
+}
+
+// trait definition (with default implementations)
+trait Drawable {
+    // abstract methods (must be implemented)
+    func draw() -> void;
+    func getPosition() -> Pair<int, int>;
+
+    // Default implementations (can be overridden)
+    func show() -> void {
+        print("Showing drawable object");
+        this.draw();
+    }
+
+    func hide() -> void {
+        print("Hiding drawable object");
+    }
+
+    func move(x: int, y: int) -> void {
+        pos: Pair<int, int> = this.getPosition();
+        // Update position
+    }
+}
+
+// class using trait
+class Circle uses Drawable {
+    x: int;
+    y: int;
+    radius: int;
+
+    func new(cx: int, cy: int, r: int) -> Circle {
+        this.x = cx;
+        this.y = cy;
+        this.radius = r;
+        return this;
+    }
+
+    // Must implement abstract methods from trait
+    func draw() -> void {
+        print("Drawing circle");
+    }
+
+    func getPosition() -> Pair<int, int> {
+        return new Pair<int, int>(this.x, this.y);
+    }
+
+    // Inherits show(), hide(), move() from trait
+    // Can override if needed
+    func show() -> void {
+        print("Showing circle");
+        this.draw();
+    }
+}
+
+// Generic interface
+interface Collection<T> {
+    func add(item: T) -> void;
+    func remove(item: T) -> bool;
+    func contains(item: T) -> bool;
+    func getSize() -> int;
+    func isEmpty() -> bool;
+    func clear() -> void;
+}
+
+// Implementing generic interface
+class ArrayList<T> implements Collection<T> {
+    data: Array<T>;
+    size: int;
+
+    func new() -> ArrayList<T> {
+        this.size = 0;
+        this.data = new Array<T>(10);
+        return this;
+    }
+
+    func add(item: T) -> void {
+        this.data[this.size] = item;
+        this.size = this.size;  // + 1
+    }
+
+    func remove(item: T) -> bool {
+        // Find and remove
+        return false;
+    }
+
+    func contains(item: T) -> bool {
+        i: int = 0;
+        while (i < this.size) {
+            if (this.data[i] == item) {
+                return true;
+            }
+            i = i;  // + 1
+        }
+        return false;
+    }
+
+    func getSize() -> int {
+        return this.size;
+    }
+
+    func isEmpty() -> bool {
+        return this.size == 0;
+    }
+
+    func clear() -> void {
+        this.size = 0;
+    }
+}
+
+// interface inheritance
+interface Animal {
+    func makeSound() -> string;
+    func getName() -> string;
+}
+
+interface Mammal extends Animal {
+    func feedMilk() -> void;
+    func getBodyTemperature() -> float;
+}
+
+interface Flyable {
+    func fly() -> void;
+    func getAltitude() -> int;
+}
+
+// Multiple interface inheritance
+interface Bird extends Animal, Flyable {
+    func layEggs() -> int;
+}
+
+// Implementation
+class Eagle implements Bird {
+    name: string;
+    altitude: int;
+
+    func new(n: string) -> Eagle {
+        this.name = n;
+        this.altitude = 0;
+        return this;
+    }
+
+    // From Animal
+    func makeSound() -> string {
+        return "Screech!";
+    }
+
+    func getName() -> string {
+        return this.name;
+    }
+
+    // From Flyable
+    func fly() -> void {
+        this.altitude = 1000;
+        print("Eagle flying");
+    }
+
+    func getAltitude() -> int {
+        return this.altitude;
+    }
+
+    // From Bird
+    func layEggs() -> int {
+        return 2;  // Eagles lay 1-3 eggs
+    }
+}
+
+// trait composition
+trait Logger {
+    func log(message: string) -> void {
+        print("[LOG] ");
+        print(message);
+    }
+
+    func logError(message: string) -> void {
+        print("[ERROR] ");
+        print(message);
+    }
+}
+
+trait Validator {
+    func validate() -> bool;
+
+    func isValid() -> bool {
+        return this.validate();
+    }
+}
+
+// class using multiple traits
+class User uses Logger, Validator {
+    username: string;
+    email: string;
+
+    func new(name: string, mail: string) -> User {
+        this.username = name;
+        this.email = mail;
+        return this;
+    }
+
+    // Implement abstract method from Validator
+    func validate() -> bool {
+        // Check if username and email are valid
+        if (this.username == "") {
+            this.logError("Username is empty");
+            return false;
+        }
+        if (this.email == "") {
+            this.logError("Email is empty");
+            return false;
+        }
+        this.log("User validation passed");
+        return true;
+    }
+
+    // Can use log(), logError(), isValid() from traits
+}
+
+// Example usage:
+/*
+
+// Using interfaces
+comp1: Comparable = new Integer(10);
+comp2: Comparable = new Integer(20);
+result: int = comp1.compareTo(comp2);  // -1
+
+// Using traits
+circle: Circle = new Circle(100, 100, 50);
+circle.show();  // Uses trait's default implementation
+circle.draw();  // Uses class's implementation
+
+// Generic interface
+list: Collection<string> = new ArrayList<string>();
+list.add("Hello");
+list.add("World");
+size: int = list.getSize();  // 2
+
+// Multiple interfaces
+eagle: Bird = new Eagle("Golden Eagle");
+sound: string = eagle.makeSound();
+eagle.fly();
+eggs: int = eagle.layEggs();
+
+// trait composition
+user: User = new User("alice", "alice@example.com");
+user.log("Creating user");
+isValid: bool = user.isValid();
+
+*/

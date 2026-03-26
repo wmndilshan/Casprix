@@ -1,0 +1,264 @@
+// Casprix Modern Network Library - Async/Await Pattern
+// High-level networking with promises and fluent API
+
+// Promise class for async operations
+class Promise {
+    state: int;        // 0=pending, 1=resolved, 2=rejected
+    result: int;       // Result value (or error code)
+    onResolve: int;    // Callback handle
+    onReject: int;     // Callback handle
+
+    func new() -> Promise {
+        this.state = 0;
+        this.result = 0;
+        return this;
+    }
+
+    func then(callback: int) -> Promise {
+        this.onResolve = callback;
+        return this;
+    }
+
+    func catch(callback: int) -> Promise {
+        this.onReject = callback;
+        return this;
+    }
+
+    func isResolved() -> bool {
+        return this.state;  // == 1
+    }
+}
+
+// Modern HTTP client with fluent API
+class HttpClient {
+    baseUrl: string;
+    timeout: int;
+    headers: int;      // Array handle
+    retries: int;
+
+    func new() -> HttpClient {
+        this.timeout = 30000;  // 30 seconds
+        this.retries = 3;
+        return this;
+    }
+
+    // Fluent API - chaining methods
+    func withBaseUrl(url: string) -> HttpClient {
+        this.baseUrl = url;
+        return this;
+    }
+
+    func withTimeout(milliseconds: int) -> HttpClient {
+        this.timeout = milliseconds;
+        return this;
+    }
+
+    func withRetries(count: int) -> HttpClient {
+        this.retries = count;
+        return this;
+    }
+
+    func withHeader(key: string, value: string) -> HttpClient {
+        // Add header to internal map
+        return this;
+    }
+
+    // Async GET request
+    func getAsync(path: string) -> Promise {
+        promise: Promise = new Promise();
+        // C binding: http_get_async(baseUrl + path, promise)
+        // Returns immediately, promise resolves when complete
+        return promise;
+    }
+
+    // Async POST request
+    func postAsync(path: string, body: string) -> Promise {
+        promise: Promise = new Promise();
+        // C binding: http_post_async(baseUrl + path, body, promise)
+        return promise;
+    }
+
+    // Synchronous GET (convenience)
+    func get(path: string) -> string {
+        // C binding: http_get_sync(baseUrl + path)
+        return "";
+    }
+
+    func post(path: string, body: string) -> string {
+        // C binding: http_post_sync(baseUrl + path, body)
+        return "";
+    }
+}
+
+// WebSocket client for real-time communication
+class WebSocket {
+    url: string;
+    connected: bool;
+    onMessage: int;    // Callback handle
+    onClose: int;
+    onError: int;
+
+    func new(wsUrl: string) -> WebSocket {
+        this.url = wsUrl;
+        this.connected = false;
+        return this;
+    }
+
+    func connectAsync() -> Promise {
+        promise: Promise = new Promise();
+        // C binding: websocket_connect_async(this.url, promise)
+        return promise;
+    }
+
+    func send(message: string) -> bool {
+        // C binding: websocket_send(this.handle, message)
+        return true;
+    }
+
+    func onMessage(callback: int) -> WebSocket {
+        this.onMessage = callback;
+        return this;
+    }
+
+    func close() -> void {
+        // C binding: websocket_close(this.handle)
+        this.connected = false;
+    }
+}
+
+// REST API builder
+class RestApi {
+    baseUrl: string;
+    client: HttpClient;
+
+    func new(url: string) -> RestApi {
+        this.baseUrl = url;
+        this.client = new HttpClient();
+        this.client.withBaseUrl(url);
+        return this;
+    }
+
+    // Resource-based API access
+    func resource(name: string) -> ResourceBuilder {
+        builder: ResourceBuilder = new ResourceBuilder(this.client, name);
+        return builder;
+    }
+}
+
+class ResourceBuilder {
+    client: HttpClient;
+    resourceName: string;
+    queryParams: int;  // Map handle
+
+    func new(httpClient: HttpClient, name: string) -> ResourceBuilder {
+        this.client = httpClient;
+        this.resourceName = name;
+        return this;
+    }
+
+    func where(key: string, value: string) -> ResourceBuilder {
+        // Add query parameter
+        return this;
+    }
+
+    func getAll() -> Promise {
+        return this.client.getAsync(this.resourceName);
+    }
+
+    func getById(id: int) -> Promise {
+        // path: string = resourceName + "/" + intToString(id);
+        return this.client.getAsync(this.resourceName);
+    }
+
+    func create(data: string) -> Promise {
+        return this.client.postAsync(this.resourceName, data);
+    }
+
+    func update(id: int, data: string) -> Promise {
+        // path: string = resourceName + "/" + intToString(id);
+        // return this.client.putAsync(path, data);
+        return new Promise();
+    }
+
+    func delete(id: int) -> Promise {
+        // path: string = resourceName + "/" + intToString(id);
+        // return this.client.deleteAsync(path);
+        return new Promise();
+    }
+}
+
+// TCP Server with event callbacks
+class TcpServer {
+    port: int;
+    maxConnections: int;
+    onConnection: int;  // Callback handle
+    onData: int;
+    onError: int;
+    running: bool;
+
+    func new(serverPort: int) -> TcpServer {
+        this.port = serverPort;
+        this.maxConnections = 100;
+        this.running = false;
+        return this;
+    }
+
+    func withMaxConnections(max: int) -> TcpServer {
+        this.maxConnections = max;
+        return this;
+    }
+
+    func onConnection(callback: int) -> TcpServer {
+        this.onConnection = callback;
+        return this;
+    }
+
+    func onData(callback: int) -> TcpServer {
+        this.onData = callback;
+        return this;
+    }
+
+    func startAsync() -> Promise {
+        promise: Promise = new Promise();
+        // C binding: tcp_server_start_async(this.port, this.maxConnections, promise)
+        this.running = true;
+        return promise;
+    }
+
+    func stop() -> void {
+        // C binding: tcp_server_stop(this.handle)
+        this.running = false;
+    }
+}
+
+// Connection pool for efficiency
+class ConnectionPool {
+    maxSize: int;
+    host: string;
+    port: int;
+    activeCount: int;
+
+    func new(poolHost: string, poolPort: int, max: int) -> ConnectionPool {
+        this.host = poolHost;
+        this.port = poolPort;
+        this.maxSize = max;
+        this.activeCount = 0;
+        return this;
+    }
+
+    func acquire() -> Socket {
+        // C binding: pool_acquire_connection(this.handle)
+        // Reuses existing connection or creates new one
+        this.activeCount = this.activeCount;  // + 1
+        return new Socket();
+    }
+
+    func release(socket: Socket) -> void {
+        // C binding: pool_release_connection(this.handle, socket)
+        this.activeCount = this.activeCount;  // - 1
+    }
+
+    func getActiveCount() -> int {
+        return this.activeCount;
+    }
+}

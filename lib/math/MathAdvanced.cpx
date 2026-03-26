@@ -1,0 +1,225 @@
+// Advanced Math Library for Casprix
+// Comprehensive mathematical functions with floating-point precision
+
+// External math runtime functions
+extern func nuwan_math_sin(x: float) -> float;
+extern func nuwan_math_cos(x: float) -> float;
+extern func nuwan_math_tan(x: float) -> float;
+extern func nuwan_math_asin(x: float) -> float;
+extern func nuwan_math_acos(x: float) -> float;
+extern func nuwan_math_atan(x: float) -> float;
+extern func nuwan_math_atan2(y: float, x: float) -> float;
+extern func nuwan_math_sinh(x: float) -> float;
+extern func nuwan_math_cosh(x: float) -> float;
+extern func nuwan_math_tanh(x: float) -> float;
+extern func nuwan_math_exp(x: float) -> float;
+extern func nuwan_math_log(x: float) -> float;
+extern func nuwan_math_log10(x: float) -> float;
+extern func nuwan_math_log2(x: float) -> float;
+extern func nuwan_math_pow(base: float, exponent: float) -> float;
+extern func nuwan_math_sqrt(x: float) -> float;
+extern func nuwan_math_cbrt(x: float) -> float;
+extern func nuwan_math_ceil(x: float) -> float;
+extern func nuwan_math_floor(x: float) -> float;
+extern func nuwan_math_round(x: float) -> float;
+extern func nuwan_math_trunc(x: float) -> float;
+extern func nuwan_math_fmod(x: float, y: float) -> float;
+extern func nuwan_math_abs(x: float) -> float;
+extern func nuwan_math_min(a: float, b: float) -> float;
+extern func nuwan_math_max(a: float, b: float) -> float;
+extern func nuwan_math_hypot(x: float, y: float) -> float;
+extern func nuwan_math_factorial(n: int) -> float;
+extern func nuwan_math_gamma(x: float) -> float;
+extern func nuwan_math_erf(x: float) -> float;
+extern func nuwan_math_pi() -> float;
+extern func nuwan_math_e() -> float;
+extern func nuwan_math_tau() -> float;
+extern func nuwan_math_phi() -> float;
+extern func nuwan_math_deg_to_rad(degrees: float) -> float;
+extern func nuwan_math_rad_to_deg(radians: float) -> float;
+extern func nuwan_math_clamp(value: float, min: float, max: float) -> float;
+extern func nuwan_math_lerp(a: float, b: float, t: float) -> float;
+extern func nuwan_math_is_nan(x: float) -> int;
+extern func nuwan_math_is_inf(x: float) -> int;
+extern func nuwan_math_is_finite(x: float) -> int;
+extern func nuwan_math_sign(x: float) -> int;
+
+class MathAdvanced {
+    // Trigonometric functions
+    static func sin(x: float) -> float {
+        return nuwan_math_sin(x);
+    }
+    
+    static func cos(x: float) -> float {
+        return nuwan_math_cos(x);
+    }
+    
+    static func tan(x: float) -> float {
+        return nuwan_math_tan(x);
+    }
+    
+    static func asin(x: float) -> float {
+        return nuwan_math_asin(x);
+    }
+    
+    static func acos(x: float) -> float {
+        return nuwan_math_acos(x);
+    }
+    
+    static func atan(x: float) -> float {
+        return nuwan_math_atan(x);
+    }
+    
+    static func atan2(y: float, x: float) -> float {
+        return nuwan_math_atan2(y, x);
+    }
+    
+    // Hyperbolic functions
+    static func sinh(x: float) -> float {
+        return nuwan_math_sinh(x);
+    }
+    
+    static func cosh(x: float) -> float {
+        return nuwan_math_cosh(x);
+    }
+    
+    static func tanh(x: float) -> float {
+        return nuwan_math_tanh(x);
+    }
+    
+    // Exponential and logarithmic
+    static func exp(x: float) -> float {
+        return nuwan_math_exp(x);
+    }
+    
+    static func log(x: float) -> float {
+        return nuwan_math_log(x);
+    }
+    
+    static func log10(x: float) -> float {
+        return nuwan_math_log10(x);
+    }
+    
+    static func log2(x: float) -> float {
+        return nuwan_math_log2(x);
+    }
+    
+    static func pow(base: float, exponent: float) -> float {
+        return nuwan_math_pow(base, exponent);
+    }
+    
+    static func sqrt(x: float) -> float {
+        return nuwan_math_sqrt(x);
+    }
+    
+    static func cbrt(x: float) -> float {
+        return nuwan_math_cbrt(x);
+    }
+    
+    // Rounding
+    static func ceil(x: float) -> float {
+        return nuwan_math_ceil(x);
+    }
+    
+    static func floor(x: float) -> float {
+        return nuwan_math_floor(x);
+    }
+    
+    static func round(x: float) -> float {
+        return nuwan_math_round(x);
+    }
+    
+    static func trunc(x: float) -> float {
+        return nuwan_math_trunc(x);
+    }
+    
+    // Modulo and absolute
+    static func mod(x: float, y: float) -> float {
+        return nuwan_math_fmod(x, y);
+    }
+    
+    static func abs(x: float) -> float {
+        return nuwan_math_abs(x);
+    }
+    
+    static func sign(x: float) -> int {
+        return nuwan_math_sign(x);
+    }
+    
+    // Min/Max
+    static func min(a: float, b: float) -> float {
+        return nuwan_math_min(a, b);
+    }
+    
+    static func max(a: float, b: float) -> float {
+        return nuwan_math_max(a, b);
+    }
+    
+    // Advanced functions
+    static func hypot(x: float, y: float) -> float {
+        return nuwan_math_hypot(x, y);
+    }
+    
+    static func factorial(n: int) -> float {
+        return nuwan_math_factorial(n);
+    }
+    
+    static func gamma(x: float) -> float {
+        return nuwan_math_gamma(x);
+    }
+    
+    static func erf(x: float) -> float {
+        return nuwan_math_erf(x);
+    }
+    
+    // Constants
+    static func PI() -> float {
+        return nuwan_math_pi();
+    }
+    
+    static func E() -> float {
+        return nuwan_math_e();
+    }
+    
+    static func TAU() -> float {
+        return nuwan_math_tau();
+    }
+    
+    static func PHI() -> float {
+        return nuwan_math_phi();
+    }
+    
+    // Angle conversion
+    static func degToRad(degrees: float) -> float {
+        return nuwan_math_deg_to_rad(degrees);
+    }
+    
+    static func radToDeg(radians: float) -> float {
+        return nuwan_math_rad_to_deg(radians);
+    }
+    
+    // Utility functions
+    static func clamp(value: float, min: float, max: float) -> float {
+        return nuwan_math_clamp(value, min, max);
+    }
+    
+    static func lerp(a: float, b: float, t: float) -> float {
+        return nuwan_math_lerp(a, b, t);
+    }
+    
+    // float classification
+    static func isNaN(x: float) -> bool {
+        result: int = nuwan_math_is_nan(x);
+        return result != 0;
+    }
+    
+    static func isInf(x: float) -> bool {
+        result: int = nuwan_math_is_inf(x);
+        return result != 0;
+    }
+    
+    static func isFinite(x: float) -> bool {
+        result: int = nuwan_math_is_finite(x);
+        return result != 0;
+    }
+}

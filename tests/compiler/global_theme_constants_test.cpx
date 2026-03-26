@@ -1,0 +1,14 @@
+let MD_PRIMARY = 4279858898
+let MD_ON_PRIMARY = 4294967295
+
+func primary_color() -> i64 {
+    return MD_PRIMARY
+}
+
+func on_primary_color() -> i64 {
+    return MD_ON_PRIMARY
+}
+
+func main() -> i64 {
+    return primary_color() + on_primary_color()
+}

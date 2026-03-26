@@ -1,0 +1,243 @@
+// Skia Graphics & UI Framework — Low-level bindings for Casprix
+// // These extern declarations map directly to the C runtime functions
+// in runtime/skia/. All handles (canvas, paint, font, etc.) are
+// passed as opaque i64 values.
+
+// ========================================================================
+// Color Utilities
+// ========================================================================
+
+extern func skia_color_rgba(r: i64, g: i64, b: i64, a: i64) -> i64
+extern func skia_color_rgb(r: i64, g: i64, b: i64) -> i64
+extern func sg_color_lighten(color: i64, amount: i64) -> i64
+extern func sg_color_darken(color: i64, amount: i64) -> i64
+extern func sg_color_with_alpha(color: i64, alpha: i64) -> i64
+extern func sg_color_lerp(a: i64, b: i64, t: float) -> i64
+
+// ========================================================================
+// Surface
+// ========================================================================
+
+extern func skia_surface_make_raster(width: i64, height: i64) -> i64
+extern func skia_surface_destroy(surface: i64) -> void
+extern func skia_surface_get_canvas(surface: i64) -> i64
+extern func skia_surface_get_width(surface: i64) -> i64
+extern func skia_surface_get_height(surface: i64) -> i64
+
+// ========================================================================
+// Canvas — Drawing Commands
+// ========================================================================
+
+extern func skia_canvas_clear(canvas: i64, color: i64) -> void
+extern func skia_canvas_draw_rect(canvas: i64, x: float, y: float, w: float, h: float, paint: i64) -> void
+extern func skia_canvas_draw_rrect(canvas: i64, x: float, y: float, w: float, h: float, rx: float, ry: float, paint: i64) -> void
+extern func skia_canvas_draw_circle(canvas: i64, cx: float, cy: float, r: float, paint: i64) -> void
+extern func skia_canvas_draw_oval(canvas: i64, x: float, y: float, w: float, h: float, paint: i64) -> void
+extern func skia_canvas_draw_line(canvas: i64, x1: float, y1: float, x2: float, y2: float, paint: i64) -> void
+extern func skia_canvas_draw_path(canvas: i64, path: i64, paint: i64) -> void
+extern func skia_canvas_draw_text(canvas: i64, text: string, x: float, y: float, font: i64, paint: i64) -> void
+extern func skia_canvas_draw_image(canvas: i64, img: i64, x: float, y: float, paint: i64) -> void
+extern func skia_canvas_save(canvas: i64) -> void
+extern func skia_canvas_restore(canvas: i64) -> void
+extern func skia_canvas_translate(canvas: i64, dx: float, dy: float) -> void
+extern func skia_canvas_scale(canvas: i64, sx: float, sy: float) -> void
+extern func skia_canvas_rotate(canvas: i64, degrees: float) -> void
+extern func skia_canvas_clip_rect(canvas: i64, x: float, y: float, w: float, h: float) -> void
+
+// ========================================================================
+// Paint — Styling
+// ========================================================================
+
+extern func skia_paint_create() -> i64
+extern func skia_paint_clone(paint: i64) -> i64
+extern func skia_paint_destroy(paint: i64) -> void
+extern func skia_paint_set_color(paint: i64, argb: i64) -> void
+extern func skia_paint_set_alpha(paint: i64, alpha: i64) -> void
+extern func skia_paint_set_antialias(paint: i64, aa: i64) -> void
+extern func skia_paint_set_style(paint: i64, style: i64) -> void
+extern func skia_paint_set_stroke_width(paint: i64, width: float) -> void
+
+// ========================================================================
+// Path — Vector Shapes
+// ========================================================================
+
+extern func skia_path_create() -> i64
+extern func skia_path_destroy(path: i64) -> void
+extern func skia_path_move_to(path: i64, x: float, y: float) -> void
+extern func skia_path_line_to(path: i64, x: float, y: float) -> void
+extern func skia_path_quad_to(path: i64, cx: float, cy: float, x: float, y: float) -> void
+extern func skia_path_cubic_to(path: i64, c1x: float, c1y: float, c2x: float, c2y: float, x: float, y: float) -> void
+extern func skia_path_close(path: i64) -> void
+extern func skia_path_add_rect(path: i64, x: float, y: float, w: float, h: float) -> void
+extern func skia_path_add_rrect(path: i64, x: float, y: float, w: float, h: float, rx: float, ry: float) -> void
+extern func skia_path_add_circle(path: i64, cx: float, cy: float, r: float) -> void
+
+// ========================================================================
+// Font & Text
+// ========================================================================
+
+extern func skia_font_create(family: string, size: float) -> i64
+extern func skia_font_create_from_file(path: string, size: float) -> i64
+extern func skia_font_destroy(font: i64) -> void
+extern func skia_font_set_size(font: i64, size: float) -> void
+extern func skia_font_set_bold(font: i64, bold: i64) -> void
+extern func skia_font_set_italic(font: i64, italic: i64) -> void
+extern func skia_font_measure_text(font: i64, text: string) -> float
+extern func skia_font_get_height(font: i64) -> float
+
+// ========================================================================
+// Image
+// ========================================================================
+
+extern func skia_image_load_from_file(path: string) -> i64
+extern func skia_image_destroy(img: i64) -> void
+extern func skia_image_get_width(img: i64) -> i64
+extern func skia_image_get_height(img: i64) -> i64
+
+// ========================================================================
+// Scene Graph — Node Creation
+// ========================================================================
+
+extern func sg_node_create(node_type: i64) -> i64
+extern func sg_node_destroy(node: i64) -> void
+extern func sg_node_add_child(parent: i64, child: i64) -> void
+extern func sg_node_remove_child(parent: i64, child: i64) -> void
+
+// ========================================================================
+// Scene Graph — Style Helpers
+// ========================================================================
+
+extern func sg_style_set_background(node: i64, color: i64) -> void
+extern func sg_style_set_border(node: i64, color: i64, width: float, radius: float) -> void
+extern func sg_style_set_padding(node: i64, top: float, right: float, bottom: float, left: float) -> void
+extern func sg_style_set_padding_uniform(node: i64, padding: float) -> void
+extern func sg_style_set_margin(node: i64, top: float, right: float, bottom: float, left: float) -> void
+extern func sg_style_set_margin_uniform(node: i64, margin: float) -> void
+extern func sg_style_set_shadow(node: i64, ox: float, oy: float, blur: float, color: i64) -> void
+extern func sg_style_set_opacity(node: i64, opacity: float) -> void
+
+// ========================================================================
+// Scene Graph — Themed Styles
+// ========================================================================
+
+extern func sg_style_card(node: i64) -> void
+extern func sg_style_outlined(node: i64, border_color: i64, width: float) -> void
+extern func sg_style_elevated(node: i64, elevation: i64) -> void
+extern func sg_style_pill(node: i64) -> void
+
+// ========================================================================
+// Widgets — Factory Functions
+// ========================================================================
+
+extern func widget_text(text: string, font: i64, color: i64) -> i64
+extern func widget_text_set(node: i64, text: string) -> void
+extern func widget_button(label: string, font: i64, on_click: i64, ctx: i64) -> i64
+extern func widget_text_input(placeholder: string, font: i64) -> i64
+extern func widget_text_input_get_value(node: i64) -> string
+extern func widget_text_input_set_value(node: i64, text: string) -> void
+extern func widget_checkbox(label: string, font: i64, initial: i64) -> i64
+extern func widget_checkbox_is_checked(node: i64) -> i64
+extern func widget_checkbox_set_checked(node: i64, val: i64) -> void
+extern func widget_slider(min_val: float, max_val: float, initial: float) -> i64
+extern func widget_slider_get_value(node: i64) -> float
+extern func widget_slider_set_value(node: i64, value: float) -> void
+
+// ========================================================================
+// Widgets — Layout Containers
+// ========================================================================
+
+extern func widget_column(spacing: float) -> i64
+extern func widget_row(spacing: float) -> i64
+extern func widget_stack() -> i64
+extern func widget_container() -> i64
+extern func widget_scroll_view() -> i64
+extern func widget_image(path: string, fit: i64) -> i64
+extern func widget_separator(horizontal: i64, color: i64, thickness: float) -> i64
+extern func widget_spacer(grow: float) -> i64
+
+// ========================================================================
+// Application Lifecycle
+// ========================================================================
+
+extern func sg_app_create(title: string, width: i64, height: i64) -> i64
+extern func sg_app_destroy(app: i64) -> void
+extern func sg_app_set_root(app: i64, root: i64) -> void
+extern func sg_app_set_fps(app: i64, fps: i64) -> void
+extern func sg_app_run(app: i64) -> void
+extern func sg_app_quit(app: i64) -> void
+extern func sg_app_invalidate(app: i64) -> void
+extern func sg_app_relayout(app: i64) -> void
+
+// ========================================================================
+// Animation
+// ========================================================================
+
+extern func sg_fade_in(pool: i64, target: i64, duration: float) -> i64
+extern func sg_fade_out(pool: i64, target: i64, duration: float) -> i64
+extern func sg_scale_to(pool: i64, target: i64, from_scale: float, to_scale: float, duration: float) -> i64
+
+// ========================================================================
+// ScrollView helpers
+// ========================================================================
+
+extern func widget_scroll_view_set_content(scroll: i64, content: i64) -> void
+extern func widget_scroll_to(scroll: i64, x: float, y: float) -> void
+
+// ========================================================================
+// Progress Bar
+// ========================================================================
+
+extern func widget_progress_bar(min_val: float, max_val: float, value: float) -> i64
+extern func widget_progress_set_value(bar: i64, value: float) -> void
+extern func widget_progress_set_indeterminate(bar: i64, indeterminate: i64) -> void
+extern func widget_progress_set_colors(bar: i64, fill: i64, bg: i64) -> void
+
+// ========================================================================
+// Tab Panel (compound widget — auto content switching on click)
+// ========================================================================
+
+extern func widget_tabpanel(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64, l4: string, c4: i64) -> i64
+extern func widget_tabpanel_get_active(root: i64) -> i64
+extern func widget_tabpanel_set_active(root: i64, index: i64) -> void
+
+// ========================================================================
+// Node Helpers
+// ========================================================================
+
+extern func sg_node_set_visible(node: i64, visible: i64) -> void
+extern func sg_node_set_min_size(node: i64, min_w: float, min_h: float) -> void
+extern func sg_node_set_max_size(node: i64, max_w: float, max_h: float) -> void
+extern func sg_node_set_flex_grow(node: i64, grow: float) -> void
+extern func sg_node_set_align_self(node: i64, align: i64) -> void
+extern func sg_node_set_align_items(node: i64, align: i64) -> void
+
+// ========================================================================
+// Button extras
+// ========================================================================
+
+extern func widget_button_set_enabled(btn: i64, enabled: i64) -> void
+extern func widget_button_set_colors(btn: i64, normal: i64, hover: i64, press: i64, text_color: i64) -> void
+extern func widget_button_set_callback(btn: i64, on_click: i64, ctx: i64) -> void
+
+// ========================================================================
+// Widget callbacks
+// ========================================================================
+
+extern func widget_text_input_on_change(node: i64, callback: i64, user_data: i64) -> void
+extern func widget_checkbox_on_change(node: i64, callback: i64, user_data: i64) -> void
+extern func widget_slider_on_change(node: i64, callback: i64, user_data: i64) -> void
+
+// ========================================================================
+// App extras
+// ========================================================================
+
+extern func sg_app_get_animations(app: i64) -> i64
+
+// ========================================================================
+// Animation
+// Property codes: 0=x 1=y 2=w 3=h 4=opacity 5=scale_x 6=scale_y 7=rotation
+// Easing codes:   0=linear 1=in_quad 2=out_quad 3=in_out_quad 4=in_cubic ...
+// ========================================================================
+
+extern func sg_animate(pool: i64, target: i64, property: i64, from_val: float, to_val: float, duration: float, easing: i64) -> i64
+extern func sg_animate_cancel(pool: i64, anim: i64) -> void

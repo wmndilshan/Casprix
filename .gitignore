@@ -1,0 +1,212 @@
+# =============================================================
+# Casprix — .gitignore
+# =============================================================
+
+# -------------------------------------------------------------
+# Build outputs
+# -------------------------------------------------------------
+/build/
+/bin/
+/obj/
+/out/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+*.cmake
+!CMakeLists.txt
+
+# Compiled object code & libraries
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.so.*
+*.dylib
+*.pdb
+*.ilk
+*.exp
+*.map
+
+# Executables (keep tracked .asm sources)
+*.exe
+!runtime/ai/llm/ops_avx2.asm
+
+# Pre-compiled headers
+*.gch
+*.pch
+
+# NASM intermediate
+*.obj.asm
+
+# -------------------------------------------------------------
+# Language & compiler artifacts
+# -------------------------------------------------------------
+# Generated C backend output
+/tmp_c_out/
+*.cpx.c
+*.nd.c
+
+# Generated assembly output
+*.s
+*.asm_out
+
+# -------------------------------------------------------------
+# Test & coverage artifacts
+# -------------------------------------------------------------
+/tests/build/
+Testing/
+CTestTestfile.cmake
+coverage/
+*.gcno
+*.gcda
+*.lcov
+lcov.info
+
+# -------------------------------------------------------------
+# Data, model weights, and training artifacts
+# -------------------------------------------------------------
+/data/
+/checkpoints/
+/datasets/
+*.bin
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+*.npy
+*.npz
+*.h5
+
+# -------------------------------------------------------------
+# Package manager cache
+# -------------------------------------------------------------
+/.casprix/
+/casprix_modules/
+casper.lock
+
+# -------------------------------------------------------------
+# IDE & editor
+# -------------------------------------------------------------
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.ncb
+*.sdf
+*.opensdf
+*.aps
+ipch/
+
+# VS Code (keep shared settings, ignore personal/generated)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# JetBrains (CLion, etc.)
+.idea/
+cmake-build-*/
+*.iml
+
+# Vim / Neovim
+*.swp
+*.swo
+.netrwhist
+Session.vim
+.vim/
+
+# Emacs
+*~
+\#*\#
+.#*
+
+# -------------------------------------------------------------
+# Claude Code metadata
+# -------------------------------------------------------------
+.claude/worktrees/
+.claude/settings.local.json
+
+# -------------------------------------------------------------
+# VS Code extension build
+# -------------------------------------------------------------
+ide/vscode/node_modules/
+ide/vscode/out/
+ide/vscode/dist/
+*.vsix
+
+# -------------------------------------------------------------
+# Python (tools/training scripts)
+# -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+pip-log.txt
+*.egg-info/
+.eggs/
+dist/
+
+# -------------------------------------------------------------
+# External toolchains (large binaries — install separately)
+# -------------------------------------------------------------
+tools/build-tools/
+tools/android/gn.exe
+tools/android/*.log
+tools/android/platform-tools/
+tools/android/ndk/
+tools/android/sdk/
+
+# third-party prebuilt binaries (source headers are tracked)
+third_party/skia/*.a
+third_party/skia/*.lib
+third_party/skia/*.dll
+third_party/skia/*.so
+third_party/skia-src/out/
+
+# -------------------------------------------------------------
+# Android build
+# -------------------------------------------------------------
+android-demo-app/.gradle/
+android-demo-app/build/
+android-demo-app/app/build/
+android-demo-app/local.properties
+*.apk
+*.aab
+
+# -------------------------------------------------------------
+# Logs & temp files
+# -------------------------------------------------------------
+*.log
+*.tmp
+*.bak
+*.backup
+*.orig
+*.rej
+*.patch
+crash_*.txt
+sanitizer_*.log
+
+# -------------------------------------------------------------
+# OS metadata
+# -------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

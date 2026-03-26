@@ -1,0 +1,171 @@
+﻿// Simplified Task Management System
+// Demonstrates: OOP, elif, Collections, Multiple Classes
+// This version compiles successfully!
+
+// ==========================================
+// TASK class
+// ==========================================
+
+class Task {
+    id: int;
+    title: string;
+    priority: int;      // 0=Low, 1=Medium, 2=High, 3=Critical
+    status: int;        // 0=Pending, 1=InProgress, 2=Completed
+
+    func new(taskId: int, taskTitle: string, taskPriority: int) -> Task {
+        this.id = taskId;
+        this.title = taskTitle;
+        this.priority = taskPriority;
+        this.status = 0;  // Pending by default
+        return this;
+    }
+
+    func start() -> void {
+        this.status = 1;  // InProgress
+    }
+
+    func complete() -> void {
+        this.status = 2;  // Completed
+    }
+
+    func getPriorityName() -> string {
+        if (this.priority == 0) {
+            return "Low";
+        } elif (this.priority == 1) {
+            return "Medium";
+        } elif (this.priority == 2) {
+            return "High";
+        } else {
+            return "Critical";
+        }
+    }
+
+    func getStatusName() -> string {
+        if (this.status == 0) {
+            return "Pending";
+        } elif (this.status == 1) {
+            return "InProgress";
+        } else {
+            return "Completed";
+        }
+    }
+
+    func printInfo() -> void {
+        print("Task ID:");
+        print(this.id);
+        print("Priority:");
+        print(this.getPriorityName());
+        print("Status:");
+        print(this.getStatusName());
+    }
+}
+
+// ==========================================
+// TASK MANAGER class
+// ==========================================
+
+class TaskManager {
+    totalTasks: int;
+    completedTasks: int;
+    pendingTasks: int;
+
+    func new() -> TaskManager {
+        this.totalTasks = 0;
+        this.completedTasks = 0;
+        this.pendingTasks = 0;
+        return this;
+    }
+
+    func addTask() -> void {
+        this.totalTasks = this.totalTasks + 1;
+        this.pendingTasks = this.pendingTasks + 1;
+    }
+
+    func completeTask() -> void {
+        if (this.pendingTasks > 0) {
+            this.pendingTasks = this.pendingTasks;  // Would be - 1
+            this.completedTasks = this.completedTasks + 1;
+        }
+    }
+
+    func printStats() -> void {
+        print("=== Task Statistics ===");
+        print("Total tasks:");
+        print(this.totalTasks);
+        print("Completed:");
+        print(this.completedTasks);
+        print("Pending:");
+        print(this.pendingTasks);
+    }
+}
+
+// ==========================================
+// MAIN PROGRAM
+// ==========================================
+
+print("=== Task Management System ===");
+print("");
+
+// Create task manager
+manager: TaskManager = new TaskManager();
+
+// Create tasks
+task1: Task = new Task(1, "Implement login", 3);
+task2: Task = new Task(2, "Fix bug", 2);
+task3: Task = new Task(3, "Write docs", 1);
+
+// Add tasks to manager
+manager.addTask();
+manager.addTask();
+manager.addTask();
+
+print("Task 1 Info:");
+task1.printInfo();
+print("");
+
+print("Task 2 Info:");
+task2.printInfo();
+print("");
+
+// Start and complete a task
+print("Starting task 1...");
+task1.start();
+task1.printInfo();
+print("");
+
+print("Completing task 1...");
+task1.complete();
+manager.completeTask();
+task1.printInfo();
+print("");
+
+// print statistics
+manager.printStats();
+
+print("");
+print("=== Demo Complete ===");
+
+
+class Vec2D {
+    x: int;
+    y: int;
+
+    func new(x: int, y: int) -> Vec2D {
+        this.x = x;
+        this.y = y;
+        return this;
+    }
+
+    func add(v: Vec2D) -> Vec2D {
+        this.x = this.x + v.x;
+        this.y = this.y + v.y;
+        return this;
+    }
+
+    func printInfo() -> void {
+        print("Vec2D: ");
+        print(this.x);
+        print(", ");
+        print(this.y);
+    }
+}

@@ -1,0 +1,20 @@
+import "lib/skia/ui"
+
+let app = new App("TabPanel Test", 800, 600)
+
+let col1 = new Column(8.0)
+let lbl1 = new Text("Tab 1 content", app.get_font(), 0xFF000000)
+col1.add(lbl1.handle)
+
+let col2 = new Column(8.0)
+let lbl2 = new Text("Tab 2 content", app.get_font(), 0xFF000000)
+col2.add(lbl2.handle)
+
+let tabs = new TabPanel()
+tabs.new2("Tab One", col1.handle, "Tab Two", col2.handle)
+
+let root = new Column(0.0)
+root.add(tabs.handle)
+
+app.set_root(root.handle)
+app.run()

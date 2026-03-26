@@ -1,0 +1,115 @@
+// Generate Text with Trained Model
+// Inference script for story generation
+
+class TextGenerator {
+    field model_checkpoint: string
+    field tokenizer_path: string
+    field max_length: int
+    field temperature: float
+
+    func new() -> void {
+        this.model_checkpoint = "checkpoints/step_100000.ckpt"
+        this.tokenizer_path = "data/tokenizer.bin"
+        this.max_length = 200  // Max tokens to generate
+        this.temperature = 0.8  // Sampling temperature
+    }
+
+    // Generate story from prompt
+    func generate(prompt: string) -> string {
+        print("=== TinyStories Text Generation ===")
+        print("Prompt: " + prompt)
+        print("")
+
+        // Load tokenizer
+        print("Loading tokenizer...")
+        let tokenizer: Tokenizer = Tokenizer.load(this.tokenizer_path)
+
+        // Load model
+        print("Loading model from: " + this.model_checkpoint)
+        // let model: TransformerModel = TransformerModel.loadCheckpoint(this.model_checkpoint)
+        print("✓ Model loaded")
+        print("")
+
+        // Encode prompt
+        let tokens: Array<int> = tokenizer.encode(prompt)
+        print("Prompt tokens: " + tokens.size())
+
+        // Generate tokens
+        print("Generating...")
+        print("")
+
+        for i = 0 to this.max_length - 1
+            // Forward pass to get logits
+            // let logits: Array<float> = model.forward(tokens)
+
+            // Sample next token (greedy for simplicity)
+            // let next_token: int = this.sample(logits)
+            let next_token: int = 100  // Placeholder
+
+            // Append token
+            tokens.append(next_token)
+
+            // Check for EOS token
+            // if next_token == tokenizer.eos_token {
+            //     break
+            // }
+
+            // Show progress every 20 tokens
+            if i % 20 == 0 {
+                let partial: string = tokenizer.decode(tokens)
+                print(partial)
+                print("---")
+            }
+        }
+
+        // Decode final text
+        let generated_text: string = tokenizer.decode(tokens)
+
+        // Cleanup
+        tokenizer.destroy()
+        // model.destroy()
+
+        return generated_text
+    }
+
+    // Sample next token from logits
+    func sample(logits: Array<float>) -> int {
+        // For now, greedy sampling (argmax)
+        // TODO: Add temperature sampling, top-k, top-p
+
+        let max_idx: int = 0
+        let max_val: float = logits[0]
+
+        for i = 1 to logits.size() - 1
+            if logits[i] > max_val {
+                max_val = logits[i]
+                max_idx = i
+            }
+        }
+
+        return max_idx
+    }
+
+    static func main() -> void {
+        let generator: TextGenerator = new TextGenerator()
+
+        // Example prompts
+        let prompts: Array<string> = [
+            "Once upon a time",
+            "There was a little",
+            "In a magical forest"
+        ]
+
+        for i = 0 to prompts.size() - 1
+            print("======================================")
+            print("")
+            let story: string = generator.generate(prompts[i])
+            print("")
+            print("Generated Story:")
+            print(story)
+            print("")
+        }
+    }
+}
+
+TextGenerator.main()

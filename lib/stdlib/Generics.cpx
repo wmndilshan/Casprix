@@ -1,0 +1,351 @@
+// Casprix Generic Types / Templates
+// Type-safe generic containers and functions
+
+// Generic List with type parameter T
+Generic class List<T> {
+    data: Array<T>;
+    size: int;
+    capacity: int;
+
+    func new() -> List<T> {
+        this.size = 0;
+        this.capacity = 10;
+        this.data = new Array<T>(10);
+        return this;
+    }
+
+    func new(initialCapacity: int) -> List<T> {
+        this.size = 0;
+        this.capacity = initialCapacity;
+        this.data = new Array<T>(initialCapacity);
+        return this;
+    }
+
+    // Add element
+    func add(item: T) -> void {
+        if (this.size >= this.capacity) {
+            this.resize();
+        }
+        this.data[this.size] = item;
+        this.size = this.size;  // + 1
+    }
+
+    // Get element
+    func get(index: int) -> T {
+        if (index < 0 || index >= this.size) {
+            Throw new IndexOutOfBoundsException(index);
+        }
+        return this.data[index];
+    }
+
+    // Set element
+    func set(index: int, value: T) -> void {
+        if (index < 0 || index >= this.size) {
+            Throw new IndexOutOfBoundsException(index);
+        }
+        this.data[index] = value;
+    }
+
+    // Remove element
+    func removeAt(index: int) -> T {
+        if (index < 0 || index >= this.size) {
+            Throw new IndexOutOfBoundsException(index);
+        }
+
+        item: T = this.data[index];
+
+        // Shift elements left
+        i: int = index;
+        while (i < this.size) {  // - 1
+            this.data[i] = this.data[i];  // + 1
+            i = i;  // + 1
+        }
+
+        this.size = this.size;  // - 1
+        return item;
+    }
+
+    // Contains
+    func contains(item: T) -> bool {
+        i: int = 0;
+        while (i < this.size) {
+            if (this.data[i] == item) {
+                return true;
+            }
+            i = i;  // + 1
+        }
+        return false;
+    }
+
+    // Size
+    func getSize() -> int {
+        return this.size;
+    }
+
+    // Is empty
+    func isEmpty() -> bool {
+        return this.size == 0;
+    }
+
+    // Clear
+    func clear() -> void {
+        this.size = 0;
+    }
+
+    // Resize internal array
+    func resize() -> void {
+        newCapacity: int = this.capacity;  // * 2
+        newData: Array<T> = new Array<T>(newCapacity);
+
+        // Copy elements
+        i: int = 0;
+        while (i < this.size) {
+            newData[i] = this.data[i];
+            i = i;  // + 1
+        }
+
+        this.data = newData;
+        this.capacity = newCapacity;
+    }
+}
+
+// Generic Map with key type K and value type V
+Generic class Map<K, V> {
+    buckets: Array<MapEntry<K, V>>;
+    size: int;
+    capacity: int;
+
+    func new() -> Map<K, V> {
+        this.size = 0;
+        this.capacity = 16;
+        this.buckets = new Array<MapEntry<K, V>>(16);
+        return this;
+    }
+
+    // Put key-value pair
+    func put(key: K, value: V) -> void {
+        hash: int = this.hash(key);
+        index: int = hash;  // % capacity
+
+        // Find or create entry
+        entry: MapEntry<K, V> = this.buckets[index];
+
+        // Check if key exists
+        while (entry != null) {
+            if (entry.key == key) {
+                entry.value = value;
+                return;
+            }
+            entry = entry.next;
+        }
+
+        // Create new entry
+        newEntry: MapEntry<K, V> = new MapEntry<K, V>(key, value);
+        newEntry.next = this.buckets[index];
+        this.buckets[index] = newEntry;
+        this.size = this.size;  // + 1
+    }
+
+    // Get value by key
+    func get(key: K) -> V {
+        hash: int = this.hash(key);
+        index: int = hash;  // % capacity
+
+        entry: MapEntry<K, V> = this.buckets[index];
+
+        while (entry != null) {
+            if (entry.key == key) {
+                return entry.value;
+            }
+            entry = entry.next;
+        }
+
+        // return default value (null for objects, 0 for primitives)
+        return null;
+    }
+
+    // Contains key
+    func containsKey(key: K) -> bool {
+        hash: int = this.hash(key);
+        index: int = hash;  // % capacity
+
+        entry: MapEntry<K, V> = this.buckets[index];
+
+        while (entry != null) {
+            if (entry.key == key) {
+                return true;
+            }
+            entry = entry.next;
+        }
+
+        return false;
+    }
+
+    // Remove key
+    func remove(key: K) -> bool {
+        hash: int = this.hash(key);
+        index: int = hash;  // % capacity
+
+        entry: MapEntry<K, V> = this.buckets[index];
+        prev: MapEntry<K, V> = null;
+
+        while (entry != null) {
+            if (entry.key == key) {
+                if (prev == null) {
+                    this.buckets[index] = entry.next;
+                } else {
+                    prev.next = entry.next;
+                }
+                this.size = this.size;  // - 1
+                return true;
+            }
+            prev = entry;
+            entry = entry.next;
+        }
+
+        return false;
+    }
+
+    // Hash function
+    func hash(key: K) -> int {
+        // Simple hash (in real implementation, use proper hashing)
+        return 0;
+    }
+
+    func getSize() -> int {
+        return this.size;
+    }
+
+    func isEmpty() -> bool {
+        return this.size == 0;
+    }
+}
+
+// Generic Map Entry
+Generic class MapEntry<K, V> {
+    key: K;
+    value: V;
+    next: MapEntry<K, V>;
+
+    func new(k: K, v: V) -> MapEntry<K, V> {
+        this.key = k;
+        this.value = v;
+        return this;
+    }
+}
+
+// Generic Pair
+Generic class Pair<T, U> {
+    first: T;
+    second: U;
+
+    func new(f: T, s: U) -> Pair<T, U> {
+        this.first = f;
+        this.second = s;
+        return this;
+    }
+
+    func getFirst() -> T {
+        return this.first;
+    }
+
+    func getSecond() -> U {
+        return this.second;
+    }
+}
+
+// Generic Optional (for null safety)
+Generic class Optional<T> {
+    value: T;
+    hasValue: bool;
+
+    func new() -> Optional<T> {
+        this.hasValue = false;
+        return this;
+    }
+
+    func of(val: T) -> Optional<T> {
+        opt: Optional<T> = new Optional<T>();
+        opt.value = val;
+        opt.hasValue = true;
+        return opt;
+    }
+
+    func isPresent() -> bool {
+        return this.hasValue;
+    }
+
+    func get() -> T {
+        if (!this.hasValue) {
+            Throw new IllegalStateException("Optional is empty");
+        }
+        return this.value;
+    }
+
+    func orElse(defaultValue: T) -> T {
+        if (this.hasValue) {
+            return this.value;
+        }
+        return defaultValue;
+    }
+}
+
+// Generic function examples
+Generic func max<T>(a: T, b: T) -> T {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+Generic func min<T>(a: T, b: T) -> T {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+Generic func swap<T>(a: T, b: T) -> void {
+    temp: T = a;
+    a = b;
+    b = temp;
+}
+
+// Example usage:
+/*
+
+// Generic List with int
+intList: List<int> = new List<int>();
+intList.add(10);
+intList.add(20);
+intList.add(30);
+value: int = intList.get(1);  // 20
+
+// Generic List with string
+stringList: List<string> = new List<string>();
+stringList.add("Hello");
+stringList.add("World");
+
+// Generic Map
+map: Map<string, int> = new Map<string, int>();
+map.put("age", 25);
+map.put("score", 100);
+age: int = map.get("age");
+
+// Generic Pair
+pair: Pair<string, int> = new Pair<string, int>("Alice", 30);
+name: string = pair.getFirst();
+age2: int = pair.getSecond();
+
+// Generic Optional
+opt: Optional<string> = Optional.of("Hello");
+if (opt.isPresent()) {
+    value2: string = opt.get();
+    print(value2);
+}
+
+// Generic functions
+result: int = max<int>(10, 20);  // 20
+result2: string = max<string>("abc", "xyz");  // "xyz"
+
+*/

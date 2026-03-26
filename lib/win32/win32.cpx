@@ -1,0 +1,47 @@
+// Win32 API C Bindings for Casprix
+// Provides external declarations for Windows GUI programming
+
+// ============================================================================
+// Type Aliases for Win32 (using Casprix int for handles and pointers)
+// ============================================================================
+
+// Window Messages
+extern func GetMessageA(lpMsg: int, hWnd: int, wMsgFilterMin: int, wMsgFilterMax: int) -> int;
+extern func TranslateMessage(lpMsg: int) -> int;
+extern func DispatchMessageA(lpMsg: int) -> int;
+extern func PostQuitMessage(nExitCode: int) -> void;
+extern func DefWindowProcA(hWnd: int, Msg: int, wParam: int, lParam: int) -> int;
+
+// Window Management
+extern func CreateWindowExA(dwExStyle: int, lpClassName: string, lpWindowName: string,
+                            dwStyle: int, x: int, y: int, nWidth: int, nHeight: int,
+                            hWndParent: int, hMenu: int, hInstance: int, lpParam: int) -> int;
+extern func ShowWindow(hWnd: int, nCmdShow: int) -> int;
+extern func UpdateWindow(hWnd: int) -> int;
+extern func DestroyWindow(hWnd: int) -> int;
+extern func SetWindowTextA(hWnd: int, lpString: string) -> int;
+extern func GetWindowTextA(hWnd: int, lpString: int, nMaxCount: int) -> int;
+
+// Window Class Registration
+extern func RegisterClassExA(lpWndClass: int) -> int;
+extern func UnregisterClassA(lpClassName: string, hInstance: int) -> int;
+
+// Module and Resources
+extern func GetModuleHandleA(lpModuleName: string) -> int;
+extern func LoadCursorA(hInstance: int, lpCursorName: int) -> int;
+extern func LoadIconA(hInstance: int, lpIconName: int) -> int;
+
+// Control Messages
+extern func SendMessageA(hWnd: int, Msg: int, wParam: int, lParam: int) -> int;
+
+// Common Dialogs
+extern func MessageBoxA(hWnd: int, lpText: string, lpCaption: string, uType: int) -> int;
+
+// Memory Management (for structures)
+extern func malloc(size: int) -> int;
+extern func free(ptr: int) -> void;
+extern func memset(ptr: int, value: int, num: int) -> int;
+
+// String Handling
+extern func strlen(str: string) -> int;
+extern func strcpy(dest: int, src: string) -> int;

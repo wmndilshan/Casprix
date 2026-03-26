@@ -1,0 +1,88 @@
+{
+    "name": "casprix-language",
+    "displayName": "Casprix Language",
+    "description": "Syntax highlighting, auto-complete, and error highlighting for the Casprix programming language (.cpx).",
+    "version": "1.1.0",
+    "publisher": "casprix-dev",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/casprix/casprix.git"
+    },
+    "icon": "icons/casper-ghost.png",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Snippets",
+        "Linters"
+    ],
+    "main": "./extension.js",
+    "contributes": {
+        "languages": [
+            {
+                "id": "casprix",
+                "aliases": [
+                    "Casprix",
+                    "casprix",
+                    "cpx"
+                ],
+                "extensions": [
+                    ".cpx",
+                    ".nd"
+                ],
+                "configuration": "./language-configuration.json",
+                "icon": {
+                    "light": "./icons/icon.png",
+                    "dark": "./icons/icon.png"
+                }
+            }
+        ],
+        "grammars": [
+            {
+                "language": "casprix",
+                "scopeName": "source.cpx",
+                "path": "./casprix.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "casprix",
+                "path": "./snippets.json"
+            }
+        ],
+        "configuration": {
+            "title": "Casprix",
+            "properties": {
+                "casprix.compilerPath": {
+                    "type": "string",
+                    "default": "casprix",
+                    "description": "Path to the Casprix compiler executable used for error checking."
+                },
+                "casprix.checkOnSave": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run the compiler error checker on file save."
+                },
+                "casprix.checkOnType": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run the compiler error checker while typing (may be slow)."
+                },
+                "casprix.checkDelay": {
+                    "type": "number",
+                    "default": 800,
+                    "description": "Delay in milliseconds before running the error checker (when checkOnType is enabled)."
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "echo 'No build step required'",
+        "package": "vsce package"
+    },
+    "devDependencies": {
+        "@vscode/vsce": "^3.0.0"
+    }
+}

@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Discussions (questions & ideas)
+    url: https://github.com/casprix-lang/casprix/discussions
+    about: Use Discussions for general questions, ideas, and community chat.

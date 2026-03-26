@@ -1,0 +1,139 @@
+﻿// Working Task Management System
+// Demonstrates: OOP, elif, Multiple Classes
+// WORKS AROUND: Empty parameter list bug by adding dummy parameters
+
+// ==========================================
+// TASK class
+// ==========================================
+
+class Task {
+    id: int;
+    title: string;
+    priority: int;
+    status: int;
+
+    func new(taskId: int, taskTitle: string, taskPriority: int) -> Task {
+        this.id = taskId;
+        this.title = taskTitle;
+        this.priority = taskPriority;
+        this.status = 0;
+        return this;
+    }
+
+    func startTask(dummy: int) -> void {
+        this.status = 1;
+    }
+
+    func completeTask(dummy: int) -> void {
+        this.status = 2;
+    }
+
+    func getPriorityName(dummy: int) -> string {
+        if (this.priority == 0) {
+            return "Low";
+        } elif (this.priority == 1) {
+            return "Medium";
+        } elif (this.priority == 2) {
+            return "High";
+        } else {
+            return "Critical";
+        }
+    }
+
+    func getStatusName(dummy: int) -> string {
+        if (this.status == 0) {
+            return "Pending";
+        } elif (this.status == 1) {
+            return "InProgress";
+        } else {
+            return "Completed";
+        }
+    }
+}
+
+// ==========================================
+// TASK MANAGER class
+// ==========================================
+
+class TaskManager {
+    totalTasks: int;
+    completedTasks: int;
+
+    func new() -> TaskManager {
+        this.totalTasks = 0;
+        this.completedTasks = 0;
+        return this;
+    }
+
+    func addTask(task: Task) -> void {
+        this.totalTasks = this.totalTasks + 1;
+    }
+
+    func markComplete(dummy: int) -> void {
+        this.completedTasks = this.completedTasks + 1;
+    }
+
+    func getTotalTasks(dummy: int) -> int {
+        return this.totalTasks;
+    }
+
+    func getCompletedTasks(dummy: int) -> int {
+        return this.completedTasks;
+    }
+}
+
+// ==========================================
+// MAIN PROGRAM
+// ==========================================
+
+print("=== Task Management System ===");
+
+// Create task manager
+manager: TaskManager = new TaskManager();
+
+// Create tasks
+task1: Task = new Task(1, "Implement login", 3);
+task2: Task = new Task(2, "Fix bug", 2);
+task3: Task = new Task(3, "Write docs", 1);
+
+// Add tasks
+manager.addTask(task1);
+manager.addTask(task2);
+manager.addTask(task3);
+
+print("Created 3 tasks");
+
+// Work with task1
+print("Task 1 priority:");
+priority1: string = task1.getPriorityName(0);
+print(priority1);
+
+print("Task 1 status:");
+status1: string = task1.getStatusName(0);
+print(status1);
+
+// Start task1
+task1.startTask(0);
+print("Started task 1");
+
+status1 = task1.getStatusName(0);
+print(status1);
+
+// Complete task1
+task1.completeTask(0);
+manager.markComplete(0);
+print("Completed task 1");
+
+status1 = task1.getStatusName(0);
+print(status1);
+
+// Stats
+print("Total tasks:");
+total: int = manager.getTotalTasks(0);
+print(total);
+
+print("Completed tasks:");
+completed: int = manager.getCompletedTasks(0);
+print(completed);
+
+print("=== Demo Complete ===");

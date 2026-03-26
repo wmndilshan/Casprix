@@ -1,0 +1,89 @@
+﻿// elif (else-if) Demonstration
+// Cleaner syntax for chained conditional logic
+
+print("=== Elif Feature Demo ===");
+print("");
+
+// Example 1: Grading system
+print("Example 1: Grade calculator");
+score: int = 85;
+print("Score: ");
+print(score);
+
+if (score == 100) {
+    print("Perfect!");
+} elif (score == 90) {
+    print("Grade: A");
+} elif (score == 80) {
+    print("Grade: B");
+} elif (score == 70) {
+    print("Grade: C");
+} elif (score == 60) {
+    print("Grade: D");
+} else {
+    print("Grade: F");
+}
+
+print("");
+
+// Example 2: Menu selection
+print("Example 2: Menu choice");
+choice: int = 2;
+print("Choice: ");
+print(choice);
+
+if (choice == 1) {
+    print("Selected: New File");
+} elif (choice == 2) {
+    print("Selected: Open File");
+} elif (choice == 3) {
+    print("Selected: Save File");
+} elif (choice == 4) {
+    print("Selected: Exit");
+} else {
+    print("Invalid choice");
+}
+
+print("");
+
+// Example 3: Number classification
+print("Example 3: Number type");
+num: int = 0;
+print("Number: ");
+print(num);
+
+if (num == 0) {
+    print("Number is zero");
+} elif (num == 1) {
+    print("Number is one");
+} elif (num == 2) {
+    print("Number is two");
+} else {
+    print("Number is greater than two or negative");
+}
+
+print("");
+
+// Example 4: Nested elif
+print("Example 4: Nested conditions");
+x: int = 5;
+y: int = 10;
+
+if (x == 5) {
+    print("x is 5");
+
+    if (y == 10) {
+        print("y is 10");
+    } elif (y == 20) {
+        print("y is 20");
+    } else {
+        print("y is something else");
+    }
+} elif (x == 10) {
+    print("x is 10");
+} else {
+    print("x is neither 5 nor 10");
+}
+
+print("");
+print("=== Demo Complete ===");

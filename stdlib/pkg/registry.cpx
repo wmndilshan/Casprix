@@ -1,0 +1,106 @@
+// Casprix Package Manager - Registry
+// Handles package storage and retrieval
+
+name: "registry"
+version: "1.0.0"
+
+class PackageRegistry {
+    field cache_dir: string     # ~/.casprix/packages
+    field remote_url: string    # https://packages.casprix.org
+    field packages: Map<string, PackageInfo>
+
+    func new(cache_dir: string, remote_url: string) {
+        this.cache_dir = cache_dir
+        this.remote_url = remote_url
+        this.packages = new Map<string, PackageInfo>()
+        this.loadCache()
+    }
+
+    // Search for package
+    func search(query: string) -> Array<PackageInfo> {
+        let results = new Array<PackageInfo>()
+        for each pkg in this.packages.values() {
+            if pkg.name.contains(query) {
+                results.push(pkg)
+            }
+        }
+        return results
+    }
+
+    // Get package information
+    func info(name: string, version: string) -> Result<PackageInfo> {
+        let key = name + "@" + version
+        if this.packages.has(key) {
+            return Ok(this.packages.get(key))
+        }
+
+        // Fetch from remote
+        let remote_info = this.fetchRemote(name, version)
+        match remote_info {
+            case Ok(info):
+                this.packages.set(key, info)
+                return Ok(info)
+            case Err(e):
+                return Err(e)
+        }
+    }
+
+    // Download package
+    async func download(name: string, version: string) -> Result<string> {
+        let info = this.info(name, version)
+        match info {
+            case Err(e):
+                return Err(e)
+            case Ok(pkg):
+                let url = pkg.tarball_url
+                let dest = this.cache_dir + "/" + name + "/" + version
+
+                // Download tarball
+                let response = await Http.download(url, dest + ".tar.gz")
+                if response.isErr() {
+                    return response
+                }
+
+                // Extract
+                this.extract(dest + ".tar.gz", dest)
+                return Ok(dest)
+        }
+    }
+
+    // Load local cache
+    func loadCache() {
+        let cache_file = this.cache_dir + "/cache.json"
+        if File.exists(cache_file) {
+            let data = File.read(cache_file)
+            this.packages = Json.parse(data)
+        }
+    }
+
+    // Fetch from remote registry
+    async func fetchRemote(name: string, version: string) -> Result<PackageInfo> {
+        let url = this.remote_url + "/packages/" + name + "/" + version
+        let response = await Http.get(url)
+
+        match response {
+            case Ok(body):
+                return Ok(Json.parse(body))
+            case Err(e):
+                return Err("Package not found: " + e)
+        }
+    }
+
+    // Extract tarball
+    func extract(archive: string, dest: string) {
+        // Shell out to tar command
+        System.exec("tar -xzf " + archive + " -C " + dest)
+    }
+}
+
+class PackageInfo {
+    field name: string
+    field version: string
+    field description: string
+    field author: string
+    field dependencies: Map<string, string>
+    field tarball_url: string
+}

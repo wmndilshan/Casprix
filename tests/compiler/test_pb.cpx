@@ -1,0 +1,11 @@
+import "lib/skia/ui"
+
+let app = new App("ProgressBar Test", 800, 600)
+
+let pb1 = new ProgressBar(0.0, 100.0, 75.0)
+
+let root = new Column(8.0)
+root.add(pb1.handle)
+
+app.set_root(root.handle)
+app.run()

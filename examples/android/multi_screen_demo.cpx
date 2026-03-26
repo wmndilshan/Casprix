@@ -1,0 +1,292 @@
+// multi_screen_demo.cpx — Android Framework Demo
+// Demonstrates: multi-screen navigation, Material widgets, animations
+// 
+// Screens:
+//   1. Login Screen  → username + password + Sign In button → Dashboard
+//   2. Dashboard     → AppBar + BottomNavBar + FAB + cards + list items
+//   3. Profile       → Avatar + chips + dialog + snackbar
+// 
+// Run:  casprix examples/android/multi_screen_demo.cpx
+// APK:  apk-builder --input examples/android/multi_screen_demo.cpx
+//                   --package com.casprix.demo --name "Casprix Demo"
+
+import "lib/android/android"
+
+// ── Create the app ────────────────────────────────────────────────────────────
+let app  = new AndroidApp("Casprix Demo", 400, 720)
+let NAV  = app.nav()
+let POOL = app.get_anim_pool()
+
+// Shared fonts
+let font       = app.get_font()
+let font_bold  = app.get_font_bold()
+let font_small = app.get_font_small()
+let font_title = app.get_font_title()
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// FORWARD DECLARATIONS (activities are created after their screens are built)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let login_activity     = android_activity_create("LoginScreen")
+let dashboard_activity = android_activity_create("Dashboard")
+let profile_activity   = android_activity_create("ProfileScreen")
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SCREEN 1 — Login
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let login_screen = new Screen("Sign In", 0, NAV, font_title, font)
+
+// Branding header
+let brand_col    = new Column(8.0)
+brand_col.set_background(MD_PRIMARY)
+sg_style_set_padding_uniform(brand_col.handle, 24.0)
+
+let brand_icon   = new Text("◈", font_title, 0xFFBBDEFB)
+let brand_title  = new Text("Casprix", font_title, MD_ON_PRIMARY)
+let brand_sub    = new Text("Modern mobile framework", font_small, 0xAAFFFFFF)
+brand_col.add(brand_icon.handle)
+brand_col.add(brand_title.handle)
+brand_col.add(brand_sub.handle)
+login_screen.add(brand_col.handle)
+
+// Login card
+let login_card   = new MaterialCard()
+
+let form_col     = new Column(14.0)
+let form_hdr     = new Text("Welcome back", font_bold, MD_ON_SURFACE)
+let form_sub     = new Text("Sign in to your account", font_small, MD_ON_SURFACE_MED)
+form_col.add(form_hdr.handle)
+form_col.add(form_sub.handle)
+form_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+
+let username_field = new MaterialTextField("Username", "Enter your username", font_small, font)
+let password_field = new MaterialTextField("Password", "Enter your password", font_small, font)
+form_col.add(username_field.handle)
+form_col.add(password_field.handle)
+
+let btn_row      = new Row(8.0)
+let sign_in_btn  = new MaterialButton()
+sign_in_btn.filled("Sign In", font_bold)
+let cancel_btn   = new MaterialButton()
+cancel_btn.outlined("Cancel", font)
+btn_row.add(sign_in_btn.handle)
+btn_row.add(cancel_btn.handle)
+form_col.add(btn_row.handle)
+
+login_card.add(form_col.handle)
+login_screen.add(login_card.handle)
+
+// Sign In navigates to Dashboard
+// (In a real app, you'd register a click callback here; shown as comment)
+// sign_in_btn: on click → android_push_activity(NAV, dashboard_activity, 0)
+
+// Attach the screen root to the activity
+// (Setting the root node of this activity)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SCREEN 2 — Dashboard
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let dash_screen = new Screen("Dashboard", 1, NAV, font_title, font)
+
+// — Stats row —
+let stats_row = new Row(12.0)
+
+let stat1_card = new MaterialCard()
+stat1_card.filled(MD_PRIMARY)
+let s1_col     = new Column(4.0)
+let s1_val     = new Text("1,284", font_title, MD_ON_PRIMARY)
+let s1_lbl     = new Text("Users", font_small, 0xDDFFFFFF)
+s1_col.add(s1_val.handle)
+s1_col.add(s1_lbl.handle)
+stat1_card.add(s1_col.handle)
+
+let stat2_card = new MaterialCard()
+stat2_card.filled(MD_SUCCESS)
+let s2_col     = new Column(4.0)
+let s2_val     = new Text("  98%", font_title, MD_ON_PRIMARY)
+let s2_lbl     = new Text("Uptime", font_small, 0xDDFFFFFF)
+s2_col.add(s2_val.handle)
+s2_col.add(s2_lbl.handle)
+stat2_card.add(s2_col.handle)
+
+let stat3_card = new MaterialCard()
+stat3_card.filled(MD_WARNING)
+let s3_col     = new Column(4.0)
+let s3_val     = new Text("   12", font_title, MD_ON_PRIMARY)
+let s3_lbl     = new Text("Issues", font_small, 0xDDFFFFFF)
+s3_col.add(s3_val.handle)
+s3_col.add(s3_lbl.handle)
+stat3_card.add(s3_col.handle)
+
+stats_row.add(stat1_card.handle)
+stats_row.add(stat2_card.handle)
+stats_row.add(stat3_card.handle)
+dash_screen.add(stats_row.handle)
+
+// — Section header —
+let recent_hdr = new Text("Recent Activity", font_bold, MD_ON_SURFACE)
+dash_screen.add(recent_hdr.handle)
+
+// — List items —
+let item1 = new ListItem("✓", "Deployment #42 succeeded", "2 min ago",
+                          font_bold, font, font_small)
+let item2 = new ListItem("⚠", "High memory usage on srv-3", "15 min ago",
+                          font_bold, font, font_small)
+let item3 = new ListItem("ℹ", "New user: alice@example.com", "1 hr ago",
+                          font_bold, font, font_small)
+let item4 = new ListItem("✓", "Backup completed successfully", "3 hr ago",
+                          font_bold, font, font_small)
+
+let items_card = new MaterialCard()
+let items_col  = new Column(0.0)
+items_col.add(item1.handle)
+items_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+items_col.add(item2.handle)
+items_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+items_col.add(item3.handle)
+items_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+items_col.add(item4.handle)
+items_card.add(items_col.handle)
+dash_screen.add(items_card.handle)
+
+// — Progress card —
+let prog_card = new MaterialCard()
+let prog_col  = new Column(10.0)
+let prog_hdr  = new Text("Sprint Progress", font_bold, MD_ON_SURFACE)
+prog_col.add(prog_hdr.handle)
+prog_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+
+let pb_row1 = new Row(8.0)
+pb_row1.add(widget_text("API      ", font_small, MD_ON_SURFACE_MED))
+let pb1 = new ProgressBar(0.0, 100.0, 78.0)
+pb1.set_colors(MD_SUCCESS, MD_OUTLINE_VARIANT)
+pb_row1.add(pb1.handle)
+prog_col.add(pb_row1.handle)
+
+let pb_row2 = new Row(8.0)
+pb_row2.add(widget_text("Frontend ", font_small, MD_ON_SURFACE_MED))
+let pb2 = new ProgressBar(0.0, 100.0, 55.0)
+pb2.set_colors(MD_PRIMARY, MD_OUTLINE_VARIANT)
+pb_row2.add(pb2.handle)
+prog_col.add(pb_row2.handle)
+
+let pb_row3 = new Row(8.0)
+pb_row3.add(widget_text("Testing  ", font_small, MD_ON_SURFACE_MED))
+let pb3 = new ProgressBar(0.0, 100.0, 30.0)
+pb3.set_colors(MD_WARNING, MD_OUTLINE_VARIANT)
+pb_row3.add(pb3.handle)
+prog_col.add(pb_row3.handle)
+
+prog_card.add(prog_col.handle)
+dash_screen.add(prog_card.handle)
+
+// — Bottom nav bar —
+let bottom_nav = new BottomNavBar(font_small)
+let home_tab   = bottom_nav.add_tab("⌂ Home",    font_small)
+let feed_tab   = bottom_nav.add_tab("☰ Feed",    font_small)
+let profile_tab = bottom_nav.add_tab("◉ Profile", font_small)
+bottom_nav.set_active_color(home_tab)
+dash_screen.add_bottom_bar(bottom_nav.handle)
+
+// — FAB —
+let fab = new FloatingActionButton("+", font_title)
+dash_screen.add(fab.handle)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SCREEN 3 — Profile
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let profile_screen = new Screen("Profile", 1, NAV, font_title, font)
+
+// Avatar + name
+let profile_header = new Column(8.0)
+sg_style_set_padding_uniform(profile_header.handle, 8.0)
+profile_header.set_background(MD_SURFACE)
+
+let avatar = new Avatar("JD", font_title, MD_PRIMARY)
+let name_text  = new Text("Jane Doe", font_title, MD_ON_SURFACE)
+let email_text = new Text("jane.doe@example.com", font_small, MD_ON_SURFACE_MED)
+let sep_profile = new Separator(1, MD_OUTLINE_VARIANT, 1.0)
+
+profile_header.add(avatar.handle)
+profile_header.add(name_text.handle)
+profile_header.add(email_text.handle)
+profile_header.add(sep_profile.handle)
+
+// Skills chips
+let chips_row = new Row(8.0)
+let chip1 = new Chip("Casprix", font_small)
+let chip2 = new Chip("Mobile", font_small)
+let chip3 = new Chip("Skia", font_small)
+let chip4 = new Chip("ARM64", font_small)
+chip1.select(1)
+chip3.select(1)
+chips_row.add(chip1.handle)
+chips_row.add(chip2.handle)
+chips_row.add(chip3.handle)
+chips_row.add(chip4.handle)
+
+profile_header.add(widgets_text("Skills", font_bold, MD_ON_SURFACE_MED))
+profile_header.add(chips_row.handle)
+profile_screen.add(profile_header.handle)
+
+// Settings card with switches
+let settings_card = new MaterialCard()
+let settings_col  = new Column(8.0)
+let settings_hdr  = new Text("Preferences", font_bold, MD_ON_SURFACE)
+settings_col.add(settings_hdr.handle)
+settings_col.add(widget_separator(1, MD_OUTLINE_VARIANT, 1.0))
+
+let sw1 = new Switch("Receive notifications", font, 1)
+let sw2 = new Switch("Dark mode", font, 0)
+let sw3 = new Switch("Analytics", font, 0)
+let sw4 = new Switch("Location access", font, 1)
+
+settings_col.add(sw1.handle)
+settings_col.add(sw2.handle)
+settings_col.add(sw3.handle)
+settings_col.add(sw4.handle)
+settings_card.add(settings_col.handle)
+profile_screen.add(settings_card.handle)
+
+// Action buttons row
+let actions_row   = new Row(8.0)
+let edit_btn      = new MaterialButton()
+edit_btn.filled("Edit Profile", font)
+let logout_btn    = new MaterialButton()
+logout_btn.danger("Sign Out", font)
+actions_row.add(edit_btn.handle)
+actions_row.add(logout_btn.handle)
+profile_screen.add(actions_row.handle)
+
+// Dialog — shown when "Edit Profile" is tapped
+let edit_dialog   = new Dialog("Edit Profile", font_bold, font)
+let dialog_field  = new MaterialTextField("Display Name", "Your name", font_small, font)
+let dialog_row    = new Row(8.0)
+let ok_btn        = new MaterialButton()
+ok_btn.filled("Save", font)
+let cancel_dialog = new MaterialButton()
+cancel_dialog.outlined("Cancel", font)
+dialog_row.add(ok_btn.handle)
+dialog_row.add(cancel_dialog.handle)
+edit_dialog.add_content(dialog_field.handle)
+edit_dialog.add_content(dialog_row.handle)
+
+sg_node_add_child(profile_screen.handle, edit_dialog.handle)
+
+// Snackbar — shown on save
+let snackbar = new Snackbar(profile_screen.handle)
+// snackbar.show("Profile saved!", 3.0)   ← would be called after save
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Wire activities to their screens and set the entry point
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// In the full runtime, each activity's root SGNode* is set here.
+// The C binding would be: android_activity_set_root(activity, node)
+// For now, showing how the app would be launched:
+
+app.set_main(login_activity)
+app.run()

@@ -1,0 +1,12 @@
+func add(a: int, b: int) -> int {
+    let result = a + b
+    return result
+}
+
+func main() -> int {
+    let x = 10
+    let y = 20
+    let z = add(x, y)
+    print(z)
+    return 0
+}

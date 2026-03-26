@@ -1,0 +1,222 @@
+// Casprix Async/Await Demo
+// Demonstrates modern async programming patterns
+
+import "casprix/stdlib/AsyncThread.cpx";
+import "casprix/stdlib/AsyncNetwork.cpx";
+
+// Example 1: Simple async task
+func computeExpensiveOperation() -> int {
+    // Simulate expensive computation
+    ThreadSleep(1000);
+    return 42;
+}
+
+// Example 2: Parallel task processing
+func processDataInParallel() -> void {
+    print("Starting parallel tasks...");
+
+    // Create thread pool
+    pool: ThreadPool = new ThreadPool(4);
+
+    // Submit multiple tasks
+    task1: Task = pool.submit(0);  // Callback handle
+    task2: Task = pool.submit(0);
+    task3: Task = pool.submit(0);
+
+    // Wait for all tasks
+    pool.awaitAll();
+
+    print("All parallel tasks completed!");
+    pool.shutdown();
+}
+
+// Example 3: Concurrent queue usage
+func demonstrateConcurrentQueue() -> void {
+    print("Testing concurrent queue...");
+
+    queue: ConcurrentQueue = new ConcurrentQueue(10);
+
+    // Producer adds items
+    queue.enqueue(100);
+    queue.enqueue(200);
+    queue.enqueue(300);
+
+    print("Queue size: ");
+    print(queue.getSize());
+
+    // Consumer retrieves items
+    item: int = queue.dequeue();
+    print("Dequeued: ");
+    print(item);
+}
+
+// Example 4: Thread-safe map
+func demonstrateConcurrentMap() -> void {
+    print("Testing concurrent map...");
+
+    map: ConcurrentMap = new ConcurrentMap();
+
+    // Insert key-value pairs
+    map.put("user1", 1001);
+    map.put("user2", 1002);
+    map.put("admin", 9999);
+
+    // Retrieve values
+    adminId: int = map.get("admin");
+    print("Admin ID: ");
+    print(adminId);
+
+    // Check existence
+    exists: bool = map.containsKey("user1");
+    if (exists) {
+        print("user1 exists in map");
+    }
+}
+
+// Example 5: Async HTTP request
+func demonstrateHttpClient() -> void {
+    print("Creating HTTP client...");
+
+    // Create client with fluent API
+    client: HttpClient = new HttpClient();
+    client = client.withBaseUrl("https://api.example.com");
+    client = client.withTimeout(5000);
+    client = client.withRetries(3);
+
+    // Add custom header
+    client = client.withHeader("User-Agent", "Casprix/1.0");
+
+    // Async GET request
+    promise: Promise = client.getAsync("/data");
+
+    // Wait for response (in real implementation)
+    // promise.then(handleSuccess).catch(handleError);
+
+    print("HTTP request sent!");
+}
+
+// Example 6: WebSocket real-time communication
+func demonstrateWebSocket() -> void {
+    print("Creating WebSocket connection...");
+
+    ws: WebSocket = new WebSocket("wss://echo.websocket.org");
+
+    // Connect asynchronously
+    connectPromise: Promise = ws.connectAsync();
+
+    // In real implementation:
+    // ws.onMessage(messageHandler);
+
+    print("WebSocket connecting...");
+
+    // Send message
+    ws.send("Hello WebSocket!");
+
+    ws.close();
+}
+
+// Example 7: REST API with resource builder
+func demonstrateRestApi() -> void {
+    print("Creating REST API client...");
+
+    api: RestApi = new RestApi("https://api.github.com");
+
+    // Build resource query with fluent API
+    builder: ResourceBuilder = api.resource("users");
+    builder = builder.where("location", "Seattle");
+
+    // Fetch all users
+    promise: Promise = builder.getAll();
+
+    // Create new user
+    createPromise: Promise = builder.create("{\"name\":\"John\"}");
+
+    print("REST API requests initiated!");
+}
+
+// Example 8: Barrier synchronization
+func demonstrateBarrier() -> void {
+    print("Testing barrier synchronization...");
+
+    barrier: Barrier = new Barrier(3);
+
+    // In real implementation, spawn 3 threads
+    // Each thread calls: barrier.await()
+
+    print("Barrier created for 3 threads");
+}
+
+// Example 9: Semaphore resource limiting
+func demonstrateSemaphore() -> void {
+    print("Testing semaphore...");
+
+    // Allow 3 concurrent accesses
+    sem: Semaphore = new Semaphore(3);
+
+    // Acquire permit
+    sem.acquire();
+    print("Permit acquired");
+
+    // Check available
+    available: int = sem.availablePermits();
+    print("Available permits: ");
+    print(available);
+
+    // Release permit
+    sem.release();
+}
+
+// Example 10: Read-Write lock
+func demonstrateReadWriteLock() -> void {
+    print("Testing read-write lock...");
+
+    rwlock: ReadWriteLock = new ReadWriteLock();
+
+    // Multiple readers can acquire read lock
+    rwlock.readLock();
+    print("Read lock acquired");
+    rwlock.readUnlock();
+
+    // Only one writer can acquire write lock
+    rwlock.writeLock();
+    print("Write lock acquired");
+    rwlock.writeUnlock();
+}
+
+// Main program
+print("=== Casprix Async Programming Demo ===");
+print("");
+
+print("1. Concurrent Queue:");
+demonstrateConcurrentQueue();
+print("");
+
+print("2. Concurrent Map:");
+demonstrateConcurrentMap();
+print("");
+
+print("3. HTTP Client:");
+demonstrateHttpClient();
+print("");
+
+print("4. WebSocket:");
+demonstrateWebSocket();
+print("");
+
+print("5. REST API:");
+demonstrateRestApi();
+print("");
+
+print("6. Barrier:");
+demonstrateBarrier();
+print("");
+
+print("7. Semaphore:");
+demonstrateSemaphore();
+print("");
+
+print("8. Read-Write Lock:");
+demonstrateReadWriteLock();
+print("");
+
+print("=== Demo Complete ===");

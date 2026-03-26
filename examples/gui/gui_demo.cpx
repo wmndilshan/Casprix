@@ -1,0 +1,149 @@
+// Comprehensive GUI Demo Application
+// Demonstrates all features of the Casprix GUI Library
+
+import "stdlib/GUI.cpx";
+
+func main() -> void {
+    // Create application
+    app: GUIApp = new GUIApp();
+    
+    // Create main window
+    window: Window = new Window(app, "Casprix GUI - Full Demo", 700, 550);
+    window.Create();
+    
+    // ========================================================================
+    // Create Menu Bar
+    // ========================================================================
+    
+    menuBar: Menu = new Menu();
+    
+    // File menu
+    fileMenu: Menu = new Menu();
+    fileMenu.AddItem("New", 1001);
+    fileMenu.AddItem("Open", 1002);
+    fileMenu.AddItem("Save", 1003);
+    fileMenu.AddSeparator();
+    fileMenu.AddItem("Exit", 1004);
+    menuBar.AddSubMenu("File", fileMenu);
+    
+    // Help menu
+    helpMenu: Menu = new Menu();
+    helpMenu.AddItem("About", 2001);
+    helpMenu.AddItem("Documentation", 2002);
+    menuBar.AddSubMenu("Help", helpMenu);
+    
+    // Attach menu to window
+    menuBar.AttachToWindow(window);
+    
+    // ========================================================================
+    // Create Controls - Left Column
+    // ========================================================================
+    
+    // Label for text input
+    lblName: Label = new Label(window, "Enter your name:", 20, 20, 150, 20);
+    
+    // Text box for input
+    txtName: TextBox = new TextBox(window, 20, 45, 200, 25);
+    txtName.SetText("John Doe");
+    
+    // CheckBoxes
+    lblCheck: Label = new Label(window, "Preferences:", 20, 85, 150, 20);
+    chkNotifications: CheckBox = new CheckBox(window, "Enable notifications", 20, 110, 200, 20);
+    chkAutoSave: CheckBox = new CheckBox(window, "Auto-save", 20, 135, 200, 20);
+    chkDarkMode: CheckBox = new CheckBox(window, "Dark mode", 20, 160, 200, 20);
+    
+    // Set one checked by default
+    chkNotifications.SetChecked(BST_CHECKED());
+    
+    // Radio Buttons
+    lblRadio: Label = new Label(window, "Select theme:", 20, 195, 150, 20);
+    radioModern: RadioButton = new RadioButton(window, "Modern", 20, 220, 150, 20);
+    radioClassic: RadioButton = new RadioButton(window, "Classic", 20, 245, 150, 20);
+    radioMinimal: RadioButton = new RadioButton(window, "Minimal", 20, 270, 150, 20);
+    
+    // Set one selected by default
+    radioModern.SetChecked(BST_CHECKED());
+    
+    // ========================================================================
+    // Create Controls - Middle Column
+    // ========================================================================
+    
+    // ListBox
+    lblList: Label = new Label(window, "Available items:", 250, 20, 150, 20);
+    listBox: ListBox = new ListBox(window, 250, 45, 180, 150);
+    listBox.AddItem("Item 1 - Documentation");
+    listBox.AddItem("Item 2 - Tutorials");
+    listBox.AddItem("Item 3 - Examples");
+    listBox.AddItem("Item 4 - API Reference");
+    listBox.AddItem("Item 5 - Community");
+    
+    // ComboBox
+    lblCombo: Label = new Label(window, "Select language:", 250, 210, 150, 20);
+    comboBox: ComboBox = new ComboBox(window, 250, 235, 180, 200);
+    comboBox.AddItem("English");
+    comboBox.AddItem("Spanish");
+    comboBox.AddItem("French");
+    comboBox.AddItem("German");
+    comboBox.AddItem("Japanese");
+    comboBox.SetSelectedIndex(0);
+    
+    // ========================================================================
+    // Create Controls - Right Column (Action Buttons)
+    // ========================================================================
+    
+    btnSubmit: Button = new Button(window, "Submit", 470, 45, 100, 30, 3001);
+    btnClear: Button = new Button(window, "Clear All", 470, 85, 100, 30, 3002);
+    btnTest: Button = new Button(window, "Test Controls", 470, 125, 100, 30, 3003);
+    btnAbout: Button = new Button(window, "About", 470, 165, 100, 30, 3004);
+    
+    // ========================================================================
+    // Status Bar (using Label)
+    // ========================================================================
+    
+    statusBar: Label = new Label(window, "Ready - All systems operational", 20, 320, 650, 25);
+    
+    // ========================================================================
+    // Information Display
+    // ========================================================================
+    
+    infoLabel: Label = new Label(window, "Welcome to Casprix GUI Library Demo!", 20, 360, 650, 20);
+    
+    // ========================================================================
+    // Demo Messages and Interactions
+    // ========================================================================
+    
+    // Show window
+    window.Show();
+    
+    // Show welcome message
+    ShowInfo("Welcome", "Welcome to the comprehensive Casprix GUI demo!");
+    
+    // Demonstrate checkbox state
+    checkState: int = chkNotifications.GetChecked();
+    if checkState == BST_CHECKED() {
+        statusBar.SetText("Status: Notifications are enabled");
+    } else {
+        statusBar.SetText("Status: Notifications are disabled");
+    }
+    
+    // Get list selection
+    selectedIndex: int = listBox.GetSelectedIndex();
+    
+    // Show capabilities
+    ShowInfo("Features", "This demo showcases: Windows, Menus, Buttons, Labels, TextBoxes, CheckBoxes, RadioButtons, ListBoxes, and ComboBoxes!");
+    
+    // Ask user if they want to see more info
+    response: int = AskYesNo("More Info", "Would you like to see control state information?");
+    
+    if response == 6 {  // IDYES
+        // Show control states
+        listCount: int = listBox.GetCount();
+        comboIndex: int = comboBox.GetSelectedIndex();
+        statusBar.SetText("Status: Demo active - All features working!");
+    } else {
+        statusBar.SetText("Status: Ready for interaction");
+    }
+    
+    // Run main message loop
+    app.Run();
+}

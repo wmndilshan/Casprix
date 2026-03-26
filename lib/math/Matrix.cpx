@@ -1,0 +1,135 @@
+// High-Performance Matrix Library for Casprix
+// Wraps optimized C runtime for matrix operations
+
+// External C runtime functions
+extern func nuwan_matrix_create(rows: int, cols: int) -> int;
+extern func nuwan_matrix_free(handle: int) -> void;
+extern func nuwan_matrix_get(handle: int, row: int, col: int) -> float;
+extern func nuwan_matrix_set(handle: int, row: int, col: int, value: float) -> void;
+extern func nuwan_matrix_fill(handle: int, value: float) -> void;
+extern func nuwan_matrix_copy(handle: int) -> int;
+extern func nuwan_matrix_multiply(a: int, b: int) -> int;
+extern func nuwan_matrix_add(a: int, b: int) -> int;
+extern func nuwan_matrix_subtract(a: int, b: int) -> int;
+extern func nuwan_matrix_scale(handle: int, scalar: float) -> int;
+extern func nuwan_matrix_transpose(handle: int) -> int;
+extern func nuwan_matrix_vector_multiply(m: int, v: int) -> int;
+extern func nuwan_matrix_determinant(handle: int) -> float;
+extern func nuwan_matrix_inverse(handle: int) -> int;
+extern func nuwan_matrix_identity(size: int) -> int;
+extern func nuwan_matrix_zeros(rows: int, cols: int) -> int;
+extern func nuwan_matrix_ones(rows: int, cols: int) -> int;
+
+class Matrix {
+    private handle: int;
+    private rows: int;
+    private cols: int;
+    
+    // Constructor
+    func new(rows: int, cols: int) -> Matrix {
+        this.rows = rows;
+        this.cols = cols;
+        this.handle = nuwan_matrix_create(rows, cols);
+        return this;
+    }
+    
+    // Element access
+    func get(row: int, col: int) -> float {
+        return nuwan_matrix_get(this.handle, row, col);
+    }
+    
+    func set(row: int, col: int, value: float) -> void {
+        nuwan_matrix_set(this.handle, row, col, value);
+    }
+    
+    func getRows() -> int {
+        return this.rows;
+    }
+    
+    func getCols() -> int {
+        return this.cols;
+    }
+    
+    // Fill matrix
+    func fill(value: float) -> void {
+        nuwan_matrix_fill(this.handle, value);
+    }
+    
+    // Matrix operations
+    func multiply(other: Matrix) -> Matrix {
+        result: Matrix = new Matrix(this.rows, other.cols);
+        result.handle = nuwan_matrix_multiply(this.handle, other.handle);
+        return result;
+    }
+    
+    func add(other: Matrix) -> Matrix {
+        result: Matrix = new Matrix(this.rows, this.cols);
+        result.handle = nuwan_matrix_add(this.handle, other.handle);
+        return result;
+    }
+    
+    func subtract(other: Matrix) -> Matrix {
+        result: Matrix = new Matrix(this.rows, this.cols);
+        result.handle = nuwan_matrix_subtract(this.handle, other.handle);
+        return result;
+    }
+    
+    func scale(scalar: float) -> Matrix {
+        result: Matrix = new Matrix(this.rows, this.cols);
+        result.handle = nuwan_matrix_scale(this.handle, scalar);
+        return result;
+    }
+    
+    func transpose() -> Matrix {
+        result: Matrix = new Matrix(this.cols, this.rows);
+        result.handle = nuwan_matrix_transpose(this.handle);
+        return result;
+    }
+    
+    func determinant() -> float {
+        return nuwan_matrix_determinant(this.handle);
+    }
+    
+    func inverse() -> Matrix {
+        result: Matrix = new Matrix(this.rows, this.cols);
+        result.handle = nuwan_matrix_inverse(this.handle);
+        return result;
+    }
+    
+    // Matrix-vector multiply
+    func multiplyVector(vec: Vector) -> Vector {
+        result: Vector = new Vector(this.rows);
+        result.handle = nuwan_matrix_vector_multiply(this.handle, vec.handle);
+        return result;
+    }
+    
+    func copy() -> Matrix {
+        result: Matrix = new Matrix(this.rows, this.cols);
+        result.handle = nuwan_matrix_copy(this.handle);
+        return result;
+    }
+    
+    // Factory methods
+    static func identity(size: int) -> Matrix {
+        result: Matrix = new Matrix(size, size);
+        result.handle = nuwan_matrix_identity(size);
+        return result;
+    }
+    
+    static func zeros(rows: int, cols: int) -> Matrix {
+        result: Matrix = new Matrix(rows, cols);
+        result.handle = nuwan_matrix_zeros(rows, cols);
+        return result;
+    }
+    
+    static func ones(rows: int, cols: int) -> Matrix {
+        result: Matrix = new Matrix(rows, cols);
+        result.handle = nuwan_matrix_ones(rows, cols);
+        return result;
+    }
+    
+    // Destructor
+    func destroy() -> void {
+        nuwan_matrix_free(this.handle);
+    }
+}

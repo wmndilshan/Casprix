@@ -1,0 +1,74 @@
+// Casprix Standard Library - Threading Module
+// Provides high-level threading capabilities
+
+class Thread {
+    handle: int;      // Opaque handle to C thread structure
+    isRunning: bool;  // Thread status
+
+    // Create a new thread (constructor)
+    // Note: In practice, would pass function pointer
+    func new() -> Thread {
+        // Allocate thread structure
+        // C binding: nuwan_thread_create
+        return this;
+    }
+
+    // Join thread (wait for completion)
+    func join() -> void {
+        // C binding: nuwan_thread_join(this.handle)
+    }
+
+    // Detach thread (run independently)
+    func detach() -> void {
+        // C binding: nuwan_thread_detach(this.handle)
+    }
+
+    // Check if thread is running
+    func isActive() -> bool {
+        return this.isRunning;
+    }
+}
+
+class Mutex {
+    handle: int;      // Opaque handle to C mutex structure
+    locked: bool;     // Lock status
+
+    func new() -> Mutex {
+        // C binding: nuwan_mutex_create
+        this.locked = false;
+        return this;
+    }
+
+    // Acquire lock (blocking)
+    func lock() -> void {
+        // C binding: nuwan_mutex_lock(this.handle)
+        this.locked = true;
+    }
+
+    // Release lock
+    func unlock() -> void {
+        // C binding: nuwan_mutex_unlock(this.handle)
+        this.locked = false;
+    }
+
+    // Try to acquire lock (non-blocking)
+    func tryLock() -> bool {
+        // C binding: nuwan_mutex_trylock(this.handle)
+        // Returns true if lock acquired, false otherwise
+        return false;
+    }
+}
+
+// static thread utilities
+func ThreadSleep(milliseconds: int) -> void {
+    // C binding: nuwan_thread_sleep(milliseconds)
+}
+
+func ThreadYield() -> void {
+    // C binding: nuwan_thread_yield()
+}
+
+func ThreadCurrentId() -> int {
+    // C binding: nuwan_thread_current_id()
+    return 0;
+}

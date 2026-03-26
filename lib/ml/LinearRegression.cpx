@@ -1,0 +1,51 @@
+// Machine Learning - Linear Regression for Casprix
+
+// External ML runtime functions
+extern func nuwan_ml_linear_regression_create(features: int) -> int;
+extern func nuwan_ml_linear_regression_free(handle: int) -> void;
+extern func nuwan_ml_linear_regression_train(handle: int, X: int, y: int, lr: float, epochs: int) -> void;
+extern func nuwan_ml_linear_regression_predict(handle: int, x: int) -> float;
+extern func nuwan_ml_linear_regression_predict_batch(handle: int, X: int) -> int;
+extern func nuwan_ml_linear_regression_score(handle: int, X: int, y: int) -> float;
+
+class LinearRegression {
+    private handle: int;
+    private features: int;
+    private trained: bool;
+    
+    func new(features: int) -> LinearRegression {
+        this.features = features;
+        this.handle = nuwan_ml_linear_regression_create(features);
+        this.trained = false;
+        return this;
+    }
+    
+    // Train model using gradient descent
+    func train(X: Matrix, y: Vector, learningRate: float, epochs: int) -> void {
+        nuwan_ml_linear_regression_train(this.handle, X.handle, y.handle, 
+                                          learningRate, epochs);
+        this.trained = true;
+    }
+    
+    // Predict single sample
+    func predict(x: Vector) -> float {
+        return nuwan_ml_linear_regression_predict(this.handle, x.handle);
+    }
+    
+    // Predict batch of samples
+    func predictBatch(X: Matrix) -> Vector {
+        result: Vector = new Vector(X.getRows());
+        result.handle = nuwan_ml_linear_regression_predict_batch(this.handle, X.handle);
+        return result;
+    }
+    
+    // Evaluate model (R² score)
+    func score(X: Matrix, y: Vector) -> float {
+        return nuwan_ml_linear_regression_score(this.handle, X.handle, y.handle);
+    }
+    
+    // Cleanup
+    func destroy() -> void {
+        nuwan_ml_linear_regression_free(this.handle);
+    }
+}

@@ -1,0 +1,87 @@
+// Hello Skia UI — Demo application for Casprix Skia framework
+// // Creates a window with a column layout containing:
+//   - Title text
+//   - Description text
+//   - Text input field
+//   - Row of buttons
+//   - Checkbox and slider
+
+import "lib/skia/ui"
+
+func main() -> int {
+    // Create application window
+    let app = new App("Hello Casperix", 800, 600)
+    let font = app.get_font()
+    let title_font = skia_font_create("Segoe UI", 28.0)
+    skia_font_set_bold(title_font, 1)
+
+    // Build UI tree
+    let root = new Column(16.0)
+    root.set_padding(32.0)
+    root.set_background(0xFFF5F5F5)
+
+    // Title
+    let title = new Text("Hello, Casperix!", title_font, 0xFF212121)
+    root.add(title.handle)
+
+    // Subtitle
+    let subtitle = new Text("A Skia-rendered UI framework for Casprix", font, 0xFF757575)
+    root.add(subtitle.handle)
+
+    // Separator
+    let sep = new Separator(1, 0xFFBDBDBD, 1.0)
+    root.add(sep.handle)
+
+    // Card with form inputs
+    let card = new Card()
+    let form = new Column(12.0)
+
+    let name_label = new Text("Name:", font, 0xFF333333)
+    form.add(name_label.handle)
+
+    let name_input = new TextInput("Enter your name...", font)
+    form.add(name_input.handle)
+
+    let email_label = new Text("Email:", font, 0xFF333333)
+    form.add(email_label.handle)
+
+    let email_input = new TextInput("user@example.com", font)
+    form.add(email_input.handle)
+
+    card.add(form.handle)
+    root.add(card.handle)
+
+    // Button row
+    let buttons = new Row(12.0)
+
+    let submit_btn = new Button("Submit", font)
+    submit_btn.set_background(0xFF4285F4)
+    submit_btn.set_border(0xFF3367D6, 1.0, 6.0)
+    buttons.add(submit_btn.handle)
+
+    let cancel_btn = new Button("Cancel", font)
+    cancel_btn.set_background(0xFF757575)
+    cancel_btn.set_border(0xFF616161, 1.0, 6.0)
+    buttons.add(cancel_btn.handle)
+
+    root.add(buttons.handle)
+
+    // Checkbox
+    let checkbox = new Checkbox("I agree to the terms", font, 0)
+    root.add(checkbox.handle)
+
+    // Slider
+    let slider_label = new Text("Volume:", font, 0xFF333333)
+    root.add(slider_label.handle)
+
+    let volume = new Slider(0.0, 100.0, 50.0)
+    root.add(volume.handle)
+
+    // Set root and run
+    app.set_root(root.handle)
+    app.run()
+
+    // Cleanup
+    app.destroy()
+    return 0
+}

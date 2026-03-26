@@ -1,0 +1,48 @@
+// Thread Library - Multi-threading support
+// Provides thread creation and synchronization
+
+// Thread handle type (represented as integer)
+// Thread operations
+
+// Create a new thread
+func ThreadCreate(func: func() -> void) -> int {
+    // TODO: Implement with CreateThread (Windows) or pthread (Linux)
+    // Returns thread handle or -1 on error
+    return -1;
+}
+
+// Wait for thread to complete
+func ThreadJoin(handle: int) -> bool {
+    // TODO: Implement with WaitForSingleObject or pthread_join
+    return false;
+}
+
+// Get current thread ID
+func ThreadGetId() -> int {
+    // TODO: Implement with GetCurrentThreadId or pthread_self
+    return 0;
+}
+
+// Sleep for milliseconds
+func ThreadSleep(ms: int) -> void {
+    // TODO: Implement with Sleep (Windows) or usleep (Linux)
+}
+
+// Mutex operations (placeholder)
+func MutexCreate() -> int {
+    // TODO: Implement mutex creation
+    return -1;
+}
+
+func MutexLock(mutex: int) -> bool {
+    // TODO: Implement mutex locking
+    return false;
+}
+
+func MutexUnlock(mutex: int) -> bool {
+    // TODO: Implement mutex unlocking
+    return false;
+}
+
+
+

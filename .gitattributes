@@ -1,0 +1,165 @@
+# =============================================================
+# Casprix — .gitattributes
+# =============================================================
+# Ensures consistent line endings and diff behaviour across
+# platforms (Windows / Linux / macOS).
+
+# Default: auto-detect text vs binary
+* text=auto
+
+# -------------------------------------------------------------
+# C / C++ source
+# -------------------------------------------------------------
+*.c     text eol=lf diff=c
+*.h     text eol=lf diff=c
+*.cpp   text eol=lf diff=cpp
+*.hpp   text eol=lf diff=cpp
+*.cc    text eol=lf diff=cpp
+*.hh    text eol=lf diff=cpp
+
+# -------------------------------------------------------------
+# Casprix language source
+# -------------------------------------------------------------
+*.cpx   text eol=lf diff=casprix
+*.nd    text eol=lf diff=casprix
+
+# -------------------------------------------------------------
+# Assembly
+# -------------------------------------------------------------
+*.asm   text eol=lf
+*.s     text eol=lf
+*.S     text eol=lf
+
+# -------------------------------------------------------------
+# Build system
+# -------------------------------------------------------------
+CMakeLists.txt  text eol=lf
+*.cmake         text eol=lf
+Makefile        text eol=lf
+makefile        text eol=lf
+GNUmakefile     text eol=lf
+
+# -------------------------------------------------------------
+# Shell / scripts
+# -------------------------------------------------------------
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.zsh       text eol=lf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# -------------------------------------------------------------
+# Web / config / data
+# -------------------------------------------------------------
+*.json      text eol=lf diff=json
+*.jsonc     text eol=lf diff=json
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.toml      text eol=lf
+*.xml       text eol=lf diff=xml
+*.html      text eol=lf diff=html
+*.css       text eol=lf
+*.svg       text eol=lf diff=html
+
+# -------------------------------------------------------------
+# Documentation
+# -------------------------------------------------------------
+*.md        text eol=lf diff=markdown
+*.rst       text eol=lf
+*.txt       text eol=lf
+*.adoc      text eol=lf
+LICENSE     text eol=lf
+CHANGELOG*  text eol=lf
+README*     text eol=lf
+CONTRIBUTING* text eol=lf
+
+# -------------------------------------------------------------
+# IDE / tooling config (always LF)
+# -------------------------------------------------------------
+.editorconfig   text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+.clang-format   text eol=lf
+.clang-tidy     text eol=lf
+
+# -------------------------------------------------------------
+# Binary files — never mangle line endings, never diff as text
+# -------------------------------------------------------------
+
+# Images
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.bmp     binary
+*.tiff    binary
+*.webp    binary
+
+# Fonts
+*.ttf     binary
+*.otf     binary
+*.woff    binary
+*.woff2   binary
+
+# Archives
+*.zip     binary
+*.tar     binary
+*.tar.gz  binary
+*.tgz     binary
+*.tar.bz2 binary
+*.7z      binary
+*.gz      binary
+*.bz2     binary
+*.xz      binary
+*.rar     binary
+*.jar     binary
+
+# Compiled / linked objects
+*.o       binary
+*.obj     binary
+*.a       binary
+*.lib     binary
+*.so      binary
+*.dll     binary
+*.dylib   binary
+*.exe     binary
+*.pdb     binary
+*.ilk     binary
+
+# NASM assembled object
+*.obj.asm binary
+
+# Model weights & data blobs
+*.bin     binary
+*.ckpt    binary
+*.pt      binary
+*.pth     binary
+*.safetensors binary
+*.npy     binary
+*.npz     binary
+*.h5      binary
+
+# VS Code extension
+*.vsix    binary
+
+# Android
+*.apk     binary
+*.aab     binary
+*.dex     binary
+
+# Gradle JARs
+*.jar     binary
+gradle/wrapper/gradle-wrapper.jar binary
+
+# -------------------------------------------------------------
+# Export-ignore: exclude from `git archive` tarballs
+# -------------------------------------------------------------
+.github             export-ignore
+.gitignore          export-ignore
+.gitattributes      export-ignore
+.editorconfig       export-ignore
+.clang-format       export-ignore
+tests/              export-ignore
+docs/               export-ignore

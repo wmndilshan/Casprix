@@ -1,0 +1,98 @@
+﻿// Matrix Operations Demo - Linear Algebra Example
+
+import "lib/math/Vector.cpx"
+import "lib/math/Matrix.cpx"
+import "lib/math/Stats.cpx"
+
+func main() -> void {
+    print("=== Matrix Operations Demo ===");
+    
+    // Create matrices
+    A: Matrix = new Matrix(3, 3);
+    B: Matrix = new Matrix(3, 3);
+    
+    print("Initializing matrices...");
+    
+    // Fill matrix A
+    A.set(0, 0, 1.0);
+    A.set(0, 1, 2.0);
+    A.set(0, 2, 3.0);
+    A.set(1, 0, 4.0);
+    A.set(1, 1, 5.0);
+    A.set(1, 2, 6.0);
+    A.set(2, 0, 7.0);
+    A.set(2, 1, 8.0);
+    A.set(2, 2, 9.0);
+    
+    // Fill matrix B (identity)
+    B = Matrix.identity(3);
+    
+    // Matrix multiplication
+    print("");
+    print("Matrix Multiplication A * B:");
+    C: Matrix = A.multiply(B);
+    
+    for (i: int = 0; i < 3; i = i + 1) {
+        for (j: int = 0; j < 3; j = j + 1) {
+            val: float = C.get(i, j);
+            print(val);
+        }
+    }
+    
+    // Matrix transpose
+    print("");
+    print("Transpose of A:");
+    At: Matrix = A.transpose();
+    
+    for (i: int = 0; i < 3; i = i + 1) {
+        for (j: int = 0; j < 3; j = j + 1) {
+            val: float = At.get(i, j);
+            print(val);
+        }
+    }
+    
+    // Vector operations
+    print("");
+    print("=== Vector Operations ===");
+    
+    v1: Vector = new Vector(3);
+    v2: Vector = new Vector(3);
+    
+    v1.set(0, 1.0);
+    v1.set(1, 2.0);
+    v1.set(2, 3.0);
+    
+    v2.set(0, 4.0);
+    v2.set(1, 5.0);
+    v2.set(2, 6.0);
+    
+    // Dot product
+    dot: float = v1.dot(v2);
+    print("Dot product v1 · v2:");
+    print(dot);
+    
+    // Vector magnitude
+    mag: float = v1.magnitude();
+    print("Magnitude of v1:");
+    print(mag);
+    
+    // Vector addition
+    v3: Vector = v1.add(v2);
+    print("v1 + v2:");
+    for (i: int = 0; i < 3; i = i + 1) {
+        val: float = v3.get(i);
+        print(val);
+    }
+    
+    // Cleanup
+    A.destroy();
+    B.destroy();
+    C.destroy();
+    At.destroy();
+    v1.destroy();
+    v2.destroy();
+    v3.destroy();
+    
+    print("");
+    print("Demo complete!");
+}

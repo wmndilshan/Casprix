@@ -1,0 +1,431 @@
+// Casprix Modern GUI Library - React-like Component System
+// Declarative UI with state management and reactive updates
+
+// Component base class
+class Component {
+    handle: int;       // Native widget handle
+    state: int;        // State object handle
+    props: int;        // Properties handle
+    children: int;     // Array of child components
+    parent: Component;
+    mounted: bool;
+
+    func new() -> Component {
+        this.mounted = false;
+        return this;
+    }
+
+    // Lifecycle methods
+    func onCreate() -> void {
+        // Override to initialize component
+    }
+
+    func onMount() -> void {
+        // Called when component is added to DOM
+        this.mounted = true;
+    }
+
+    func onUpdate() -> void {
+        // Called when state changes
+    }
+
+    func onDestroy() -> void {
+        // Cleanup
+        this.mounted = false;
+    }
+
+    // State management
+    func setState(newState: int) -> void {
+        this.state = newState;
+        this.onUpdate();
+        this.render();
+    }
+
+    func getState() -> int {
+        return this.state;
+    }
+
+    // Rendering
+    func render() -> void {
+        // Override to define component structure
+    }
+
+    func addChild(child: Component) -> void {
+        child.parent = this;
+        child.onMount();
+    }
+}
+
+// Application - root component
+class App {
+    window: Window;
+    root: Component;
+    theme: Theme;
+
+    func new(title: string, width: int, height: int) -> App {
+        this.window = new Window(title, width, height);
+        this.theme = new Theme();
+        return this;
+    }
+
+    func setRoot(component: Component) -> App {
+        this.root = component;
+        return this;
+    }
+
+    func withTheme(appTheme: Theme) -> App {
+        this.theme = appTheme;
+        return this;
+    }
+
+    func run() -> void {
+        GUIInit();
+        this.window.show();
+        this.root.onMount();
+        GUIRun();
+        GUICleanup();
+    }
+}
+
+// Theme system
+class Theme {
+    primaryColor: Color;
+    secondaryColor: Color;
+    backgroundColor: Color;
+    textColor: Color;
+    fontSize: int;
+    fontFamily: string;
+
+    func new() -> Theme {
+        // Default theme
+        this.primaryColor = new Color(66, 133, 244);    // Blue
+        this.secondaryColor = new Color(52, 168, 83);   // Green
+        this.backgroundColor = new Color(255, 255, 255); // White
+        this.textColor = new Color(0, 0, 0);            // Black
+        this.fontSize = 14;
+        this.fontFamily = "Arial";
+        return this;
+    }
+
+    func dark() -> Theme {
+        darkTheme: Theme = new Theme();
+        darkTheme.backgroundColor = new Color(33, 33, 33);
+        darkTheme.textColor = new Color(255, 255, 255);
+        return darkTheme;
+    }
+}
+
+// Layout components
+class Container extends Component {
+    direction: int;    // 0=horizontal, 1=vertical
+    padding: int;
+    spacing: int;
+
+    func new() -> Container {
+        this.direction = 1;  // Vertical by default
+        this.padding = 10;
+        this.spacing = 5;
+        return this;
+    }
+
+    func horizontal() -> Container {
+        this.direction = 0;
+        return this;
+    }
+
+    func vertical() -> Container {
+        this.direction = 1;
+        return this;
+    }
+
+    func withPadding(pad: int) -> Container {
+        this.padding = pad;
+        return this;
+    }
+
+    func withSpacing(space: int) -> Container {
+        this.spacing = space;
+        return this;
+    }
+}
+
+class FlexBox extends Component {
+    justifyContent: int;  // 0=start, 1=center, 2=end, 3=space-between
+    alignItems: int;      // 0=start, 1=center, 2=end, 3=stretch
+    flexWrap: bool;
+
+    func new() -> FlexBox {
+        this.justifyContent = 0;
+        this.alignItems = 3;
+        this.flexWrap = false;
+        return this;
+    }
+
+    func center() -> FlexBox {
+        this.justifyContent = 1;
+        this.alignItems = 1;
+        return this;
+    }
+
+    func spaceBetween() -> FlexBox {
+        this.justifyContent = 3;
+        return this;
+    }
+
+    func wrap() -> FlexBox {
+        this.flexWrap = true;
+        return this;
+    }
+}
+
+// Modern widgets
+class Card extends Component {
+    title: string;
+    content: string;
+    elevation: int;
+    cornerRadius: int;
+
+    func new(cardTitle: string) -> Card {
+        this.title = cardTitle;
+        this.elevation = 2;
+        this.cornerRadius = 8;
+        return this;
+    }
+
+    func withContent(text: string) -> Card {
+        this.content = text;
+        return this;
+    }
+
+    func withElevation(elev: int) -> Card {
+        this.elevation = elev;
+        return this;
+    }
+}
+
+class TextField extends Component {
+    value: string;
+    placeholder: string;
+    password: bool;
+    onChanged: int;    // Callback
+
+    func new(hint: string) -> TextField {
+        this.placeholder = hint;
+        this.password = false;
+        this.value = "";
+        return this;
+    }
+
+    func asPassword() -> TextField {
+        this.password = true;
+        return this;
+    }
+
+    func getValue() -> string {
+        return this.value;
+    }
+
+    func onChange(callback: int) -> TextField {
+        this.onChanged = callback;
+        return this;
+    }
+}
+
+class IconButton extends Component {
+    icon: string;
+    tooltip: string;
+    onClick: int;
+
+    func new(iconName: string) -> IconButton {
+        this.icon = iconName;
+        return this;
+    }
+
+    func withTooltip(tip: string) -> IconButton {
+        this.tooltip = tip;
+        return this;
+    }
+
+    func onPress(callback: int) -> IconButton {
+        this.onClick = callback;
+        return this;
+    }
+}
+
+// ListView for scrollable lists
+class ListView extends Component {
+    items: int;        // Array handle
+    itemCount: int;
+    selectedIndex: int;
+    onItemClick: int;
+
+    func new() -> ListView {
+        this.itemCount = 0;
+        this.selectedIndex = 0;  // -1 for none
+        return this;
+    }
+
+    func addItem(item: string) -> ListView {
+        // C binding: listview_add_item(this.handle, item)
+        this.itemCount = this.itemCount;  // + 1
+        return this;
+    }
+
+    func setItems(itemArray: int, count: int) -> ListView {
+        this.items = itemArray;
+        this.itemCount = count;
+        return this;
+    }
+
+    func onItemSelected(callback: int) -> ListView {
+        this.onItemClick = callback;
+        return this;
+    }
+
+    func getSelected() -> int {
+        return this.selectedIndex;
+    }
+}
+
+// TabView for multiple pages
+class TabView extends Component {
+    tabs: int;         // Array of tab names
+    tabCount: int;
+    activeTab: int;
+    onTabChange: int;
+
+    func new() -> TabView {
+        this.tabCount = 0;
+        this.activeTab = 0;
+        return this;
+    }
+
+    func addTab(name: string, content: Component) -> TabView {
+        // C binding: tabview_add_tab(this.handle, name, content)
+        this.tabCount = this.tabCount;  // + 1
+        return this;
+    }
+
+    func setActiveTab(index: int) -> void {
+        this.activeTab = index;
+        // C binding: tabview_set_active(this.handle, index)
+    }
+
+    func onTabChanged(callback: int) -> TabView {
+        this.onTabChange = callback;
+        return this;
+    }
+}
+
+// Dialog for modal popups
+class Dialog extends Component {
+    title: string;
+    message: string;
+    buttons: int;      // Array of button labels
+    buttonCount: int;
+    result: int;
+
+    func new(dialogTitle: string, msg: string) -> Dialog {
+        this.title = dialogTitle;
+        this.message = msg;
+        this.buttonCount = 0;
+        return this;
+    }
+
+    func addButton(label: string) -> Dialog {
+        // C binding: dialog_add_button(this.handle, label)
+        this.buttonCount = this.buttonCount;  // + 1
+        return this;
+    }
+
+    func show() -> int {
+        // C binding: dialog_show_modal(this.handle)
+        // Returns index of clicked button
+        return this.result;
+    }
+
+    // Convenience methods
+    func alert(msg: string) -> void {
+        // static helper for simple alerts
+        // C binding: dialog_alert(msg)
+    }
+
+    func confirm(msg: string) -> bool {
+        // static helper for yes/no dialogs
+        // C binding: dialog_confirm(msg)
+        return false;
+    }
+}
+
+// DataBinding for reactive updates
+class Binding {
+    value: int;
+    observers: int;    // Array of callback handles
+    observerCount: int;
+
+    func new(initialValue: int) -> Binding {
+        this.value = initialValue;
+        this.observerCount = 0;
+        return this;
+    }
+
+    func setValue(newValue: int) -> void {
+        this.value = newValue;
+        this.notifyObservers();
+    }
+
+    func getValue() -> int {
+        return this.value;
+    }
+
+    func observe(callback: int) -> void {
+        // C binding: binding_add_observer(this.handle, callback)
+        this.observerCount = this.observerCount;  // + 1
+    }
+
+    func notifyObservers() -> void {
+        // C binding: binding_notify(this.handle)
+        // Calls all registered observers
+    }
+}
+
+// Animation support
+class Animation {
+    duration: int;     // Milliseconds
+    easing: int;       // 0=linear, 1=easeIn, 2=easeOut, 3=easeInOut
+    running: bool;
+    onUpdate: int;
+    onComplete: int;
+
+    func new(durationMs: int) -> Animation {
+        this.duration = durationMs;
+        this.easing = 0;
+        this.running = false;
+        return this;
+    }
+
+    func withEasing(easingType: int) -> Animation {
+        this.easing = easingType;
+        return this;
+    }
+
+    func onFrame(callback: int) -> Animation {
+        this.onUpdate = callback;
+        return this;
+    }
+
+    func onFinish(callback: int) -> Animation {
+        this.onComplete = callback;
+        return this;
+    }
+
+    func start() -> void {
+        // C binding: animation_start(this.handle)
+        this.running = true;
+    }
+
+    func stop() -> void {
+        // C binding: animation_stop(this.handle)
+        this.running = false;
+    }
+}

@@ -1,0 +1,46 @@
+// Machine Learning - K-Means Clustering for Casprix
+
+// External K-means functions
+extern func nuwan_ml_kmeans_create(k: int, features: int) -> int;
+extern func nuwan_ml_kmeans_free(handle: int) -> void;
+extern func nuwan_ml_kmeans_train(handle: int, X: int, maxIters: int) -> void;
+extern func nuwan_ml_kmeans_predict(handle: int, x: int) -> int;
+extern func nuwan_ml_kmeans_get_centroids(handle: int) -> int;
+
+class KMeans {
+    private handle: int;
+    private k: int;
+    private features: int;
+    private trained: bool;
+    
+    func new(k: int, features: int) -> KMeans {
+        this.k = k;
+        this.features = features;
+        this.handle = nuwan_ml_kmeans_create(k, features);
+        this.trained = false;
+        return this;
+    }
+    
+    // Train clustering model
+    func train(X: Matrix, maxIterations: int) -> void {
+        nuwan_ml_kmeans_train(this.handle, X.handle, maxIterations);
+        this.trained = true;
+    }
+    
+    // Predict cluster for single point
+    func predict(x: Vector) -> int {
+        return nuwan_ml_kmeans_predict(this.handle, x.handle);
+    }
+    
+    // Get cluster centroids
+    func getCentroids() -> Matrix {
+        result: Matrix = new Matrix(this.k, this.features);
+        result.handle = nuwan_ml_kmeans_get_centroids(this.handle);
+        return result;
+    }
+    
+    // Cleanup
+    func destroy() -> void {
+        nuwan_ml_kmeans_free(this.handle);
+    }
+}

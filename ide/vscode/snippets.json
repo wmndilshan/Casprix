@@ -1,0 +1,234 @@
+{
+    "func": {
+        "prefix": "func",
+        "body": [
+            "func ${1:name}(${2:params}) -> ${3:void} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Define a function"
+    },
+    "func_return": {
+        "prefix": "funcr",
+        "body": [
+            "func ${1:name}(${2:params}) -> ${3:int} {",
+            "\t$0",
+            "\treturn ${4:result}",
+            "}"
+        ],
+        "description": "Define a function with return"
+    },
+    "async_func": {
+        "prefix": "afunc",
+        "body": [
+            "async func ${1:name}(${2:params}) -> ${3:void} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Define an async function"
+    },
+    "class": {
+        "prefix": "class",
+        "body": [
+            "class ${1:Name} {",
+            "\t${2:let field: int;}",
+            "",
+            "\tfunc ${3:method}() -> ${4:void} {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "Define a class"
+    },
+    "class_extends": {
+        "prefix": "classe",
+        "body": [
+            "class ${1:Name} extends ${2:Base} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Define a class that extends another"
+    },
+    "struct": {
+        "prefix": "struct",
+        "body": [
+            "struct ${1:Name} {",
+            "\t${2:field}: ${3:int},",
+            "\t$0",
+            "}"
+        ],
+        "description": "Define a struct"
+    },
+    "trait": {
+        "prefix": "trait",
+        "body": [
+            "trait ${1:Name} {",
+            "\tfunc ${2:method}(${3:}) -> ${4:void}",
+            "\t$0",
+            "}"
+        ],
+        "description": "Define a trait"
+    },
+    "impl": {
+        "prefix": "impl",
+        "body": [
+            "impl ${1:Trait} for ${2:Type} {",
+            "\tfunc ${3:method}(${4:}) -> ${5:void} {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "Implement a trait"
+    },
+    "enum": {
+        "prefix": "enum",
+        "body": [
+            "enum ${1:Name} {",
+            "\t${2:Variant1},",
+            "\t${3:Variant2},",
+            "\t$0",
+            "}"
+        ],
+        "description": "Define an enum"
+    },
+    "let": {
+        "prefix": "let",
+        "body": [
+            "let ${1:name}: ${2:int} = ${3:0}"
+        ],
+        "description": "Declare an immutable variable"
+    },
+    "letmut": {
+        "prefix": "letm",
+        "body": [
+            "let mut ${1:name}: ${2:int} = ${3:0}"
+        ],
+        "description": "Declare a mutable variable"
+    },
+    "if": {
+        "prefix": "if",
+        "body": [
+            "if ${1:condition} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "If statement"
+    },
+    "if_else": {
+        "prefix": "ife",
+        "body": [
+            "if ${1:condition} {",
+            "\t$2",
+            "} else {",
+            "\t$0",
+            "}"
+        ],
+        "description": "If-else statement"
+    },
+    "for": {
+        "prefix": "for",
+        "body": [
+            "for ${1:i} in ${2:0}..${3:n} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "For-in range loop"
+    },
+    "foreach": {
+        "prefix": "each",
+        "body": [
+            "each ${1:item} in ${2:collection} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "For-each loop over a collection"
+    },
+    "while": {
+        "prefix": "while",
+        "body": [
+            "while ${1:condition} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "While loop"
+    },
+    "match": {
+        "prefix": "match",
+        "body": [
+            "match ${1:value} {",
+            "\t${2:pattern} => ${3:result},",
+            "\t_ => $0",
+            "}"
+        ],
+        "description": "Match expression"
+    },
+    "try_catch": {
+        "prefix": "try",
+        "body": [
+            "try {",
+            "\t$1",
+            "} catch ${2:err} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Try-catch block"
+    },
+    "print": {
+        "prefix": "print",
+        "body": [
+            "print(\"${1:message}\")"
+        ],
+        "description": "Print a message"
+    },
+    "println": {
+        "prefix": "println",
+        "body": [
+            "println(\"${1:message}\")"
+        ],
+        "description": "Print a message with newline"
+    },
+    "printf": {
+        "prefix": "printf",
+        "body": [
+            "printf(\"${1:%s}\\n\", ${2:value})"
+        ],
+        "description": "Formatted print"
+    },
+    "import": {
+        "prefix": "import",
+        "body": [
+            "import ${1:module}"
+        ],
+        "description": "Import a module"
+    },
+    "import_from": {
+        "prefix": "importf",
+        "body": [
+            "import ${2:item} from ${1:module}"
+        ],
+        "description": "Import specific items from a module"
+    },
+    "todo": {
+        "prefix": "todo",
+        "body": [
+            "// TODO: $0"
+        ],
+        "description": "TODO comment"
+    },
+    "fixme": {
+        "prefix": "fixme",
+        "body": [
+            "// FIXME: $0"
+        ],
+        "description": "FIXME comment"
+    },
+    "region": {
+        "prefix": "region",
+        "body": [
+            "// #region ${1:name}",
+            "$0",
+            "// #endregion"
+        ],
+        "description": "Foldable code region"
+    }
+}

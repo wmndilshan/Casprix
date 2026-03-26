@@ -1,0 +1,47 @@
+// Test P0/P1 syntax additions
+
+// 1. const declaration
+const PI = 3.14159
+const MAX_SIZE: int = 100
+
+// 2. let declaration (existing)
+let x: int = 42
+
+// 3. func with optional -> void (no return type annotation!)
+func greet(name: string) {
+    print(name)
+}
+
+// 4. func with explicit return type
+func add(a: int, b: int) -> int {
+    return a + b
+}
+
+// 5. struct declaration
+struct Point {
+    x: int
+    y: int
+}
+
+// 6. impl block
+impl Point {
+    func distance(self: Point) -> float {
+        return 0.0
+    }
+}
+
+// 7. impl trait for type
+trait Printable {
+    func to_string(self: Printable) -> string;
+}
+
+impl Printable for Point {
+    func to_string(self: Point) -> string {
+        return "Point"
+    }
+}
+
+// 8. Call test
+let result: int = add(10, 20)
+print(result)
+greet("world")

@@ -1,0 +1,43 @@
+// Casperix Example: Concurrent Channel Communication
+// Planned surface demo; async/await/spawn are not accepted by the current parser yet.
+
+import "std/async"
+import "std/concurrent/channel"
+
+async func producer(ch: Channel<int>, start: int, count: int) -> void {
+    for i in start..(start + count) {
+        print("Producer sending: ")
+        print(i)
+        ch.send(i)
+    }
+    ch.close()
+}
+
+async func consumer(ch: Channel<int>, id: int) -> void {
+    while let value = ch.recv() {
+        print("Consumer ")
+        print(id)
+        print(" received: ")
+        print(value)
+    }
+}
+
+async func main() -> int {
+    // Create buffered channel
+    let ch = Channel<int>.new(capacity: 10)
+    
+    // Spawn multiple producers
+    spawn { await producer(ch, 0, 10) }
+    spawn { await producer(ch, 100, 10) }
+    
+    // Spawn multiple consumers
+    spawn { await consumer(ch, 1) }
+    spawn { await consumer(ch, 2) }
+    spawn { await consumer(ch, 3) }
+    
+    // Wait for all tasks
+    await all
+    
+    print("All tasks completed!")
+    return 0
+}

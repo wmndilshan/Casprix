@@ -1,0 +1,15 @@
+let base: int = 10;
+
+let add_base = |x: int| => x + base;
+print(add_base(5));
+
+let again = add_base;
+print(again(7));
+
+let scale: int = 3;
+let mul = |x: int| -> int {
+    let y: int = x * scale;
+    return y;
+};
+
+print(mul(4));

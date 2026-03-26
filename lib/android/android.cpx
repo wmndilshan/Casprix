@@ -1,0 +1,859 @@
+// Android Framework for ND/Casprix
+// lib/android/android.cpx — High-level Material Design UI framework
+// 
+// Import path: import "lib/android/android"
+// 
+// Provides: ActivityManager, Screen, AppBar, BottomNavBar,
+//           MaterialButton, MaterialCard, MaterialTextField,
+//           FloatingActionButton, ListItem, Snackbar, Dialog,
+//           Switch, Chip, Avatar, MaterialTheme
+
+import "lib/skia/ui"
+
+// ============================================================================
+// C Runtime Bindings (android_runtime.c)
+// ============================================================================
+
+extern func android_app_create(name: string, width: i64, height: i64) -> i64
+extern func android_app_destroy(app: i64) -> void
+extern func android_app_get_nav(app: i64) -> i64
+extern func android_app_get_sg_app(app: i64) -> i64
+extern func android_app_set_main_activity(app: i64, activity: i64) -> void
+extern func android_app_run(app: i64) -> void
+extern func android_app_quit(app: i64) -> void
+extern func android_app_get_safe_inset_top(app: i64) -> i64
+extern func android_app_get_safe_inset_right(app: i64) -> i64
+extern func android_app_get_safe_inset_bottom(app: i64) -> i64
+extern func android_app_get_safe_inset_left(app: i64) -> i64
+
+extern func android_activity_create(name: string) -> i64
+extern func android_activity_destroy(activity: i64) -> void
+extern func android_activity_set_root(activity: i64, root: i64) -> void
+extern func android_activity_get_root(activity: i64) -> i64
+extern func android_activity_get_viewmodel(activity: i64) -> i64
+extern func android_activity_get_name(activity: i64) -> string
+
+extern func android_push_activity(mgr: i64, activity: i64, intent: i64) -> void
+extern func android_pop_activity(mgr: i64) -> i64
+extern func android_current_activity(mgr: i64) -> i64
+extern func android_replace_activity(mgr: i64, activity: i64, intent: i64) -> void
+
+extern func android_intent_create(target: string) -> i64
+extern func android_intent_put(intent: i64, key: string, value: string) -> void
+extern func android_intent_get(intent: i64, key: string) -> string
+extern func android_intent_destroy(intent: i64) -> void
+
+extern func android_viewmodel_create() -> i64
+extern func android_viewmodel_destroy(vm: i64) -> void
+extern func android_viewmodel_set(vm: i64, key: string, value: string) -> void
+extern func android_viewmodel_get(vm: i64, key: string) -> string
+extern func android_viewmodel_set_int(vm: i64, key: string, value: i64) -> void
+extern func android_viewmodel_get_int(vm: i64, key: string, default_val: i64) -> i64
+
+extern func android_ripple_animate(pool: i64, node: i64, duration: float) -> void
+
+extern func android_snackbar_create(parent_root: i64) -> i64
+extern func android_snackbar_show(sb: i64, message: string, duration: float, time_ptr: i64) -> void
+extern func android_snackbar_hide(sb: i64) -> void
+extern func android_snackbar_tick(sb: i64, current_time: float) -> void
+
+// ============================================================================
+// MaterialTheme — M3-inspired color palette
+// ============================================================================
+
+// Primary
+let MD_PRIMARY         = 4279858898   # Blue 700
+let MD_PRIMARY_LIGHT   = 4282557941   # Blue 400
+let MD_PRIMARY_DARK    = 4279060385   # Blue 900
+let MD_ON_PRIMARY      = 4294967295   # Text on primary
+
+// Secondary / Accent
+let MD_SECONDARY       = 4286259106   # Purple 700
+let MD_SECONDARY_LIGHT = 4290406600   # Purple 300
+let MD_ON_SECONDARY    = 4294967295
+
+// Status colors
+let MD_SUCCESS         = 4281896508   # Green 700
+let MD_ERROR           = 4292030255   # Red 700
+let MD_WARNING         = 4294278144   # Orange 700
+let MD_INFO            = 4278356177   # Light Blue 700
+
+// Surface / Background
+let MD_BACKGROUND      = 4294309365   # Grey 100
+let MD_SURFACE         = 4294967295   # White
+let MD_SURFACE_VARIANT = 4293128957   # Blue 50
+
+// Text
+let MD_ON_SURFACE      = 4280361249   # Grey 900
+let MD_ON_SURFACE_MED  = 4284572001   # Grey 700
+let MD_ON_SURFACE_LOW  = 4288585374   # Grey 500
+
+// Divider
+let MD_OUTLINE         = 4290624957   # Grey 400
+let MD_OUTLINE_VARIANT = 4292927712   # Grey 300
+
+// Dark theme surfaces
+let MD_DARK_BG         = 4279374354
+let MD_DARK_SURFACE    = 4280163870
+let MD_DARK_SURFACE2   = 4281084972
+let MD_DARK_ON_SURFACE = 4292927712
+
+// ============================================================================
+// Compatibility helpers
+// ============================================================================
+
+func widgets_text(content: string, font: i64, color: i64) -> i64 {
+    return widget_text(content, font, color)
+}
+
+func md_primary_color() -> i64 {
+    return skia_color_rgb(25, 118, 210)
+}
+
+func md_primary_light_color() -> i64 {
+    return skia_color_rgb(66, 165, 245)
+}
+
+func md_primary_dark_color() -> i64 {
+    return skia_color_rgb(13, 71, 161)
+}
+
+func md_surface_variant_color() -> i64 {
+    return skia_color_rgb(227, 242, 253)
+}
+
+func md_outline_color() -> i64 {
+    return skia_color_rgb(189, 189, 189)
+}
+
+func md_error_color() -> i64 {
+    return skia_color_rgb(211, 47, 47)
+}
+
+// ============================================================================
+// AndroidApp — Top-level application wrapper
+// ============================================================================
+
+class AndroidApp {
+    handle: i64;
+    nav_handle: i64;
+    sg_app_handle: i64;
+    font: i64;
+    font_bold: i64;
+    font_small: i64;
+    font_title: i64;
+
+    func new(name: string, width: i64, height: i64) -> void {
+        this.handle        = android_app_create(name, width, height)
+        this.nav_handle    = android_app_get_nav(this.handle)
+        this.sg_app_handle = android_app_get_sg_app(this.handle)
+        this.font          = skia_font_create("Segoe UI", 14.0)
+        this.font_bold     = skia_font_create("Segoe UI", 14.0)
+        this.font_small    = skia_font_create("Segoe UI", 12.0)
+        this.font_title    = skia_font_create("Segoe UI", 18.0)
+        skia_font_set_bold(this.font_bold, 1)
+        skia_font_set_bold(this.font_title, 1)
+    }
+
+    func set_main(activity: i64) -> void {
+        android_app_set_main_activity(this.handle, activity)
+    }
+
+    func set_main_screen(activity_name: string, screen: Screen) -> i64 {
+        let activity = android_activity_create(activity_name)
+        android_activity_set_root(activity, screen.handle)
+        android_app_set_main_activity(this.handle, activity)
+        return activity
+    }
+
+    func run() -> void {
+        android_app_run(this.handle)
+    }
+
+    func quit() -> void {
+        android_app_quit(this.handle)
+    }
+
+    func nav() -> i64 {
+        return this.nav_handle
+    }
+
+    func safe_inset_top() -> i64 {
+        return android_app_get_safe_inset_top(this.handle)
+    }
+
+    func safe_inset_right() -> i64 {
+        return android_app_get_safe_inset_right(this.handle)
+    }
+
+    func safe_inset_bottom() -> i64 {
+        return android_app_get_safe_inset_bottom(this.handle)
+    }
+
+    func safe_inset_left() -> i64 {
+        return android_app_get_safe_inset_left(this.handle)
+    }
+
+    func navigator() -> Navigator {
+        let nav = new Navigator()
+        nav.handle = this.nav_handle
+        return nav
+    }
+
+    func create_activity(name: string, screen: Screen) -> Activity {
+        let activity = new Activity()
+        activity.handle = android_activity_create(name)
+        activity.vm_handle = android_activity_get_viewmodel(activity.handle)
+        activity.set_screen(screen)
+        return activity
+    }
+
+    func get_anim_pool() -> i64 {
+        return sg_app_get_animations(this.sg_app_handle)
+    }
+
+    func get_font() -> i64 { return this.font }
+    func get_font_bold() -> i64 { return this.font_bold }
+    func get_font_small() -> i64 { return this.font_small }
+    func get_font_title() -> i64 { return this.font_title }
+}
+
+// ============================================================================
+// Activity — language-level wrapper over AndroidActivity
+// ============================================================================
+
+class Activity {
+    handle: i64;
+    vm_handle: i64;
+
+    func set_screen(screen: Screen) -> void {
+        android_activity_set_root(this.handle, screen.handle)
+        screen.activity_handle = this.handle
+    }
+
+    func root() -> i64 {
+        return android_activity_get_root(this.handle)
+    }
+
+    func name() -> string {
+        return android_activity_get_name(this.handle)
+    }
+
+    func viewmodel() -> ViewModel {
+        let vm = new ViewModel()
+        vm.handle = android_activity_get_viewmodel(this.handle)
+        return vm
+    }
+
+    func destroy() -> void {
+        android_activity_destroy(this.handle)
+    }
+}
+
+// ============================================================================
+// Intent — Data passed between screens
+// ============================================================================
+
+class Intent {
+    handle: i64;
+
+    func new(target: string) -> void {
+        this.handle = android_intent_create(target)
+    }
+
+    func put(key: string, value: string) -> void {
+        android_intent_put(this.handle, key, value)
+    }
+
+    func get(key: string) -> string {
+        return android_intent_get(this.handle, key)
+    }
+
+    func destroy() -> void {
+        android_intent_destroy(this.handle)
+    }
+}
+
+// ============================================================================
+// ViewModel — Per-screen state store
+// ============================================================================
+
+class ViewModel {
+    handle: i64;
+
+    func new() -> void {
+        this.handle = android_viewmodel_create()
+    }
+
+    func set(key: string, value: string) -> void {
+        android_viewmodel_set(this.handle, key, value)
+    }
+
+    func get(key: string) -> string {
+        return android_viewmodel_get(this.handle, key)
+    }
+
+    func set_int(key: string, value: i64) -> void {
+        android_viewmodel_set_int(this.handle, key, value)
+    }
+
+    func get_int(key: string, default_val: i64) -> i64 {
+        return android_viewmodel_get_int(this.handle, key, default_val)
+    }
+
+    func destroy() -> void {
+        android_viewmodel_destroy(this.handle)
+    }
+}
+
+// ============================================================================
+// Navigator — language-level wrapper over AndroidActivityManager
+// ============================================================================
+
+class Navigator {
+    handle: i64;
+
+    func push(activity: Activity, intent: i64) -> void {
+        android_push_activity(this.handle, activity.handle, intent)
+    }
+
+    func replace(activity: Activity, intent: i64) -> void {
+        android_replace_activity(this.handle, activity.handle, intent)
+    }
+
+    func pop() -> i64 {
+        return android_pop_activity(this.handle)
+    }
+
+    func current() -> i64 {
+        return android_current_activity(this.handle)
+    }
+}
+
+// ============================================================================
+// AppBar — Material top app bar
+// ============================================================================
+
+class AppBar {
+    handle: i64;     # Root node (Row)
+
+    func new(title: string, font_title: i64, font: i64, show_back: i64, nav: i64) -> void {
+        let bar      = new Row(0.0)
+        bar.set_background(MD_PRIMARY)
+        sg_style_set_padding(bar.handle, 12.0, 16.0, 12.0, 16.0)
+        sg_style_elevated(bar.handle, 4)
+        bar.set_min_size(0.0, 56.0)
+
+        let lbl = new Text(title, font_title, MD_ON_PRIMARY)
+        bar.add(lbl.handle)
+
+        let space = new Spacer(1.0)
+        bar.add(space.handle)
+
+        if show_back != 0 {
+            let back = new Button("←  Back", font)
+            back.set_background(MD_PRIMARY)
+            back.set_padding(8.0)
+            bar.add(back.handle)
+        }
+
+        this.handle = bar.handle
+    }
+
+    func add_action(action_handle: i64) -> void {
+        sg_node_add_child(this.handle, action_handle)
+    }
+}
+
+// ============================================================================
+// BottomNavBar — Tab navigation bar
+// ============================================================================
+
+class BottomNavBar {
+    handle: i64;
+    active_tab: i64;
+
+    func new(font: i64) -> void {
+        let bar = new Row(0.0)
+        bar.set_background(MD_SURFACE)
+        bar.set_padding(4.0)
+        sg_style_set_shadow(bar.handle, 0.0, -2.0, 8.0, 0x33000000)
+        bar.set_min_size(0.0, 56.0)
+        this.handle    = bar.handle
+        this.active_tab = 0
+    }
+
+    func add_tab(label: string, font: i64) -> i64 {
+        let col = new Column(2.0)
+        col.set_min_size(64.0, 0.0)
+        sg_style_set_padding_uniform(col.handle, 8.0)
+
+        let lbl = new Text(label, font, MD_ON_SURFACE_MED)
+        col.add(lbl.handle)
+        sg_node_add_child(this.handle, col.handle)
+        return col.handle
+    }
+
+    func set_active_color(tab_handle: i64) -> void {
+        sg_style_set_background(tab_handle, MD_SURFACE_VARIANT)
+    }
+}
+
+// ============================================================================
+// FloatingActionButton (FAB)
+// ============================================================================
+
+class FloatingActionButton {
+    handle: i64;
+
+    func new(icon_label: string, font: i64) -> void {
+        let btn = new Button(icon_label, font)
+        btn.set_background(MD_PRIMARY)
+        btn.set_border(MD_PRIMARY_DARK, 0.0, 28.0)
+        btn.set_padding(16.0)
+        btn.set_min_size(56.0, 56.0)
+        sg_style_set_shadow(btn.handle, 0.0, 4.0, 8.0, 0x44000000)
+        this.handle = btn.handle
+    }
+
+    func set_color(color: i64) -> void {
+        sg_style_set_background(this.handle, color)
+    }
+
+    func set_on_click(callback: i64, ctx: i64) -> void {
+        widget_button_set_callback(this.handle, callback, ctx)
+    }
+}
+
+// ============================================================================
+// MaterialButton — Filled / Outlined / Text variants
+// ============================================================================
+
+class MaterialButton {
+    handle: i64;
+
+    // Filled button (default — primary color background)
+    func filled(label: string, font: i64) -> void {
+        let btn = new Button(label, font)
+        btn.set_background(MD_PRIMARY)
+        btn.set_border(MD_PRIMARY_DARK, 0.0, 4.0)
+        btn.set_padding(12.0)
+        btn.set_min_size(88.0, 36.0)
+        this.handle = btn.handle
+    }
+
+    // Outlined button (border, transparent background)
+    func outlined(label: string, font: i64) -> void {
+        let btn = new Button(label, font)
+        btn.set_background(0x00000000)
+        btn.set_border(MD_PRIMARY, 1.5, 4.0)
+        btn.set_padding(12.0)
+        btn.set_min_size(88.0, 36.0)
+        this.handle = btn.handle
+    }
+
+    // Text-only button
+    func text_btn(label: string, font: i64) -> void {
+        let btn = new Button(label, font)
+        btn.set_background(0x00000000)
+        btn.set_border(0x00000000, 0.0, 4.0)
+        btn.set_padding(8.0)
+        this.handle = btn.handle
+    }
+
+    // Danger / error button
+    func danger(label: string, font: i64) -> void {
+        let btn = new Button(label, font)
+        btn.set_background(MD_ERROR)
+        btn.set_border(0xFFB71C1C, 0.0, 4.0)
+        btn.set_padding(12.0)
+        btn.set_min_size(88.0, 36.0)
+        this.handle = btn.handle
+    }
+
+    func set_enabled(enabled: i64) -> void {
+        widget_button_set_enabled(this.handle, enabled)
+    }
+
+    func set_on_click(callback: i64, ctx: i64) -> void {
+        widget_button_set_callback(this.handle, callback, ctx)
+    }
+
+    func ripple(pool: i64, duration: float) -> void {
+        android_ripple_animate(pool, this.handle, duration)
+    }
+}
+
+// ============================================================================
+// MaterialCard — M3 card with elevation + rounded corners
+// ============================================================================
+
+class MaterialCard {
+    handle: i64;
+
+    func new() -> void {
+        let c = new Card()
+        c.set_padding(16.0)
+        c.set_elevation(2)
+        sg_style_set_border(c.handle, MD_OUTLINE_VARIANT, 0.0, 12.0)
+        this.handle = c.handle
+    }
+
+    func filled(background_color: i64) -> void {
+        let c = new Card()
+        c.set_padding(16.0)
+        sg_style_set_background(c.handle, background_color)
+        sg_style_set_border(c.handle, 0x00000000, 0.0, 12.0)
+        c.set_elevation(0)
+        this.handle = c.handle
+    }
+
+    func outlined() -> void {
+        let c = new Card()
+        c.set_padding(16.0)
+        sg_style_set_background(c.handle, MD_SURFACE)
+        sg_style_set_border(c.handle, MD_OUTLINE, 1.0, 12.0)
+        c.set_elevation(0)
+        this.handle = c.handle
+    }
+
+    func add(child: i64) -> void {
+        sg_node_add_child(this.handle, child)
+    }
+
+    func set_padding(p: float) -> void {
+        sg_style_set_padding_uniform(this.handle, p)
+    }
+}
+
+// ============================================================================
+// MaterialTextField — Text input with container + placeholder
+// ============================================================================
+
+class MaterialTextField {
+    handle: i64;   # Outer column
+    input: i64;    # Inner TextInput handle
+
+    func new(label: string, placeholder: string, font_label: i64, font_input: i64) -> void {
+        let col = new Column(4.0)
+
+        let lbl = new Text(label, font_label, MD_ON_SURFACE_MED)
+        col.add(lbl.handle)
+
+        let inp = new TextInput(placeholder, font_input)
+
+        // Wrap input in a styled container
+        let container = new Column(0.0)
+        container.set_background(MD_SURFACE)
+        sg_style_set_border(container.handle, MD_OUTLINE, 1.0, 4.0)
+        sg_style_set_padding_uniform(container.handle, 10.0)
+        container.add(inp.handle)
+        col.add(container.handle)
+
+        this.handle = col.handle
+        this.input  = inp.handle
+    }
+
+    func get_value() -> string {
+        return widget_text_input_get_value(this.input)
+    }
+
+    func set_value(text: string) -> void {
+        widget_text_input_set_value(this.input, text)
+    }
+
+    func set_on_change(callback: i64, ctx: i64) -> void {
+        widget_text_input_on_change(this.input, callback, ctx)
+    }
+
+    func set_min_size(w: float, h: float) -> void {
+        sg_node_set_min_size(this.handle, w, h)
+    }
+}
+
+// ============================================================================
+// ListItem — One row with icon + title + optional subtitle
+// ============================================================================
+
+class ListItem {
+    handle: i64;
+
+    func new(icon: string, title: string, subtitle: string, 
+             font_icon: i64, font_title: i64, font_sub: i64) -> void {
+        let row = new Row(12.0)
+        row.set_background(MD_SURFACE)
+        sg_style_set_padding_uniform(row.handle, 12.0)
+
+        // Leading icon
+        if icon != "" {
+            let ico = new Text(icon, font_icon, MD_PRIMARY)
+            ico_node: i64 = ico.handle
+            row.add(ico_node)
+        }
+
+        // Text column
+        let text_col = new Column(2.0)
+        text_col.set_min_size(0.0, 0.0)
+
+        let title_text = new Text(title, font_title, MD_ON_SURFACE)
+        text_col.add(title_text.handle)
+
+        if subtitle != "" {
+            let sub_text = new Text(subtitle, font_sub, MD_ON_SURFACE_MED)
+            text_col.add(sub_text.handle)
+        }
+
+        row.add(text_col.handle)
+        this.handle = row.handle
+    }
+
+    func add_trailing(node_handle: i64) -> void {
+        sg_node_add_child(this.handle, node_handle)
+    }
+}
+
+// ============================================================================
+// Chip — Pill-shaped selectable label
+// ============================================================================
+
+class Chip {
+    handle: i64;
+    selected: i64;
+
+    func new(label: string, font: i64) -> void {
+        let btn = new Button(label, font)
+        btn.set_background(MD_SURFACE_VARIANT)
+        btn.set_border(MD_OUTLINE, 1.0, 16.0)
+        btn.set_padding(8.0)
+        btn.set_min_size(0.0, 32.0)
+        this.handle   = btn.handle
+        this.selected = 0
+    }
+
+    func select(is_selected: i64) -> void {
+        this.selected = is_selected
+        if is_selected != 0 {
+            sg_style_set_background(this.handle, MD_PRIMARY_LIGHT)
+            sg_style_set_border(this.handle, MD_PRIMARY, 1.0, 16.0)
+        } else {
+            sg_style_set_background(this.handle, MD_SURFACE_VARIANT)
+            sg_style_set_border(this.handle, MD_OUTLINE, 1.0, 16.0)
+        }
+    }
+}
+
+// ============================================================================
+// Avatar — Circular colored background with initials
+// ============================================================================
+
+class Avatar {
+    handle: i64;
+
+    func new(initials: string, font: i64, background_color: i64) -> void {
+        let col = new Column(0.0)
+        col.set_background(background_color)
+        sg_style_set_border(col.handle, background_color, 0.0, 28.0)
+        sg_style_set_padding_uniform(col.handle, 16.0)
+        col.set_min_size(56.0, 56.0)
+
+        let lbl = new Text(initials, font, MD_ON_PRIMARY)
+        col.add(lbl.handle)
+        this.handle = col.handle
+    }
+}
+
+// ============================================================================
+// Switch — Two-state toggle (styled checkbox)
+// ============================================================================
+
+class Switch {
+    handle: i64;
+
+    func new(label: string, font: i64, initial: i64) -> void {
+        let chk = new Checkbox(label, font, initial)
+        this.handle = chk.handle
+    }
+
+    func is_on() -> i64 {
+        return widget_checkbox_is_checked(this.handle)
+    }
+
+    func set_on(val: i64) -> void {
+        widget_checkbox_set_checked(this.handle, val)
+    }
+
+    func set_on_change(callback: i64, ctx: i64) -> void {
+        widget_checkbox_on_change(this.handle, callback, ctx)
+    }
+}
+
+// ============================================================================
+// Snackbar — Bottom-anchored toast notification
+// ============================================================================
+
+class Snackbar {
+    handle: i64;
+
+    func new(parent_root: i64) -> void {
+        this.handle = android_snackbar_create(parent_root)
+    }
+
+    func show(message: string, duration: float) -> void {
+        android_snackbar_show(this.handle, message, duration, 0)
+    }
+
+    func hide() -> void {
+        android_snackbar_hide(this.handle)
+    }
+}
+
+// ============================================================================
+// Dialog — Modal card overlay
+// ============================================================================
+
+class Dialog {
+    handle: i64;       # Stack (backdrop + card)
+    card_handle: i64;  # Inner card content
+
+    func new(title: string, font_title: i64, font: i64) -> void {
+        // Stack: dimmed backdrop + centered card
+        let overlay = new Stack()
+        overlay.set_background(0x88000000)
+        overlay.set_min_size(0.0, 0.0)
+
+        // Card
+        let card = new MaterialCard()
+        card.set_padding(24.0)
+        sg_style_set_border(card.handle, 0x00000000, 0.0, 16.0)
+        sg_node_set_min_size(card.handle, 280.0, 0.0)
+        sg_node_set_max_size(card.handle, 480.0, 1000000.0)
+
+        let col = new Column(8.0)
+        let hdr = new Text(title, font_title, MD_ON_SURFACE)
+        col.add(hdr.handle)
+        let sep = new Separator(1, MD_OUTLINE_VARIANT, 1.0)
+        col.add(sep.handle)
+
+        card.add(col.handle)
+
+        overlay.add(card.handle)
+
+        this.handle      = overlay.handle
+        this.card_handle = col.handle
+
+        // Hidden by default
+        sg_node_set_visible(overlay.handle, 0)
+    }
+
+    func add_content(child_handle: i64) -> void {
+        sg_node_add_child(this.card_handle, child_handle)
+    }
+
+    func show() -> void {
+        sg_node_set_visible(this.handle, 1)
+    }
+
+    func dismiss() -> void {
+        sg_node_set_visible(this.handle, 0)
+    }
+}
+
+// ============================================================================
+// Screen — A full-screen layout (AppBar + scrollable content)
+// ============================================================================
+
+class Screen {
+    handle: i64;     # Root Column for this entire screen
+    content: i64;    # Scrollable content area handle
+    appbar: i64;
+    scroll: i64;
+    activity_handle: i64;
+
+    func new(title: string, show_back: i64, nav: i64,
+             font_title: i64, font: i64) -> void {
+        let root = new Column(0.0)
+        root.set_background(MD_BACKGROUND)
+        root.set_align_items(3)
+
+        // AppBar
+        let bar = new AppBar(title, font_title, font, show_back, nav)
+        root.add(bar.handle)
+
+        // Scrollable content
+        let scroll = new ScrollView()
+        scroll.set_background(MD_BACKGROUND)
+        sg_node_set_min_size(scroll.handle, 0.0, 0.0)
+        scroll.set_flex_grow(1.0)
+        scroll.set_align_self(3)
+
+        let content_col = new Column(12.0)
+        content_col.set_background(MD_BACKGROUND)
+        sg_style_set_padding_uniform(content_col.handle, 16.0)
+
+        scroll.set_content(content_col.handle)
+        root.add(scroll.handle)
+
+        this.handle  = root.handle
+        this.content = content_col.handle
+        this.appbar  = bar.handle
+        this.scroll  = scroll.handle
+        this.activity_handle = 0
+    }
+
+    func add(child_handle: i64) -> void {
+        sg_node_add_child(this.content, child_handle)
+    }
+
+    func add_bottom_bar(bar_handle: i64) -> void {
+        sg_node_add_child(this.handle, bar_handle)
+    }
+
+    func add_to_appbar(node_handle: i64) -> void {
+        sg_node_add_child(this.appbar, node_handle)
+    }
+
+    func attach(activity: Activity) -> void {
+        android_activity_set_root(activity.handle, this.handle)
+        this.activity_handle = activity.handle
+    }
+
+    func root() -> i64 {
+        return this.handle
+    }
+}
+
+// ============================================================================
+// Scaffold — higher-level app screen composition helper
+// ============================================================================
+
+class Scaffold {
+    screen: Screen;
+    body: i64;
+
+    func new(title: string, show_back: i64, nav: i64,
+             font_title: i64, font: i64) -> void {
+        let s = new Screen(title, show_back, nav, font_title, font)
+        this.screen = s
+        this.body = s.content
+    }
+
+    func add(child_handle: i64) -> void {
+        sg_node_add_child(this.body, child_handle)
+    }
+
+    func set_bottom_bar(bar_handle: i64) -> void {
+        this.screen.add_bottom_bar(bar_handle)
+    }
+
+    func set_fab(fab_handle: i64) -> void {
+        sg_node_add_child(this.screen.handle, fab_handle)
+    }
+
+    func add_action(action_handle: i64) -> void {
+        this.screen.add_to_appbar(action_handle)
+    }
+
+    func as_screen() -> Screen {
+        return this.screen
+    }
+}

@@ -1,0 +1,40 @@
+// Casprix Threading Example
+// Demonstrates multi-threaded programming
+
+import "casprix/stdlib/Thread.cpx";
+
+// Example: Counter with mutex protection
+class Counter {
+    value: int;
+    mutex: Mutex;
+
+    func new() -> Counter {
+        this.value = 0;
+        this.mutex = new Mutex();
+        return this;
+    }
+
+    func increment() -> void {
+        this.mutex.lock();
+        this.value = this.value;  // Would be: this.value + 1
+        this.mutex.unlock();
+    }
+
+    func getValue() -> int {
+        this.mutex.lock();
+        x: int = this.value;
+        this.mutex.unlock();
+        return x;
+    }
+}
+
+// Main program
+print(1);  // Thread example placeholder
+
+// In a complete implementation:
+// counter: Counter = new Counter();
+// thread1: Thread = new Thread();  // Would spawn worker
+// thread2: Thread = new Thread();  // Would spawn worker
+// thread1.join();
+// thread2.join();
+// print(counter.getValue());

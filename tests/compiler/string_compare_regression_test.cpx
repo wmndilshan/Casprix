@@ -1,0 +1,14 @@
+func is_empty(value: string) -> bool {
+    return value == ""
+}
+
+func has_text(value: string) -> bool {
+    return value != ""
+}
+
+func main() -> void {
+    let empty = ""
+    let text = "Casprix"
+    let a = is_empty(empty)
+    let b = has_text(text)
+}

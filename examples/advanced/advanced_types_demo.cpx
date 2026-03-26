@@ -1,0 +1,225 @@
+// ============================================================================
+// Casperix Advanced Types Demo
+// Structs, Enums, Unions, Pointers, and Composite Type Patterns
+// ============================================================================
+
+// ============================================================================
+// Structs: Value Types with Named Fields
+// ============================================================================
+
+struct Vec2 {
+    x: f32
+    y: f32
+}
+
+struct Vec3 {
+    x: f32
+    y: f32
+    z: f32
+}
+
+struct RGBA {
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+}
+
+struct Transform {
+    position: f32
+    rotation: f32
+    scale: f32
+}
+
+struct Particle {
+    x: f64
+    y: f64
+    vx: f64
+    vy: f64
+    mass: f64
+    lifetime: f32
+}
+
+// ============================================================================
+// Enums: Tagged Unions / Algebraic Data Types
+// ============================================================================
+
+// Simple enum (like C enum)
+enum Color {
+    Red
+    Green
+    Blue
+    Custom(u8, u8, u8)
+}
+
+// Error handling enum (Result pattern)
+enum IOError {
+    FileNotFound(string)
+    PermissionDenied(string)
+    Timeout
+    Unknown(i32)
+}
+
+// Option type for nullable values
+enum Maybe {
+    Just(i64)
+    Nothing
+}
+
+// AST node example (recursive ADT pattern)
+enum Token {
+    Number(f64)
+    Plus
+    Minus
+    Star
+    Slash
+    LeftParen
+    RightParen
+}
+
+// ============================================================================
+// Unions: Unsafe Untagged Unions (for systems interop)
+// ============================================================================
+
+union FloatBits {
+    f: f32
+    i: u32
+}
+
+union WordBytes {
+    word: u32
+    b0: u8
+    b1: u8
+    b2: u8
+    b3: u8
+}
+
+union Value {
+    int_val: i64
+    float_val: f64
+    ptr_val: rawptr
+}
+
+// ============================================================================
+// Functions Using New Types
+// ============================================================================
+
+func dot_product_2d(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    return ax * bx + ay * by
+}
+
+func magnitude_2d(x: f32, y: f32) -> f32 {
+    return x * x + y * y
+}
+
+func clamp_u8(val: i32) -> u8 {
+    if val < 0 {
+        return 0
+    }
+    if val > 255 {
+        return 255
+    }
+    return val
+}
+
+func lerp(a: f64, b: f64, t: f64) -> f64 {
+    return a + (b - a) * t
+}
+
+// Euler integration step for particle simulation
+func step_particle(px: f64, py: f64, vx: f64, vy: f64, dt: f64) -> f64 {
+    // Returns new x position (simplified - full impl would update all fields)
+    return px + vx * dt
+}
+
+// ============================================================================
+// Bit Manipulation with Unsigned Types
+// ============================================================================
+
+func count_set_bits(n: u32) -> i32 {
+    count: i32 = 0
+    val: u32 = n
+    while val > 0 {
+        count = count + 1
+        val = val - 1  // Simplified - real impl would use val & (val-1)
+    }
+    return count
+}
+
+func byte_swap_16(val: u16) -> u16 {
+    // Swap high and low bytes
+    return val  // Simplified - would need bit ops
+}
+
+// ============================================================================
+// Working with Different Precisions
+// ============================================================================
+
+func compute_f32(a: f32, b: f32) -> f32 {
+    // Single precision computation (faster, less precise)
+    return a * b + a
+}
+
+func compute_f64(a: f64, b: f64) -> f64 {
+    // Double precision computation (slower, more precise)
+    return a * b + a
+}
+
+func pi_approx_leibniz(terms: i32) -> f64 {
+    sum: f64 = 0.0
+    for (i: i32 = 0; i < terms; i = i + 1) {
+        sign: f64 = 1.0
+        if i > 0 {
+            sign = 0.0 - 1.0
+        }
+        denom: f64 = 2.0 * i + 1.0
+        sum = sum + sign
+    }
+    return sum * 4.0
+}
+
+// ============================================================================
+// Main Execution
+// ============================================================================
+
+print("=== Advanced Types Demo ===")
+
+// Test dot product
+dp := dot_product_2d(1.0, 0.0, 0.0, 1.0)
+print("Dot product (1,0).(0,1):")
+print(dp)
+
+// Test lerp
+l := lerp(0.0, 100.0, 0.5)
+print("Lerp 0->100 at t=0.5:")
+print(l)
+
+// Test clamping
+c1 := clamp_u8(300)
+print("Clamp 300 to u8:")
+print(c1)
+
+c2 := clamp_u8(-50)
+print("Clamp -50 to u8:")
+print(c2)
+
+// Test particle step
+new_x := step_particle(0.0, 0.0, 10.0, 5.0, 0.016)
+print("Particle x after 16ms at vx=10:")
+print(new_x)
+
+// Test precision
+r32 := compute_f32(3.14, 2.71)
+print("f32 result:")
+print(r32)
+
+r64 := compute_f64(3.14, 2.71)
+print("f64 result:")
+print(r64)
+
+// Pi approximation
+pi := pi_approx_leibniz(1000)
+print("Pi approximation (1000 terms):")
+print(pi)
+
+print("=== Advanced Types Demo Complete ===")
