@@ -637,7 +637,7 @@ ApkError apk_stage_compile(const ApkBuildConfig* cfg, const char* build_dir) {
  * ======================================================================== */
 
 ApkError apk_stage_manifest(const ApkBuildConfig* cfg, const char* build_dir) {
-    char path[1024];
+    char path[2048];
     snprintf(path, sizeof(path), "%s/AndroidManifest.xml", build_dir);
     int r = manifest_write(cfg, path);
     if (r != 0) return APK_ERR_MANIFEST_FAILED;
@@ -727,7 +727,7 @@ ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
         "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
     };
 
-    char unsigned_apk[1024];
+    char unsigned_apk[2048];
     char manifest_path[1024];
     char res_dir[1024];
     char android_jar[1024];
@@ -846,7 +846,7 @@ ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
         {
             char draw_dir[1024];
             char icon_png[1024];
-            char icon_xml[1024];
+            char icon_xml[2048];
             FILE* test;
 
             snprintf(draw_dir, sizeof(draw_dir), "%s/res/drawable", build_dir);
@@ -1038,7 +1038,7 @@ ApkBuildResult apk_build(const ApkBuildConfig* config) {
 
     /* Stage 5: Align, then Stage 6: Sign */
     {
-        char unsigned_apk[1024], aligned_apk[1024];
+        char unsigned_apk[2048], aligned_apk[2048];
         const char* out = cfg.output_apk[0] ? cfg.output_apk : "app-release.apk";
         snprintf(unsigned_apk, sizeof(unsigned_apk), "%s/app-unsigned.apk", build_dir);
         snprintf(aligned_apk,  sizeof(aligned_apk),  "%s/app-aligned.apk",  build_dir);

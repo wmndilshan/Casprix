@@ -4,9 +4,6 @@
  * when no assembly object is linked.
  */
 
-#ifndef _WIN32
-#  define _POSIX_C_SOURCE 200809L
-#endif
 
 #include "../../include/casprix/string_ops.h"
 #include <stdlib.h>

@@ -81,6 +81,19 @@ if(CASPRIX_EXE)
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/compiler
         )
     endforeach()
+
+    # Disable tests that require the Skia GUI framework when it is not built
+    if(NOT ENABLE_SKIA_GUI)
+        set(SKIA_TESTS
+            test_wt_direct test_tabpanel test_tabpanel2 test_tabpanel3
+            test_method_call test_pb
+        )
+        foreach(_t ${SKIA_TESTS})
+            if(TEST compiler_${_t})
+                set_tests_properties(compiler_${_t} PROPERTIES DISABLED TRUE)
+            endif()
+        endforeach()
+    endif()
 endif()
 
 # ── CTest configuration ───────────────────────────────────────────────────────
