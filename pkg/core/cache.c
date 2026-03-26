@@ -40,7 +40,7 @@ const char* pkg_cache_dir(void) {
 
 static bool dir_exists(const char* path) {
     struct stat st;
-    return stat(path, &st) == 0 && (st.st_mode & S_IFDIR);
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 static void mkdir_recursive(const char* path) {
@@ -182,8 +182,13 @@ char** pkg_cache_list(int* count) {
     
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_type == DT_DIR && 
-            strcmp(entry->d_name, ".") != 0 && 
+        /* Use stat to check for directory (portable, avoids DT_DIR dependency) */
+        char entry_path[512];
+        snprintf(entry_path, sizeof(entry_path), "%s/%s", pkg_cache_dir(), entry->d_name);
+        struct stat entry_st;
+        bool is_dir = stat(entry_path, &entry_st) == 0 && S_ISDIR(entry_st.st_mode);
+        if (is_dir &&
+            strcmp(entry->d_name, ".") != 0 &&
             strcmp(entry->d_name, "..") != 0) {
             if (*count >= capacity) {
                 capacity *= 2;

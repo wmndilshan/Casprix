@@ -39,6 +39,29 @@ option(ENABLE_AVX2           "Enable AVX2/FMA SIMD optimizations"    ON)
 option(ENABLE_DEBUG_LOGGING  "Compile with DEBUG_LOGGING defined"    OFF)
 option(ENABLE_SKIA_GUI       "Enable Skia-based GUI framework"       OFF)
 
+# NASM — optional, needed for SIMD assembly kernels
+include(CheckLanguage)
+check_language(ASM_NASM)
+if(CMAKE_ASM_NASM_COMPILER AND ENABLE_AVX2)
+    enable_language(ASM_NASM)
+    set(NASM_AVAILABLE ON)
+    # NASM output format: elf64 on Linux/macOS, win64 on Windows
+    if(WIN32)
+        set(CMAKE_ASM_NASM_FLAGS "-f win64" CACHE STRING "" FORCE)
+    else()
+        set(CMAKE_ASM_NASM_FLAGS "-f elf64" CACHE STRING "" FORCE)
+    endif()
+    # Do NOT forward C compile flags (<FLAGS>) to NASM — it only understands its own options
+    set(CMAKE_ASM_NASM_COMPILE_OBJECT
+        "<CMAKE_ASM_NASM_COMPILER> ${CMAKE_ASM_NASM_FLAGS} -o <OBJECT> <SOURCE>")
+elseif(ENABLE_AVX2)
+    message(STATUS "NASM not found — AVX2 assembly kernels disabled, falling back to C")
+    set(ENABLE_AVX2 OFF CACHE BOOL "" FORCE)
+    set(NASM_AVAILABLE OFF)
+else()
+    set(NASM_AVAILABLE OFF)
+endif()
+
 # ============================================================================
 # Compiler flags — use interface targets for clean propagation
 # ============================================================================
@@ -59,9 +82,9 @@ else()
         $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
         $<$<BOOL:${ENABLE_AVX2}>:-mavx2 -mfma>
     )
-    # Expose POSIX-2008 APIs (strdup, usleep, clock_gettime, …) on Linux/macOS
+    # Expose all glibc extensions on Linux/macOS (includes POSIX-2008, strdup, usleep, DT_DIR…)
     target_compile_definitions(casprix_compile_options INTERFACE
-        $<$<NOT:$<BOOL:${WIN32}>>:_POSIX_C_SOURCE=200809L>
+        $<$<NOT:$<BOOL:${WIN32}>>:_GNU_SOURCE=1>
     )
 endif()
 
@@ -225,6 +248,17 @@ if(BUILD_RUNTIME)
             list(APPEND RUNTIME_SOURCES "runtime/math/${_f}.c")
         endif()
     endforeach()
+    # SIMD assembly kernels (NASM, only when AVX2 enabled and NASM available)
+    if(NASM_AVAILABLE AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/math/simd_kernels.asm")
+        list(APPEND RUNTIME_SOURCES runtime/math/simd_kernels.asm)
+        set_source_files_properties(runtime/math/simd_kernels.asm
+            PROPERTIES COMPILE_OPTIONS "")  # don't forward C flags to NASM
+    endif()
+    if(NASM_AVAILABLE AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/ai/llm/ops_avx2.asm")
+        list(APPEND RUNTIME_SOURCES runtime/ai/llm/ops_avx2.asm)
+        set_source_files_properties(runtime/ai/llm/ops_avx2.asm
+            PROPERTIES COMPILE_OPTIONS "")
+    endif()
 
     # Async subsystem
     foreach(_f future task scheduler)
