@@ -166,7 +166,8 @@ static void vm_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
 
         case MIR_CONST_FLOAT:
             vm_emit_byte(d, VM_CONST_F64);
-            vm_emit_i64(d, *(int64_t*)&inst->as.imm_f64);
+            { int64_t bits; memcpy(&bits, &inst->as.imm_f64, sizeof bits);
+              vm_emit_i64(d, bits); }
             if (inst->result != MIR_VALUE_NONE) {
                 vm_emit_byte(d, VM_STORE_LOCAL);
                 vm_emit_u16(d, (uint16_t)inst->result);

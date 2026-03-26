@@ -237,7 +237,8 @@ ClosureMeta* analyze_closure(LambdaExpr* lambda, SymbolTable* symtable, SymbolTa
 
 // Calculate closure environment layout
 void layout_closure_env(ClosureEnv* env) {
-    if (!env || env->count == 0) {
+    if (!env) return;
+    if (env->count == 0) {
         env->total_size = 0;
         env->alignment = 8;
         return;
