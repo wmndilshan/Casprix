@@ -115,6 +115,7 @@ static bool is_moved(MirBorrowChecker* bc, MirValueId id) {
  * Check if a value is used in an instruction
  * ================================================================ */
 
+static bool inst_uses_value(MirInst* inst, MirValueId val) __attribute__((unused));
 static bool inst_uses_value(MirInst* inst, MirValueId val) {
     switch (inst->opcode) {
         case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:

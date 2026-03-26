@@ -5,6 +5,7 @@
  * See diagnostic.h for the API contract.
  */
 
+#define _POSIX_C_SOURCE 200809L
 #include "diagnostic.h"
 
 #include <stdlib.h>

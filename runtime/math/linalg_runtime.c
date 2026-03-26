@@ -3,6 +3,12 @@
 #include <string.h>
 #include <math.h>
 
+/* MinGW/MSVC: aligned_alloc is C11; use malloc fallback (freed with free) */
+#ifdef _WIN32
+#  undef aligned_alloc
+#  define aligned_alloc(alignment, size) malloc(size)
+#endif
+
 // ============================================================================
 // VECTOR OPERATIONS - Optimized for performance
 // ============================================================================

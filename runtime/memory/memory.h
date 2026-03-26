@@ -23,7 +23,7 @@
 #include "arc.h"
 #include "ownership.h"
 #include "cycle_gc.h"
-#include "../../src/core/arena.h"
+#include "support/arena.h"
 
 #include <stddef.h>
 #include <stdbool.h>

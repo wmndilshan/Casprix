@@ -265,6 +265,13 @@ if(BUILD_RUNTIME)
         list(APPEND RUNTIME_SOURCES runtime/binding/lang_abi.c)
     endif()
 
+    # Stdlib collections and string ops
+    foreach(_f collections string_ops)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/stdlib/${_f}.c")
+            list(APPEND RUNTIME_SOURCES "runtime/stdlib/${_f}.c")
+        endif()
+    endforeach()
+
     add_library(casprix_runtime STATIC ${RUNTIME_SOURCES})
 
     target_link_libraries(casprix_runtime PUBLIC
@@ -286,6 +293,7 @@ if(BUILD_RUNTIME)
         ${CMAKE_SOURCE_DIR}/runtime/sync
         ${CMAKE_SOURCE_DIR}/runtime/net
         ${CMAKE_SOURCE_DIR}/runtime/io
+        ${CMAKE_SOURCE_DIR}/runtime/stdlib
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
     )

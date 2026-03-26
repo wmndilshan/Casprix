@@ -243,6 +243,7 @@ static void emit_store_var(AssemblyGenerator* gen, const char* name, const char*
 }
 
 /* Same for float (movq). */
+static void emit_load_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_n) __attribute__((unused));
 static void emit_load_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_n) {
     int off = find_local(gen, name);
     if (off)
@@ -254,6 +255,7 @@ static void emit_load_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_
     }
 }
 
+static void emit_store_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_n) __attribute__((unused));
 static void emit_store_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_n) {
     int off = find_local(gen, name);
     if (off)
@@ -288,6 +290,8 @@ static void emit_prologue_stack(AssemblyGenerator* gen) {
  *   - At return statements (early exit — drops all enclosing scopes)
  *   - At block scope exit (inner blocks)
  */
+static void emit_scope_drops(AssemblyGenerator* gen, const DropEntry* drops,
+                              int drop_count) __attribute__((unused));
 static void emit_scope_drops(AssemblyGenerator* gen, const DropEntry* drops,
                               int drop_count) {
     if (!drops || drop_count <= 0) return;

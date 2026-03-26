@@ -499,7 +499,7 @@ static void rename_block(MirFunction* func,
     /* Process phi nodes in this block — they define new values */
     for (int a = 0; a < n_allocas; a++) {
         MirInst* phi = NULL;
-        if (bb->id < alloca_ctxs[a].phi_map_cap) {
+        if (bb->id < (uint32_t)alloca_ctxs[a].phi_map_cap) {
             phi = alloca_ctxs[a].phi_for_block[bb->id];
         }
         if (phi) {
@@ -670,7 +670,7 @@ static void rename_block(MirFunction* func,
         MirBlock* succ = bb->successors[s];
         for (int a = 0; a < n_allocas; a++) {
             MirInst* phi = NULL;
-            if (succ->id < alloca_ctxs[a].phi_map_cap) {
+            if (succ->id < (uint32_t)alloca_ctxs[a].phi_map_cap) {
                 phi = alloca_ctxs[a].phi_for_block[succ->id];
             }
             if (phi) {

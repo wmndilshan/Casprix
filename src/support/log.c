@@ -8,6 +8,7 @@
 /* Enable POSIX-2008 APIs: clock_gettime, fileno, strcasecmp */
 #ifndef _WIN32
 #  define _POSIX_C_SOURCE 200809L
+#  include <strings.h>
 #endif
 
 #include "log.h"
