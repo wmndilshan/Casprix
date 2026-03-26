@@ -5,7 +5,7 @@
 
 #ifndef _WIN32
 
-#include "../event_loop.h"
+#include "event_loop.h"
 #include <sys/epoll.h>
 #include <unistd.h>
 #include <stdlib.h>

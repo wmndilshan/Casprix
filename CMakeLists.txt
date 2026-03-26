@@ -59,6 +59,10 @@ else()
         $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
         $<$<BOOL:${ENABLE_AVX2}>:-mavx2 -mfma>
     )
+    # Expose POSIX-2008 APIs (strdup, usleep, clock_gettime, …) on Linux/macOS
+    target_compile_definitions(casprix_compile_options INTERFACE
+        $<$<NOT:$<BOOL:${WIN32}>>:_POSIX_C_SOURCE=200809L>
+    )
 endif()
 
 if(ENABLE_DEBUG_LOGGING)
@@ -316,7 +320,7 @@ if(BUILD_PACKAGE_MANAGER AND EXISTS "${CMAKE_SOURCE_DIR}/pkg/core/registry.c")
             list(APPEND PKG_SOURCES "pkg/core/${_f}.c")
         endif()
     endforeach()
-    foreach(_f cli cli_complete)
+    foreach(_f main cli cli_complete)
         if(EXISTS "${CMAKE_SOURCE_DIR}/pkg/cli/${_f}.c")
             list(APPEND PKG_SOURCES "pkg/cli/${_f}.c")
         endif()

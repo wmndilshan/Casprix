@@ -2,10 +2,14 @@
  * Casperix Runtime - Async File I/O Implementation
  */
 
+#ifndef _WIN32
+#  define _POSIX_C_SOURCE 200809L
+#endif
 #include "file_async.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 
 #include <fcntl.h>
 
@@ -236,7 +240,7 @@ Future* async_file_write_all(EventLoop* loop, const char* path, const void* data
 }
 
 MemoryMappedFile* mmap_file(const char* path, bool writable) {
-    MemoryMappedFile* mmap = (MemoryMappedFile*)calloc(1, sizeof(MemoryMappedFile));
+    MemoryMappedFile* mmf = (MemoryMappedFile*)calloc(1, sizeof(MemoryMappedFile));
     
 #ifdef _WIN32
     DWORD access = writable ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ;
@@ -245,59 +249,59 @@ MemoryMappedFile* mmap_file(const char* path, bool writable) {
     
     HANDLE file_handle = CreateFileA(path, access, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (file_handle == INVALID_HANDLE_VALUE) {
-        free(mmap);
+        free(mmf);
         return NULL;
     }
-    
+
     LARGE_INTEGER file_size;
     GetFileSizeEx(file_handle, &file_size);
-    
+
     HANDLE map_handle = CreateFileMappingA(file_handle, NULL, protect, 0, 0, NULL);
     if (!map_handle) {
         CloseHandle(file_handle);
-        free(mmap);
+        free(mmf);
         return NULL;
     }
-    
+
     void* data = MapViewOfFile(map_handle, map_access, 0, 0, 0);
     if (!data) {
         CloseHandle(map_handle);
         CloseHandle(file_handle);
-        free(mmap);
+        free(mmf);
         return NULL;
     }
-    
-    mmap->data = data;
-    mmap->size = file_size.QuadPart;
-    mmap->handle = map_handle;
-    
+
+    mmf->data = data;
+    mmf->size = file_size.QuadPart;
+    mmf->handle = map_handle;
+
     CloseHandle(file_handle);
 #else
     int fd = open(path, writable ? O_RDWR : O_RDONLY);
     if (fd < 0) {
-        free(mmap);
+        free(mmf);
         return NULL;
     }
-    
+
     struct stat st;
     fstat(fd, &st);
-    
+
     int prot = writable ? (PROT_READ | PROT_WRITE) : PROT_READ;
     void* data = mmap(NULL, st.st_size, prot, MAP_PRIVATE, fd, 0);
-    
+
     close(fd);
-    
+
     if (data == MAP_FAILED) {
-        free(mmap);
+        free(mmf);
         return NULL;
     }
-    
-    mmap->data = data;
-    mmap->size = st.st_size;
-    mmap->handle = NULL;
+
+    mmf->data = data;
+    mmf->size = st.st_size;
+    mmf->handle = NULL;
 #endif
-    
-    return mmap;
+
+    return mmf;
 }
 
 void munmap_file(MemoryMappedFile* mmap) {
