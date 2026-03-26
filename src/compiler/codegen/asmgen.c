@@ -2584,7 +2584,7 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
 }
 
 void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, SymbolTable* symbols) {
-    CPX_DEBUG(CPX_LOG_CAT_CODEGEN, "Generating x86-64 assembly code");
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_CODEGEN, "Generating x86-64 assembly code");
     
     // Initialize variable list
     var_list.names = NULL;
@@ -2850,5 +2850,5 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
         emit_lambda_functions_from_stmt(gen, statements[i], symbols);
     }
 
-    CPX_DEBUG(CPX_LOG_CAT_CODEGEN, "Assembly code generation complete");
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_CODEGEN, "Assembly code generation complete");
 }

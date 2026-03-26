@@ -77,7 +77,7 @@ AsyncStateMachine* lower_async_function(FunctionStmt* func, SemanticAnalyzer* an
         return NULL;
     }
     
-    CPX_INFO(CPX_LOG_CAT_SEMANTIC, "Lowering async function: %s", func->name);
+    CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_SEMANTIC, "Lowering async function: %s", func->name);
     
     AsyncStateMachine* sm = (AsyncStateMachine*)calloc(1, sizeof(AsyncStateMachine));
     if (!sm) return NULL;
@@ -101,7 +101,7 @@ AsyncStateMachine* lower_async_function(FunctionStmt* func, SemanticAnalyzer* an
     sm->state_labels = (int*)malloc(sizeof(int));
     sm->state_labels[0] = 0;
     
-    CPX_DEBUG(CPX_LOG_CAT_SEMANTIC, "Created state machine with %d states", sm->state_count);
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Created state machine with %d states", sm->state_count);
     
     return sm;
 }
@@ -113,7 +113,7 @@ FunctionStmt* generate_state_machine_step(AsyncStateMachine* sm) {
     char step_name[256];
     snprintf(step_name, sizeof(step_name), "%s_step", sm->function_name);
     
-    CPX_INFO(CPX_LOG_CAT_SEMANTIC, "Generating step function: %s", step_name);
+    CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_SEMANTIC, "Generating step function: %s", step_name);
     
     // Create new function statement
     FunctionStmt* step_func = (FunctionStmt*)calloc(1, sizeof(FunctionStmt));
@@ -134,7 +134,7 @@ FunctionStmt* generate_state_machine_step(AsyncStateMachine* sm) {
 FunctionStmt* generate_async_entry(AsyncStateMachine* sm) {
     if (!sm) return NULL;
     
-    CPX_INFO(CPX_LOG_CAT_SEMANTIC, "Generating async entry: %s_async", sm->function_name);
+    CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_SEMANTIC, "Generating async entry: %s_async", sm->function_name);
     
     // Create wrapper function that:
     // 1. Allocates state structure
@@ -159,7 +159,7 @@ FunctionStmt* generate_async_entry(AsyncStateMachine* sm) {
 bool transform_await_expr(Expr* await_expr, AsyncStateMachine* sm, int current_state) {
     if (!await_expr || !sm) return false;
     
-    CPX_DEBUG(CPX_LOG_CAT_SEMANTIC, "Transforming await in state %d", current_state);
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Transforming await in state %d", current_state);
     
     // Transform:
     //   let x = await foo()

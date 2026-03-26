@@ -43,8 +43,7 @@ bool check_ownership_valid(OwnershipChecker* checker, const char* var_name, int 
     OwnershipInfo* info = get_ownership_info(sym);
     
     if (info->state == OWNERSHIP_MOVED) {
-        CPX_ERROR(CPX_LOG_CAT_SEMANTIC, 
-                 "[%d:%d] Use of moved value '%s' (moved at line %d)",
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Use of moved value '%s' (moved at line %d)",
                  line, 0, var_name, info->move_location);
         return false;
     }
@@ -64,8 +63,7 @@ void mark_moved(OwnershipChecker* checker, const char* var_name, int line) {
     
     // Can't move if there are active borrows
     if (info->borrow_count > 0 || info->has_mut_borrow) {
-        CPX_ERROR(CPX_LOG_CAT_SEMANTIC,
-                 "[%d:%d] Cannot move '%s' while borrowed",
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot move '%s' while borrowed",
                  line, 0, var_name);
         return;
     }
@@ -73,7 +71,7 @@ void mark_moved(OwnershipChecker* checker, const char* var_name, int line) {
     info->state = OWNERSHIP_MOVED;
     info->move_location = line;
     
-    CPX_DEBUG(CPX_LOG_CAT_SEMANTIC, "Marked '%s' as moved at line %d", var_name, line);
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Marked '%s' as moved at line %d", var_name, line);
 }
 
 bool add_borrow(OwnershipChecker* checker, const char* var_name, int line) {
@@ -88,16 +86,14 @@ bool add_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     
     // Can't borrow if already has mutable borrow
     if (info->has_mut_borrow) {
-        CPX_ERROR(CPX_LOG_CAT_SEMANTIC,
-                 "[%d:%d] Cannot borrow '%s' immutably while mutably borrowed",
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot borrow '%s' immutably while mutably borrowed",
                  line, 0, var_name);
         return false;
     }
 
     // Can't borrow if moved
     if (info->state == OWNERSHIP_MOVED) {
-        CPX_ERROR(CPX_LOG_CAT_SEMANTIC,
-                 "[%d:%d] Cannot borrow moved value '%s'",
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot borrow moved value '%s'",
                  line, 0, var_name);
         return false;
     }
@@ -105,7 +101,7 @@ bool add_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     info->borrow_count++;
     info->state = OWNERSHIP_BORROW;
     
-    CPX_DEBUG(CPX_LOG_CAT_SEMANTIC, "Added borrow to '%s' (count: %d)", 
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Added borrow to '%s' (count: %d)", 
              var_name, info->borrow_count);
     
     return true;
@@ -123,16 +119,14 @@ bool add_mut_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     
     // Can't have mutable borrow if any borrows exist
     if (info->borrow_count > 0 || info->has_mut_borrow) {
-        CPX_ERROR(CPX_LOG_CAT_SEMANTIC,
-                 "[%d:%d] Cannot borrow '%s' mutably while borrowed",
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot borrow '%s' mutably while borrowed",
                  line, 0, var_name);
         return false;
     }
 
     // Can't borrow if moved
     if (info->state == OWNERSHIP_MOVED) {
-        CPX_ERROR(CPX_LOG_CAT_SEMANTIC,
-                 "[%d:%d] Cannot borrow moved value '%s'",
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot borrow moved value '%s'",
                  line, 0, var_name);
         return false;
     }
@@ -140,7 +134,7 @@ bool add_mut_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     info->has_mut_borrow = true;
     info->state = OWNERSHIP_BORROW_MUT;
     
-    CPX_DEBUG(CPX_LOG_CAT_SEMANTIC, "Added mutable borrow to '%s'", var_name);
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Added mutable borrow to '%s'", var_name);
     
     return true;
 }
@@ -202,14 +196,12 @@ void validate_scope_end(OwnershipChecker* checker, int scope_level) {
 
         /* Release any outstanding borrows */
         if (info->borrow_count > 0) {
-            CPX_DEBUG(CPX_LOG_CAT_SEMANTIC,
-                     "Auto-releasing %d borrow(s) on '%s' at scope end (level %d)",
+            CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC,                      "Auto-releasing %d borrow(s) on '%s' at scope end (level %d)",
                      info->borrow_count, sym->name, scope_level);
             info->borrow_count = 0;
         }
         if (info->has_mut_borrow) {
-            CPX_DEBUG(CPX_LOG_CAT_SEMANTIC,
-                     "Auto-releasing mutable borrow on '%s' at scope end (level %d)",
+            CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC,                      "Auto-releasing mutable borrow on '%s' at scope end (level %d)",
                      sym->name, scope_level);
             info->has_mut_borrow = false;
         }
@@ -223,5 +215,5 @@ void validate_scope_end(OwnershipChecker* checker, int scope_level) {
         }
     }
 
-    CPX_DEBUG(CPX_LOG_CAT_SEMANTIC, "Validated scope end at level %d", scope_level);
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Validated scope end at level %d", scope_level);
 }

@@ -141,17 +141,17 @@ Module* load_module(ModuleRegistry* registry, const char* module_name, void* unu
         for (int i = 0; i < dump_len; i++) {
             sprintf(hex_dump + i * 3, "%02x ", (unsigned char)module_name[i]);
         }
-        CPX_DEBUG(CPX_LOG_CAT_PARSER, "Attempting to load module: '%s' (length: %d, hex: %s)",
+        CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_PARSER, "Attempting to load module: '%s' (length: %d, hex: %s)",
                  module_name, len, hex_dump);
     } else {
-        CPX_ERROR(CPX_LOG_CAT_PARSER, "Module name is NULL");
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_PARSER, "Module name is NULL");
         return NULL;
     }
 
     // Check if already loaded
     for (int i = 0; i < registry->count; i++) {
         if (strcmp(registry->modules[i].name, module_name) == 0) {
-            CPX_DEBUG(CPX_LOG_CAT_PARSER, "Module '%s' already loaded", module_name);
+            CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_PARSER, "Module '%s' already loaded", module_name);
             return &registry->modules[i];
         }
     }
@@ -159,16 +159,16 @@ Module* load_module(ModuleRegistry* registry, const char* module_name, void* unu
     // Resolve module path
     char* module_path = resolve_module_path(module_name);
     if (!module_path) {
-        CPX_ERROR(CPX_LOG_CAT_PARSER, "Module '%s' not found", module_name);
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_PARSER, "Module '%s' not found", module_name);
         return NULL;
     }
 
-    CPX_INFO(CPX_LOG_CAT_PARSER, "Loading module: %s from %s", module_name, module_path);
+    CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_PARSER, "Loading module: %s from %s", module_name, module_path);
 
     // Read file
     char* source = read_file_content(module_path);
     if (!source) {
-        CPX_ERROR(CPX_LOG_CAT_PARSER, "Could not read module file: %s", module_path);
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_PARSER, "Could not read module file: %s", module_path);
         free(module_path);
         return NULL;
     }
@@ -184,7 +184,7 @@ Module* load_module(ModuleRegistry* registry, const char* module_name, void* unu
     Stmt** statements = parse(&parser, &stmt_count);
 
     if (had_error) {
-        CPX_ERROR(CPX_LOG_CAT_PARSER, "Failed to parse module: %s", module_name);
+        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_PARSER, "Failed to parse module: %s", module_name);
         free(source);
         free(module_path);
         return NULL;
@@ -207,7 +207,7 @@ Module* load_module(ModuleRegistry* registry, const char* module_name, void* unu
 
     free(source);
 
-    CPX_INFO(CPX_LOG_CAT_PARSER, "Module '%s' loaded successfully (%d statements)",
+    CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_PARSER, "Module '%s' loaded successfully (%d statements)",
              module_name, stmt_count);
 
     // Recursively load any imports within this module

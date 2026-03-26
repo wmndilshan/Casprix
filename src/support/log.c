@@ -5,6 +5,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* Enable POSIX-2008 APIs: clock_gettime, fileno, strcasecmp */
+#ifndef _WIN32
+#  define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "log.h"
 #include <stdlib.h>
 #include <string.h>

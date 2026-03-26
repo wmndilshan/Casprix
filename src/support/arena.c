@@ -3,6 +3,7 @@
  */
 
 #include "support/arena.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>

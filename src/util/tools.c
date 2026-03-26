@@ -54,10 +54,10 @@ bool check_tool_available(ToolType tool, void* unused) {
     int result = system(command);
 
     if (result == 0) {
-        CPX_DEBUG(CPX_LOG_CAT_GENERAL, "Tool '%s' is available", get_tool_name(tool));
+        CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_GENERAL, "Tool '%s' is available", get_tool_name(tool));
         return true;
     } else {
-        CPX_WARN(CPX_LOG_CAT_GENERAL, "Tool '%s' not found in PATH", get_tool_name(tool));
+        CPX_LOG(CPX_LOG_WARN,  CPX_LOG_CAT_GENERAL, "Tool '%s' not found in PATH", get_tool_name(tool));
         return false;
     }
 }
@@ -65,36 +65,36 @@ bool check_tool_available(ToolType tool, void* unused) {
 bool download_tool(ToolType tool, void* unused) {
     (void)unused;  // Deprecated parameter
 
-    CPX_INFO(CPX_LOG_CAT_GENERAL, "Attempting to download %s...", get_tool_name(tool));
+    CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "Attempting to download %s...", get_tool_name(tool));
 
     switch (tool) {
         case TOOL_NASM:
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "Please download NASM from: https://www.nasm.us/");
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "Or install via package manager:");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "Please download NASM from: https://www.nasm.us/");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "Or install via package manager:");
 #ifdef _WIN32
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - Using Chocolatey: choco install nasm");
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - Using Scoop: scoop install nasm");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - Using Chocolatey: choco install nasm");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - Using Scoop: scoop install nasm");
 #else
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - Ubuntu/Debian: sudo apt-get install nasm");
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - Fedora: sudo dnf install nasm");
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - macOS: brew install nasm");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - Ubuntu/Debian: sudo apt-get install nasm");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - Fedora: sudo dnf install nasm");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - macOS: brew install nasm");
 #endif
             return false;
 
         case TOOL_LD:
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "LD linker is usually included with GCC/MinGW");
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "Please install GCC/MinGW development tools");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "LD linker is usually included with GCC/MinGW");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "Please install GCC/MinGW development tools");
             return false;
 
         case TOOL_GCC:
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "Please install GCC:");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "Please install GCC:");
 #ifdef _WIN32
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - MinGW-w64: https://www.mingw-w64.org/");
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - Using Chocolatey: choco install mingw");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - MinGW-w64: https://www.mingw-w64.org/");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - Using Chocolatey: choco install mingw");
 #else
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - Ubuntu/Debian: sudo apt-get install gcc");
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - Fedora: sudo dnf install gcc");
-            CPX_INFO(CPX_LOG_CAT_GENERAL, "  - macOS: xcode-select --install");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - Ubuntu/Debian: sudo apt-get install gcc");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - Fedora: sudo dnf install gcc");
+            CPX_LOG(CPX_LOG_INFO,  CPX_LOG_CAT_GENERAL, "  - macOS: xcode-select --install");
 #endif
             return false;
     }
