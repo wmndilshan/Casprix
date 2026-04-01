@@ -196,8 +196,10 @@ void arc_weak_release(ArcWeak* weak) {
     weak->header = NULL;
 
     int32_t new_weak = ATOMIC_DEC(&header->weak_count);
-    if (new_weak == 0 && header->strong_count <= 0) {
-        // Both strong and weak counts are zero - free the header
+    if (new_weak == 0 && ATOMIC_LOAD(&header->strong_count) <= 0) {
+        /* Both strong and weak counts are zero - free the header.
+           Use ATOMIC_LOAD for strong_count to avoid a TOCTOU race
+           in multithreaded contexts (Bug #6 fix). */
         free(header);
     }
 }
@@ -244,6 +246,14 @@ ArcStats arc_get_stats(void) {
 
 void arc_reset_stats(void) {
     memset(&g_arc_stats, 0, sizeof(ArcStats));
+}
+
+/* Called by the cycle collector when it frees ARC-managed objects directly
+   (bypassing arc_release) so that global stats stay accurate. */
+void arc_notify_freed(size_t size) {
+    g_arc_stats.total_frees++;
+    if (g_arc_stats.current_objects > 0) g_arc_stats.current_objects--;
+    if (g_arc_stats.current_bytes >= size) g_arc_stats.current_bytes -= size;
 }
 
 void arc_print_stats(void) {

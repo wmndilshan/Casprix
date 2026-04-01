@@ -182,10 +182,14 @@ void* region_alloc_with_dtor(Region* region, size_t size,
 void* region_alloc_current(size_t size) {
     Region* r = region_current();
     if (r) return region_alloc(r, size);
-    /* Fallback: no active region, use heap */
-    void* ptr = malloc(size);
-    if (ptr) memset(ptr, 0, size);
-    return ptr;
+    /* Bug #5 fix: The original code fell back to malloc() here, returning a
+       raw heap pointer that callers cannot distinguish from a region pointer
+       and therefore cannot free — silent leak.  Return NULL instead to force
+       the caller to push a region before allocating. */
+    fprintf(stderr, "region_alloc_current: no active region on stack "
+                    "(size=%llu) — push a region first\n",
+                    (unsigned long long)size);
+    return NULL;
 }
 
 char* region_strdup(Region* region, const char* str) {

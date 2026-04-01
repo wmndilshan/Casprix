@@ -2,9 +2,11 @@
 // Bacon-Rajan synchronous cycle collection
 
 #include "cycle_gc.h"
+#include "arc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
 
 // --- Internal: trial deletion helpers ---
 
@@ -64,7 +66,11 @@ static void cycle_collect_white(void* obj) {
         header->destructor(obj);
     }
 
-    // Free the object
+    /* Update ARC-level stats so leak reporter stays accurate —
+       cycle_collect_white bypasses arc_release, so we must notify manually. */
+    arc_notify_freed(header->size);
+
+    /* Free the object */
     free(header);
     g_cycle_collected_count++;
 }

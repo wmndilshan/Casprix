@@ -1,6 +1,7 @@
 // Casperix Runtime - Unified Memory Manager Implementation
 
 #include "memory.h"
+#include "tlocal_heap.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -69,6 +70,9 @@ void mem_shutdown(MemoryManager* mm) {
 
     // Shutdown subsystems
     borrow_checker_shutdown();
+
+    // Free global slab pool — was silently leaked on every run
+    tlocal_heap_shutdown_global();
 
     if (mm->cycle_collector) {
         cycle_gc_destroy(mm->cycle_collector);

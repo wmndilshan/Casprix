@@ -151,17 +151,17 @@ NuwanMap* nuwan_map_new(void) {
     return m;
 }
 
-static void map_insert_raw(MapEntry* slots, size_t cap, char* key, int64_t val, uint64_t h) {
+static bool map_insert_raw(MapEntry* slots, size_t cap, char* key, int64_t val, uint64_t h) {
     size_t idx = h % cap;
     while (1) {
         if (slots[idx].hash == MAP_EMPTY) {
             slots[idx] = (MapEntry){key, val, h};
-            return;
+            return true;
         }
         if (slots[idx].hash == h && strcmp(slots[idx].key, key) == 0) {
             free(key);  /* duplicate key — update value */
             slots[idx].val = val;
-            return;
+            return false;
         }
         idx = (idx + 1) % cap;
     }
@@ -185,8 +185,9 @@ void nuwan_map_put(NuwanMap* m, const char* key, int64_t val) {
     if (!m || !key) return;
     if (m->size * MAP_LOAD_DEN >= m->cap * MAP_LOAD_NUM) map_grow(m);
     uint64_t h = nuwan_string_hash(key);
-    map_insert_raw(m->slots, m->cap, strdup(key), val, h);
-    m->size++;
+    if (map_insert_raw(m->slots, m->cap, strdup(key), val, h)) {
+        m->size++;
+    }
 }
 
 int64_t nuwan_map_get(const NuwanMap* m, const char* key) {
@@ -348,10 +349,15 @@ bool nuwan_pq_push(NuwanPQ* pq, int64_t priority, int64_t value) {
     if (!pq) return false;
     if (pq->size == pq->cap) {
         size_t nc = pq->cap * 2;
+        /* Realloc each array independently so neither pointer is lost if
+           the second realloc fails (Bug #4 fix). */
         int64_t* np = (int64_t*)realloc(pq->prios, nc * sizeof(int64_t));
-        int64_t* nv = (int64_t*)realloc(pq->vals,  nc * sizeof(int64_t));
-        if (!np || !nv) return false;
-        pq->prios = np; pq->vals = nv; pq->cap = nc;
+        if (!np) return false;
+        pq->prios = np;
+        int64_t* nv = (int64_t*)realloc(pq->vals, nc * sizeof(int64_t));
+        if (!nv) return false;   /* prios already grown but that's acceptable */
+        pq->vals = nv;
+        pq->cap = nc;
     }
     size_t i = pq->size++;
     pq->prios[i] = priority; pq->vals[i] = value;

@@ -212,13 +212,14 @@ static void gc_sweep(gc_context_t* gc, bool full_collection) {
 
             if (gc->config.enable_generational &&
                 obj->generation == GC_YOUNG_GEN) {
-                /* Simple promotion heuristic: survived N collections → old */
-                /* We use a static counter approximation */
-                static int promotion_counter = 0;
-                promotion_counter++;
-                if (promotion_counter >= GC_PROMOTE_AGE) {
+                /* Per-object survive count — avoids the shared-static bug where
+                   a single counter was incremented for every surviving object
+                   across all GC contexts, promoting the wrong objects. */
+                gc_extra_t* extra = gc_get_extra(obj);
+                extra->survive_count++;
+                if (extra->survive_count >= GC_PROMOTE_AGE) {
                     obj->generation = GC_OLD_GEN;
-                    promotion_counter = 0;
+                    extra->survive_count = 0;
                 }
             }
 

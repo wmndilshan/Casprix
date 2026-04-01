@@ -141,6 +141,10 @@ void arc_reset_stats(void);
 // Print statistics to stdout
 void arc_print_stats(void);
 
+// Notify ARC that an object was freed externally (e.g. by the cycle collector)
+// without going through arc_release. Keeps global stats accurate.
+void arc_notify_freed(size_t size);
+
 // --- Header access macros ---
 
 #define ARC_HEADER_SIZE sizeof(ArcHeader)
