@@ -14,6 +14,14 @@
 #include <string.h>
 #include <stdbool.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#define casprix_getcwd(buf, sz) _getcwd((buf), (int)(sz))
+#else
+#include <unistd.h>
+#define casprix_getcwd(buf, sz) getcwd((buf), (sz))
+#endif
+
 #include "casprix/common.h"
 #include "support/log.h"
 #include "support/error.h"
@@ -423,14 +431,90 @@ int pipeline_assemble(const char* asm_file_path, const char* obj_file_path) {
  * compiler works correctly regardless of the current working directory.
  * ========================================================================== */
 
+static bool file_exists_readable(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (f) { fclose(f); return true; }
+    return false;
+}
+
+/* Walk up from cwd looking for runtime/memory/arc.c (repo root). */
+static bool find_source_root_for_runtime(char* out, size_t outsz) {
+    const char* env = getenv("CASPRIX_SOURCE_ROOT");
+    if (env && *env) {
+        char probe[768];
+        snprintf(probe, sizeof(probe), "%s/runtime/memory/arc.c", env);
+        if (file_exists_readable(probe)) {
+            strncpy(out, env, outsz);
+            out[outsz - 1] = '\0';
+            return true;
+        }
+    }
+
+    char cwd[512];
+    if (!casprix_getcwd(cwd, sizeof(cwd))) return false;
+
+    for (int depth = 0; depth < 10; depth++) {
+        char probe[640];
+        snprintf(probe, sizeof(probe), "%s/runtime/memory/arc.c", cwd);
+        if (file_exists_readable(probe)) {
+            strncpy(out, cwd, outsz);
+            out[outsz - 1] = '\0';
+            return true;
+        }
+        char* slash = strrchr(cwd, '/');
+#ifdef _WIN32
+        char* bs = strrchr(cwd, '\\');
+        if (bs && (!slash || bs > slash)) slash = bs;
+#endif
+        if (!slash || slash == cwd) break;
+        *slash = '\0';
+    }
+    return false;
+}
+
+static void extract_parent_dir(const char* file_path, char* dir_out, size_t dir_sz) {
+    strncpy(dir_out, ".", dir_sz);
+    dir_out[dir_sz - 1] = '\0';
+    const char* sep = strrchr(file_path, '/');
+#ifdef _WIN32
+    const char* sep2 = strrchr(file_path, '\\');
+    if (sep2 && (!sep || sep2 > sep)) sep = sep2;
+#endif
+    if (sep && sep > file_path) {
+        size_t n = (size_t)(sep - file_path);
+        if (n < dir_sz) {
+            memcpy(dir_out, file_path, n);
+            dir_out[n] = '\0';
+        }
+    }
+}
+
+static bool skia_libs_next_to_runtime(const char* rt_archive_path) {
+    char dir[256];
+    extract_parent_dir(rt_archive_path, dir, sizeof(dir));
+    char p1[512], p2[512];
+    snprintf(p1, sizeof(p1), "%s/libskia_gui.a", dir);
+    snprintf(p2, sizeof(p2), "%s/libskia_c.a", dir);
+    return file_exists_readable(p1) && file_exists_readable(p2);
+}
+
 static const char* find_prebuilt_lib(const char* name) {
-    /* Stack-allocated candidates — safe because we use the result immediately */
+    /* Explicit path from CI / tests (see tests/CMakeLists.txt). */
     static char path[512];
-    static const char* dirs[] = { "build", "../build", ".", NULL };
+    const char* env = getenv("CASPRIX_RUNTIME_LIB");
+    if (env && *env && file_exists_readable(env)) {
+        strncpy(path, env, sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
+        return path;
+    }
+
+    static const char* dirs[] = {
+        "build", "../build", "../../build", "../../../build",
+        ".", "..", NULL,
+    };
     for (int i = 0; dirs[i]; i++) {
         snprintf(path, sizeof(path), "%s/%s", dirs[i], name);
-        FILE* f = fopen(path, "rb");
-        if (f) { fclose(f); return path; }
+        if (file_exists_readable(path)) return path;
     }
     return NULL;
 }
@@ -454,22 +538,36 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
     char inline_sources[512] = "";
 
     if (rt_path) {
-        /* Extract directory from the path for -L flag */
-        char rt_dir[256] = ".";
-        const char* sep = strrchr(rt_path, '/');
-        if (!sep) sep = strrchr(rt_path, '\\');
-        if (sep && sep > rt_path) {
-            size_t n = (size_t)(sep - rt_path);
-            if (n < sizeof(rt_dir)) { memcpy(rt_dir, rt_path, n); rt_dir[n] = '\0'; }
+        char rt_dir[256];
+        extract_parent_dir(rt_path, rt_dir, sizeof(rt_dir));
+        if (skia_libs_next_to_runtime(rt_path)) {
+            snprintf(runtime_flags, sizeof(runtime_flags),
+                     " -L\"%s\" -lskia_gui -lskia_c -lcasprix_runtime -lgdi32 -luser32 -lmsimg32",
+                     rt_dir);
+        } else {
+#ifdef _WIN32
+            snprintf(runtime_flags, sizeof(runtime_flags),
+                     " -L\"%s\" -lcasprix_runtime -lws2_32 -lpthread -ladvapi32",
+                     rt_dir);
+#else
+            snprintf(runtime_flags, sizeof(runtime_flags),
+                     " -L\"%s\" -lcasprix_runtime -lm -lpthread",
+                     rt_dir);
+#endif
         }
-        snprintf(runtime_flags, sizeof(runtime_flags),
-                 " -L\"%s\" -lskia_gui -lskia_c -lcasprix_runtime -lgdi32 -luser32 -lmsimg32",
-                 rt_dir);
     } else {
-        /* No prebuilt runtime: fall back to compiling key sources inline */
-        snprintf(inline_sources, sizeof(inline_sources),
-                 "runtime/memory/arc.c runtime/memory/cycle_gc.c "
-                 "runtime/memory/ownership.c runtime/object.c");
+        /* No prebuilt runtime: compile a minimal subset next to the repo root. */
+        char root[512];
+        if (find_source_root_for_runtime(root, sizeof(root))) {
+            snprintf(inline_sources, sizeof(inline_sources),
+                     "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
+                     "\"%s/runtime/memory/ownership.c\" \"%s/runtime/object.c\"",
+                     root, root, root, root);
+        } else {
+            snprintf(inline_sources, sizeof(inline_sources),
+                     "runtime/memory/arc.c runtime/memory/cycle_gc.c "
+                     "runtime/memory/ownership.c runtime/object.c");
+        }
     }
 
     char stdlib_flags[256] = "";

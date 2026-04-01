@@ -2,6 +2,7 @@
 #include "compiler/sema/semantic.h"
 #include "compiler/sema/drop_planner.h"
 #include "compiler/sema/escape_analysis.h"
+#include <stdio.h>
 #include <string.h>
 
 // Forward declarations
@@ -175,6 +176,41 @@ static void emit_asm(AssemblyGenerator* gen, const char* format, ...) {
     va_start(args, format);
     vfprintf(gen->output, format, args);
     va_end(args);
+}
+
+/* NASM `db "..."` must not contain raw newlines/quotes; escape for printf + NASM. */
+static void emit_data_string_literal(AssemblyGenerator* gen, int idx, const char* raw) {
+    char esc[4096];
+    size_t j = 0;
+    for (size_t i = 0; raw[i] && j + 8 < sizeof(esc); i++) {
+        unsigned char c = (unsigned char)raw[i];
+        if (c == '%') {
+            esc[j++] = '%';
+            esc[j++] = '%';
+        } else if (c == '\\') {
+            esc[j++] = '\\';
+            esc[j++] = '\\';
+        } else if (c == '"') {
+            esc[j++] = '\\';
+            esc[j++] = '"';
+        } else if (c == '\n') {
+            esc[j++] = '\\';
+            esc[j++] = 'n';
+        } else if (c == '\r') {
+            esc[j++] = '\\';
+            esc[j++] = 'r';
+        } else if (c == '\t') {
+            esc[j++] = '\\';
+            esc[j++] = 't';
+        } else if (c >= 32 && c < 127) {
+            esc[j++] = (char)c;
+        } else {
+            int n = snprintf(esc + j, sizeof(esc) - j, "\\x%02X", (unsigned)c);
+            if (n > 0) j += (size_t)n;
+        }
+    }
+    esc[j] = '\0';
+    emit_asm(gen, "    str_%d db \"%s\", 0\n", idx, esc);
 }
 
 /* ── Local variable frame management ─────────────────────────────────────── */
@@ -2652,7 +2688,7 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     
     // String literals
     for (int i = 0; i < gen->string_size; i++) {
-        emit_asm(gen, "    str_%d db \"%s\", 0\n", i, gen->string_literals[i]);
+        emit_data_string_literal(gen, i, gen->string_literals[i]);
     }
     emit_asm(gen, "\n");
 

@@ -70,16 +70,25 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runner.c" AND BUILD_COMPILER)
 endif()
 
 # ── CPX source tests (run via compiler) ──────────────────────────────────────
-find_program(CASPRIX_EXE casprix HINTS ${CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR}/build)
-if(CASPRIX_EXE)
+# Use repo root as cwd so pipeline_link finds build/libcasprix_runtime.a (or
+# CASPRIX_SOURCE_ROOT for inline runtime .c paths). Unique -o avoids parallel
+# tests clobbering each other's .asm/.o in a shared directory.
+if(BUILD_COMPILER AND TARGET casprix)
     file(GLOB CPX_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_*.cpx")
     foreach(cpx_test ${CPX_TESTS})
         get_filename_component(test_name ${cpx_test} NAME_WE)
         add_test(
             NAME compiler_${test_name}
-            COMMAND ${CASPRIX_EXE} ${cpx_test}
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/compiler
+            COMMAND $<TARGET_FILE:casprix> ${cpx_test} -o ${CMAKE_BINARY_DIR}/ctest/${test_name}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
+        if(BUILD_RUNTIME AND TARGET casprix_runtime)
+            set_tests_properties(compiler_${test_name} PROPERTIES
+                ENVIRONMENT "CASPRIX_RUNTIME_LIB=$<TARGET_FILE:casprix_runtime>;CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR}")
+        else()
+            set_tests_properties(compiler_${test_name} PROPERTIES
+                ENVIRONMENT "CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR}")
+        endif()
     endforeach()
 
     # Disable tests that require the Skia GUI framework when it is not built
