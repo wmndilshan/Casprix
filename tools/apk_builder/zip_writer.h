@@ -40,6 +40,18 @@ typedef struct {
     long     current_offset;
 } ZipWriter;
 
+typedef enum {
+    CPX_ZIP_OK = 0,
+    CPX_ZIP_ERR_OPEN_FAILED,
+    CPX_ZIP_ERR_BAD_EOCD,
+    CPX_ZIP_ERR_BAD_CENTRAL_DIRECTORY,
+    CPX_ZIP_ERR_BAD_LOCAL_HEADER,
+    CPX_ZIP_ERR_ENTRY_OUT_OF_BOUNDS,
+    CPX_ZIP_ERR_CRC_MISMATCH,
+    CPX_ZIP_ERR_UNSUPPORTED_METHOD,
+    CPX_ZIP_ERR_IO,
+} CpxZipError;
+
 /* Open a new ZIP file for writing */
 ZipWriter* zip_writer_open(const char* path);
 
@@ -53,6 +65,12 @@ int zip_writer_add_bytes(ZipWriter* zw, const char* archive_name,
 
 /* Finalize (write central directory + EOCD) and close */
 int zip_writer_close(ZipWriter* zw);
+
+/* Read-only verification of an existing APK/ZIP archive */
+CpxZipError cpx_zip_verify(const char* apk_path);
+
+/* Human-readable error string for verification failures */
+const char* cpx_zip_error_string(CpxZipError err);
 
 /* CRC-32 utility */
 uint32_t zip_crc32(const void* data, size_t size);

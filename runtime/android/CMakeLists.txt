@@ -55,6 +55,7 @@ set(CASPRIX_SOURCES
     ${CMAKE_SOURCE_DIR}/android_main.c
     ${CMAKE_SOURCE_DIR}/android_egl.c
     ${CMAKE_SOURCE_DIR}/android_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/jni_bridge.c
     ${CMAKE_SOURCE_DIR}/android_runtime.c
 
     ${PROJECT_ROOT}/runtime/skia/skia_c.cpp
@@ -130,4 +131,3 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_options(MainActivity PRIVATE -O2 -DNDEBUG)
 endif()
-

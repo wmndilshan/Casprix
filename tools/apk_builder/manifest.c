@@ -15,19 +15,155 @@
 #  define MKDIR(p) mkdir(p, 0755)
 #endif
 
-int manifest_write(const ApkBuildConfig* config, const char* output_path) {
+static void manifest_copy_str(char* dst, size_t dst_size, const char* src, const char* fallback) {
+    if (!dst || dst_size == 0) return;
+    snprintf(dst, dst_size, "%s", (src && src[0]) ? src : (fallback ? fallback : ""));
+}
+
+static int manifest_is_empty(const char* s) {
+    return !s || !s[0];
+}
+
+void manifest_builder_init(ManifestBuilder* mb, const ApkBuildConfig* config) {
+    if (!mb) return;
+    memset(mb, 0, sizeof(*mb));
+    mb->config = config;
+
+    if (config) {
+        manifest_copy_str(mb->package_name, sizeof(mb->package_name), config->package_name, "");
+        manifest_copy_str(mb->app_name, sizeof(mb->app_name), config->app_name, "");
+        manifest_copy_str(mb->main_activity, sizeof(mb->main_activity), config->main_activity, "MainActivity");
+        mb->min_sdk = config->min_sdk ? config->min_sdk : 24;
+        mb->target_sdk = config->target_sdk ? config->target_sdk : 34;
+        mb->version_code = config->version_code ? config->version_code : 1;
+        manifest_copy_str(mb->version_name, sizeof(mb->version_name), config->version_name, "1.0.0");
+        mb->debuggable = config->debug_build ? 1 : 0;
+    } else {
+        manifest_copy_str(mb->main_activity, sizeof(mb->main_activity), "MainActivity", "");
+        manifest_copy_str(mb->version_name, sizeof(mb->version_name), "1.0.0", "");
+        mb->min_sdk = 24;
+        mb->target_sdk = 34;
+        mb->version_code = 1;
+    }
+
+    manifest_add_feature(mb, "android.hardware.opengles.a2", 1);
+    if (mb->feature_count > 0) {
+        snprintf(mb->features[0].gl_es_version, sizeof(mb->features[0].gl_es_version), "0x00020000");
+    }
+}
+
+int manifest_add_permission(ManifestBuilder* mb, const char* permission_name) {
+    if (!mb || manifest_is_empty(permission_name)) return -1;
+    if (mb->permission_count >= MANIFEST_MAX_PERMISSIONS) return -1;
+    mb->permissions[mb->permission_count++] = permission_name;
+    return 0;
+}
+
+int manifest_add_feature(ManifestBuilder* mb, const char* feature_name, int required) {
+    if (!mb || manifest_is_empty(feature_name)) return -1;
+    if (mb->feature_count >= MANIFEST_MAX_FEATURES) return -1;
+
+    ManifestFeature* feature = &mb->features[mb->feature_count++];
+    memset(feature, 0, sizeof(*feature));
+    snprintf(feature->name, sizeof(feature->name), "%s", feature_name);
+    feature->required = required ? 1 : 0;
+    return 0;
+}
+
+int manifest_add_activity(ManifestBuilder* mb, const char* activity_name,
+                          ManifestActivityStyle style, const char* label,
+                          const char* lib_name) {
+    if (!mb || manifest_is_empty(activity_name)) return -1;
+    if (mb->activity_count >= MANIFEST_MAX_ACTIVITIES) return -1;
+
+    ManifestActivity* activity = &mb->activities[mb->activity_count++];
+    memset(activity, 0, sizeof(*activity));
+    snprintf(activity->name, sizeof(activity->name), "%s", activity_name);
+    manifest_copy_str(activity->label, sizeof(activity->label), label, "");
+    manifest_copy_str(activity->lib_name, sizeof(activity->lib_name), lib_name, "");
+    snprintf(activity->config_changes, sizeof(activity->config_changes),
+             "orientation|keyboardHidden|screenSize");
+    snprintf(activity->screen_orientation, sizeof(activity->screen_orientation), "%s", "portrait");
+    snprintf(activity->theme, sizeof(activity->theme),
+             "@android:style/Theme.DeviceDefault.NoActionBar");
+    snprintf(activity->window_soft_input_mode, sizeof(activity->window_soft_input_mode),
+             "adjustResize");
+    activity->exported = (mb->activity_count == 1) ? 1 : 0;
+    activity->launchable = (mb->activity_count == 1) ? 1 : 0;
+    activity->style = style;
+    return 0;
+}
+
+static void manifest_write_feature(FILE* f, const ManifestFeature* feature) {
+    if (!feature) return;
+    if (feature->gl_es_version[0]) {
+        fprintf(f,
+            "    <uses-feature android:glEsVersion=\"%s\"\n"
+            "        android:required=\"%s\" />\n",
+            feature->gl_es_version,
+            feature->required ? "true" : "false");
+        return;
+    }
+
+    fprintf(f,
+        "    <uses-feature android:name=\"%s\"\n"
+        "        android:required=\"%s\" />\n",
+        feature->name,
+        feature->required ? "true" : "false");
+}
+
+static void manifest_write_activity(FILE* f, const ManifestActivity* activity) {
+    if (!activity) return;
+
+    fprintf(f, "        <activity\n");
+    fprintf(f, "            android:name=\"%s\"\n", activity->name);
+    if (activity->label[0]) {
+        fprintf(f, "            android:label=\"%s\"\n", activity->label);
+    }
+    if (activity->config_changes[0]) {
+        fprintf(f, "            android:configChanges=\"%s\"\n", activity->config_changes);
+    }
+    if (activity->screen_orientation[0]) {
+        fprintf(f, "            android:screenOrientation=\"%s\"\n", activity->screen_orientation);
+    }
+    if (activity->theme[0]) {
+        fprintf(f, "            android:theme=\"%s\"\n", activity->theme);
+    }
+    if (activity->window_soft_input_mode[0]) {
+        fprintf(f, "            android:windowSoftInputMode=\"%s\"\n", activity->window_soft_input_mode);
+    }
+    if (activity->style == MANIFEST_ACTIVITY_SINGLE_TOP) {
+        fprintf(f, "            android:launchMode=\"singleTop\"\n");
+    }
+    fprintf(f, "            android:exported=\"%s\">\n", activity->exported ? "true" : "false");
+
+    if (activity->style == MANIFEST_ACTIVITY_NATIVE) {
+        fprintf(f,
+            "\n"
+            "            <!-- Name of the shared library without 'lib' prefix and '.so' suffix -->\n"
+            "            <meta-data\n"
+            "                android:name=\"android.app.lib_name\"\n"
+            "                android:value=\"%s\" />\n",
+            activity->lib_name[0] ? activity->lib_name : activity->name);
+    }
+
+    if (activity->launchable) {
+        fprintf(f,
+            "\n"
+            "            <intent-filter>\n"
+            "                <action android:name=\"android.intent.action.MAIN\" />\n"
+            "                <category android:name=\"android.intent.category.LAUNCHER\" />\n"
+            "            </intent-filter>\n");
+    }
+
+    fprintf(f, "        </activity>\n");
+}
+
+int manifest_write_builder(const ManifestBuilder* mb, const char* output_path) {
+    if (!mb || !output_path) return -1;
+
     FILE* f = fopen(output_path, "w");
     if (!f) return -1;
-
-    const char* pkg  = config->package_name;
-    const char* name = config->app_name;
-    const char* act  = config->main_activity[0]
-                       ? config->main_activity : "MainActivity";
-    int  min_sdk     = config->min_sdk    ? config->min_sdk    : 24;
-    int  target_sdk  = config->target_sdk ? config->target_sdk : 34;
-    int  ver_code    = config->version_code ? config->version_code : 1;
-    const char* ver  = config->version_name[0] ? config->version_name : "1.0.0";
-    int  debuggable  = config->debug_build ? 1 : 0;
 
     fprintf(f,
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
@@ -39,10 +175,26 @@ int manifest_write(const ApkBuildConfig* config, const char* output_path) {
         "    <uses-sdk\n"
         "        android:minSdkVersion=\"%d\"\n"
         "        android:targetSdkVersion=\"%d\" />\n"
-        "\n"
-        "    <!-- OpenGL ES 2.0 required for Skia GPU rendering -->\n"
-        "    <uses-feature android:glEsVersion=\"0x00020000\"\n"
-        "        android:required=\"true\" />\n"
+        "\n",
+        mb->package_name,
+        mb->version_code,
+        mb->version_name,
+        mb->min_sdk,
+        mb->target_sdk);
+
+    for (int i = 0; i < mb->permission_count; i++) {
+        fprintf(f, "    <uses-permission android:name=\"%s\" />\n", mb->permissions[i]);
+    }
+
+    if (mb->permission_count > 0) {
+        fprintf(f, "\n");
+    }
+
+    for (int i = 0; i < mb->feature_count; i++) {
+        manifest_write_feature(f, &mb->features[i]);
+    }
+
+    fprintf(f,
         "\n"
         "    <application\n"
         "        android:label=\"@string/app_name\"\n"
@@ -51,44 +203,29 @@ int manifest_write(const ApkBuildConfig* config, const char* output_path) {
         "        android:debuggable=\"%s\"\n"
         "        android:allowBackup=\"true\"\n"
         "        android:hardwareAccelerated=\"true\">\n"
-        "\n"
-        "        <!--\n"
-        "            NativeActivity hosts the Casperix runtime as a native .so.\n"
-        "            android_main() is the entry point generated by the compiler.\n"
-        "        -->\n"
-        "        <activity\n"
-        "            android:name=\"android.app.NativeActivity\"\n"
-        "            android:label=\"%s\"\n"
-        "            android:configChanges=\"orientation|keyboardHidden|screenSize\"\n"
-        "            android:screenOrientation=\"portrait\"\n"
-        "            android:theme=\"@android:style/Theme.DeviceDefault.NoActionBar\"\n"
-        "            android:windowSoftInputMode=\"adjustResize\"\n"
-        "            android:exported=\"true\">\n"
-        "\n"
-        "            <!-- Name of the shared library without 'lib' prefix and '.so' suffix -->\n"
-        "            <meta-data\n"
-        "                android:name=\"android.app.lib_name\"\n"
-        "                android:value=\"%s\" />\n"
-        "\n"
-        "            <intent-filter>\n"
-        "                <action android:name=\"android.intent.action.MAIN\" />\n"
-        "                <category android:name=\"android.intent.category.LAUNCHER\" />\n"
-        "            </intent-filter>\n"
-        "        </activity>\n"
-        "    </application>\n"
-        "</manifest>\n",
-        pkg,
-        ver_code,
-        ver,
-        min_sdk,
-        target_sdk,
-        debuggable ? "true" : "false",
-        name,         /* activity label     */
-        act           /* lib_name meta-data */
-    );
+        "\n",
+        mb->debuggable ? "true" : "false");
 
+    for (int i = 0; i < mb->activity_count; i++) {
+        manifest_write_activity(f, &mb->activities[i]);
+    }
+
+    fprintf(f, "    </application>\n</manifest>\n");
     fclose(f);
     return 0;
+}
+
+int manifest_write(const ApkBuildConfig* config, const char* output_path) {
+    ManifestBuilder mb;
+    manifest_builder_init(&mb, config);
+    if (mb.activity_count == 0) {
+        manifest_add_activity(&mb,
+                              mb.main_activity[0] ? mb.main_activity : "MainActivity",
+                              MANIFEST_ACTIVITY_NATIVE,
+                              mb.app_name,
+                              mb.main_activity);
+    }
+    return manifest_write_builder(&mb, output_path);
 }
 
 int manifest_write_strings(const ApkBuildConfig* config, const char* res_dir) {

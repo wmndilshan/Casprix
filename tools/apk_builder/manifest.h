@@ -15,6 +15,64 @@
 extern "C" {
 #endif
 
+typedef enum {
+    MANIFEST_ACTIVITY_NATIVE = 0,
+    MANIFEST_ACTIVITY_STANDARD,
+    MANIFEST_ACTIVITY_SINGLE_TOP,
+} ManifestActivityStyle;
+
+#define MANIFEST_MAX_PERMISSIONS 16
+#define MANIFEST_MAX_FEATURES    16
+#define MANIFEST_MAX_ACTIVITIES  8
+
+typedef struct {
+    char name[128];
+    int  required;
+    char gl_es_version[32];
+} ManifestFeature;
+
+typedef struct {
+    char name[128];
+    char label[128];
+    char lib_name[128];
+    char config_changes[128];
+    char screen_orientation[32];
+    char theme[128];
+    char window_soft_input_mode[64];
+    int  exported;
+    int  launchable;
+    ManifestActivityStyle style;
+} ManifestActivity;
+
+typedef struct {
+    const ApkBuildConfig* config;
+    char package_name[128];
+    char app_name[128];
+    char main_activity[128];
+    int  min_sdk;
+    int  target_sdk;
+    int  version_code;
+    char version_name[32];
+    int  debuggable;
+
+    const char* permissions[MANIFEST_MAX_PERMISSIONS];
+    int         permission_count;
+
+    ManifestFeature  features[MANIFEST_MAX_FEATURES];
+    int              feature_count;
+
+    ManifestActivity activities[MANIFEST_MAX_ACTIVITIES];
+    int              activity_count;
+} ManifestBuilder;
+
+void manifest_builder_init(ManifestBuilder* mb, const ApkBuildConfig* config);
+int  manifest_add_permission(ManifestBuilder* mb, const char* permission_name);
+int  manifest_add_feature(ManifestBuilder* mb, const char* feature_name, int required);
+int  manifest_add_activity(ManifestBuilder* mb, const char* activity_name,
+                           ManifestActivityStyle style, const char* label,
+                           const char* lib_name);
+int  manifest_write_builder(const ManifestBuilder* mb, const char* output_path);
+
 /* Write AndroidManifest.xml to the given file path.
  * Returns 0 on success, -1 on failure. */
 int manifest_write(const ApkBuildConfig* config, const char* output_path);

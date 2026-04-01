@@ -26,6 +26,36 @@ foreach(test_src ${RUNTIME_TEST_SRCS})
     endif()
 endforeach()
 
+find_package(ZLIB QUIET)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/test_manifest_gen.c")
+    add_executable(android_test_manifest_gen
+        android/test_manifest_gen.c
+        ${CMAKE_SOURCE_DIR}/tools/apk_builder/manifest.c
+    )
+    target_include_directories(android_test_manifest_gen PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/apk_builder
+    )
+    add_test(NAME android_test_manifest_gen COMMAND android_test_manifest_gen)
+endif()
+
+foreach(_android_zip_test test_apk_pack test_zip_writer)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/${_android_zip_test}.c")
+        add_executable(android_${_android_zip_test}
+            android/${_android_zip_test}.c
+            ${CMAKE_SOURCE_DIR}/tools/apk_builder/zip_writer.c
+        )
+        target_include_directories(android_${_android_zip_test} PRIVATE
+            ${CMAKE_SOURCE_DIR}/tools/apk_builder
+        )
+        if(ZLIB_FOUND)
+            target_link_libraries(android_${_android_zip_test} PRIVATE ZLIB::ZLIB)
+            target_compile_definitions(android_${_android_zip_test} PRIVATE HAVE_ZLIB)
+        endif()
+        add_test(NAME android_${_android_zip_test} COMMAND android_${_android_zip_test})
+    endif()
+endforeach()
+
 # ── Benchmarks (built but not CTest cases) ───────────────────────────────────
 foreach(_bench bench_simd)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/${_bench}.c")
