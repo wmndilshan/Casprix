@@ -169,7 +169,8 @@ int zip_writer_add_file(ZipWriter* zw, const char* archive_name,
 
     uint8_t* buf = (uint8_t*)malloc((size_t)sz);
     if (!buf) { fclose(f); return -1; }
-    fread(buf, 1, (size_t)sz, f);
+    size_t read_bytes = fread(buf, 1, (size_t)sz, f);
+    (void)read_bytes;
     fclose(f);
 
     int r = _add_entry(zw, archive_name, buf, (size_t)sz, compress);

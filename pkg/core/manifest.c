@@ -131,8 +131,8 @@ PackageManifest* manifest_parse_file(const char* filename) {
     fseek(f, 0, SEEK_SET);
     
     char* json = (char*)malloc(size + 1);
-    fread(json, 1, size, f);
-    json[size] = '\0';
+    size_t read_bytes = fread(json, 1, size, f);
+    json[read_bytes] = '\0';
     fclose(f);
     
     PackageManifest* manifest = manifest_parse_string(json);

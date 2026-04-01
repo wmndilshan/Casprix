@@ -509,8 +509,15 @@ static const char* find_prebuilt_lib(const char* name) {
     }
 
     static const char* dirs[] = {
-        "build", "../build", "../../build", "../../../build",
-        ".", "..", NULL,
+        "build",
+        "../build",
+        "../../build",
+        "../../build/Release",
+        "../../build/Debug",
+        "build/Release",
+        "../build/Release",
+        ".",
+        NULL
     };
     for (int i = 0; dirs[i]; i++) {
         snprintf(path, sizeof(path), "%s/%s", dirs[i], name);

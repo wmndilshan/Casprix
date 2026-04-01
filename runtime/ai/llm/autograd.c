@@ -164,7 +164,6 @@ static void backward_gemm(TapeEntry* entry, Tape* tape) {
     i32 M = entry->M, K = entry->K, N = entry->N;
 
     /* grad_X = grad_Y * W^T */
-    f32* grad_X_buf = NULL;
     if (X_gt->requires_grad) {
         ensure_grad(tape, X_gt);
         Tensor* tmp = tape_alloc_tensor(tape, 2, (i32[]){M, K});
@@ -364,6 +363,7 @@ static void backward_embedding(TapeEntry* entry, Tape* tape) {
 static void backward_cross_entropy(TapeEntry* entry, Tape* tape) {
     GradTensor* logits_gt = entry->inputs[0];
     GradTensor* Y_gt = entry->output;
+    (void)Y_gt;
 
     if (!logits_gt->requires_grad) return;
 
@@ -436,6 +436,7 @@ static void backward_attention(TapeEntry* entry, Tape* tape) {
     Tensor* scores_saved = entry->saved[1];
     Tensor* V_saved = entry->saved[2];
     Tensor* attn_out_saved = entry->saved[3];
+    (void)attn_out_saved;
 
     i32 batch = entry->batch;
     i32 seq_len = entry->seq_len;

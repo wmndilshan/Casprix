@@ -190,9 +190,16 @@ Future* async_file_read_all(EventLoop* loop, const char* path) {
         return future;
     }
     
-    char* buffer = (char*)malloc(st.st_size + 1);
-    ssize_t bytes = read(fd, buffer, st.st_size);
-    buffer[bytes] = '\0';
+    if (st.st_size < 0) {
+        close(fd);
+        future_fail(future, (void*)(intptr_t)EINVAL);
+        return future;
+    }
+    size_t file_size = (size_t)st.st_size;
+    char* buffer = (char*)malloc(file_size + 1);
+    ssize_t bytes = read(fd, buffer, file_size);
+    if (bytes >= 0) buffer[bytes] = '\0';
+    else buffer[0] = '\0';
     
     close(fd);
     future_complete(future, buffer);

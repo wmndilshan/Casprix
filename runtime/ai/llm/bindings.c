@@ -19,6 +19,7 @@ void nuwan_tokenizer_train(void* handle, const char* text, i32 min_freq) {
     // For now, simplified training
     // Full implementation would call tokenizer_train
     Tokenizer* tok = (Tokenizer*)handle;
+    (void)tok;
     // Training logic already in tokenizer_train
 }
 

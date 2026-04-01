@@ -459,7 +459,7 @@ void apk_config_init(ApkBuildConfig* cfg) {
     memset(cfg, 0, sizeof(*cfg));
     snprintf(cfg->main_activity, sizeof(cfg->main_activity), "MainActivity");
     snprintf(cfg->version_name,  sizeof(cfg->version_name),  "1.0.0");
-    snprintf(cfg->app_label,     sizeof(cfg->app_label),     "");
+    cfg->app_label[0] = '\0';
     cfg->version_code = 1;
     cfg->min_sdk      = 24;
     cfg->target_sdk   = 34;

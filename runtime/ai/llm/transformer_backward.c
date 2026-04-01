@@ -99,6 +99,7 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
     /* Embeddings */
     GradTensor* gt_tok_emb = ag_parameter(tape, model->embeddings->token_embedding);
     GradTensor* gt_pos_emb = ag_parameter(tape, model->embeddings->pos_embedding);
+    (void)gt_pos_emb;
 
     /* Per-layer parameters */
     GradTensor** gt_Wq = (GradTensor**)arena_alloc(mem->grad_cache,
@@ -196,6 +197,7 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
 
     /* Cross-entropy loss */
     GradTensor* loss = ag_cross_entropy(tape, ag_logits, targets, BS, vocab_size);
+    (void)loss;
 
     /* ================================================================
      * Backward pass

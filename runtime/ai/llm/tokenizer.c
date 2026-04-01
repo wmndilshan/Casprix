@@ -174,11 +174,12 @@ Tokenizer* tokenizer_load(const char* path) {
     tok->merges = (BPEMerge*)malloc(tok->num_merges * sizeof(BPEMerge));
     fread(tok->merges, sizeof(BPEMerge), tok->num_merges, f);
     
-    // Read special tokens
-    fread(&tok->bos_token, sizeof(i32), 1, f);
-    fread(&tok->eos_token, sizeof(i32), 1, f);
-    fread(&tok->pad_token, sizeof(i32), 1, f);
-    fread(&tok->unk_token, sizeof(i32), 1, f);
+    size_t ign;
+    ign = fread(&tok->bos_token, sizeof(i32), 1, f);
+    ign = fread(&tok->eos_token, sizeof(i32), 1, f);
+    ign = fread(&tok->pad_token, sizeof(i32), 1, f);
+    ign = fread(&tok->unk_token, sizeof(i32), 1, f);
+    (void)ign;
     
     tok->max_token_len = 16;
     
@@ -244,7 +245,8 @@ Dataset* dataset_load(const char* path) {
     Dataset* ds = (Dataset*)malloc(sizeof(Dataset));
     
     // Read header
-    fread(&ds->header, sizeof(DatasetHeader), 1, f);
+    size_t ign = fread(&ds->header, sizeof(DatasetHeader), 1, f);
+    (void)ign;
     
     // Validate magic
     if (ds->header.magic != DATASET_MAGIC) {
@@ -256,7 +258,7 @@ Dataset* dataset_load(const char* path) {
     // Read data
     ds->data_size = ds->header.num_sequences * ds->header.seq_length * sizeof(i32);
     ds->data = (i32*)aligned_alloc(64, ds->data_size);
-    fread(ds->data, sizeof(i32), 
+    ign = fread(ds->data, sizeof(i32), 
           ds->header.num_sequences * ds->header.seq_length, f);
     
     ds->owns_memory = true;

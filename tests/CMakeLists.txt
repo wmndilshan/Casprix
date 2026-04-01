@@ -4,11 +4,14 @@ cmake_minimum_required(VERSION 3.16)
 # ── Runtime unit tests ──────────────────────────────────────────────────────
 set(RUNTIME_TEST_SRCS
     runtime/test_stdlib.c
-    runtime/test_coroutine.c
     runtime/test_scheduler.c
     runtime/test_networking.c
     runtime/benchmark.c
 )
+
+if(WIN32)
+    list(APPEND RUNTIME_TEST_SRCS runtime/test_coroutine.c)
+endif()
 
 foreach(test_src ${RUNTIME_TEST_SRCS})
     get_filename_component(test_name ${test_src} NAME_WE)

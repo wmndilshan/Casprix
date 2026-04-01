@@ -230,6 +230,14 @@ static void* jit_compile_add_scale(JitCompiler* jit, f32 scalar) {
 
     /* For now, just return NULL to fall back to C implementation */
     (void)scalar;
+    (void)emit_u32;
+    (void)emit_rex_w;
+    (void)emit_push;
+    (void)emit_pop;
+    (void)emit_vmovups_load;
+    (void)emit_vmovups_store;
+    (void)emit_vaddps;
+    (void)emit_vmulps;
     emit_ret(jit);
 
     jit->kernels_compiled++;
