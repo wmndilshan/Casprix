@@ -131,6 +131,9 @@ static void apply_animated_value(SGNode* target, SGAnimProperty prop, float valu
             target->style.padding[2] = value;
             target->style.padding[3] = value;
             break;
+        case SG_ANIM_MIN_WIDTH:
+            target->min_width = value;
+            break;
     }
 
     sg_node_mark_dirty(target, SG_DIRTY_PAINT);

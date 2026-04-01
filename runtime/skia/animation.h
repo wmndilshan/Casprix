@@ -57,6 +57,7 @@ typedef enum {
     SG_ANIM_TRANSLATE_Y,
     SG_ANIM_BORDER_RADIUS,
     SG_ANIM_PADDING,         /* Uniform padding */
+    SG_ANIM_MIN_WIDTH,
 } SGAnimProperty;
 
 /* ========================================================================
