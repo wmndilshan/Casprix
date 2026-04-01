@@ -8,6 +8,7 @@
 
 #include "widgets.h"
 #include "layout.h"
+#include "animation.h"
 #include "skia_c.h"
 #include <stdlib.h>
 #include <string.h>
@@ -870,11 +871,17 @@ SGNode* widget_progress_bar(double min_val, double max_val, double value) {
     /* State */
     ProgressBarState* state = (ProgressBarState*)calloc(1, sizeof(ProgressBarState));
     state->type = WIDGET_PROGRESS_BAR;
-    state->value = value;
-    state->min_val = min_val;
-    state->max_val = max_val;
+    state->value = (float)value;
+    state->display_value = (float)value;
+    state->anim_from_value = (float)value;
+    state->min_val = (float)min_val;
+    state->max_val = (float)max_val;
     state->fill_color = 0xFF4CAF50;
     state->bg_color = 0xFFE0E0E0;
+    state->anim_duration_sec = 0.3f;
+    state->anim_easing = SG_EASE_OUT_CUBIC;
+    state->animating = 0;
+    state->anim_elapsed_sec = 0.0f;
     node->user_data = state;
     
     /* Set initial width */
@@ -887,22 +894,60 @@ SGNode* widget_progress_bar(double min_val, double max_val, double value) {
     return node;
 }
 
+static void progress_apply_fill_width(SGNode* bar, ProgressBarState* state, float logical_value) {
+    SGNode* fill = bar->first_child ? bar->first_child->next_sibling : NULL;
+    if (!fill) return;
+    float range = state->max_val - state->min_val;
+    float t = (range > 0.0f) ? (logical_value - state->min_val) / range : 0.0f;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    float track_w = bar->bounds.w > 1.0f ? bar->bounds.w : 200.0f;
+    fill->min_width = track_w * t;
+    sg_node_mark_dirty(bar, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
+}
+
+void widget_progress_configure_animation(SGNode* bar, float duration_sec, SGEasing easing) {
+    ProgressBarState* state = (ProgressBarState*)bar->user_data;
+    if (!state || state->type != WIDGET_PROGRESS_BAR) return;
+    state->anim_duration_sec = duration_sec;
+    state->anim_easing = easing;
+}
+
+void widget_progress_tick(SGNode* bar, float dt_sec) {
+    ProgressBarState* state = (ProgressBarState*)bar->user_data;
+    if (!state || state->type != WIDGET_PROGRESS_BAR || !state->animating) return;
+
+    state->anim_elapsed_sec += dt_sec;
+    float dur = state->anim_duration_sec;
+    if (dur <= 0.0f) dur = 1e-6f;
+    float u = state->anim_elapsed_sec / dur;
+    if (u >= 1.0f) {
+        u = 1.0f;
+        state->animating = 0;
+    }
+    float k = sg_ease(state->anim_easing, u);
+    state->display_value =
+        state->anim_from_value + (state->value - state->anim_from_value) * k;
+    progress_apply_fill_width(bar, state, state->display_value);
+}
+
 void widget_progress_set_value(SGNode* bar, double value) {
     ProgressBarState* state = (ProgressBarState*)bar->user_data;
     if (!state || state->type != WIDGET_PROGRESS_BAR) return;
-    
-    state->value = value;
-    
-    /* Update fill width */
-    SGNode* fill = bar->first_child ? bar->first_child->next_sibling : NULL;
-    if (fill) {
-        float range = state->max_val - state->min_val;
-        float t = (range > 0) ? (value - state->min_val) / range : 0;
-        if (t < 0) t = 0;
-        if (t > 1) t = 1;
-        fill->min_width = bar->bounds.w * t;
-        sg_node_mark_dirty(bar, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
+
+    state->value = (float)value;
+
+    if (state->anim_duration_sec <= 0.0f) {
+        state->display_value = state->value;
+        state->animating = 0;
+        progress_apply_fill_width(bar, state, state->display_value);
+        return;
     }
+
+    state->anim_from_value = state->display_value;
+    state->anim_elapsed_sec = 0.0f;
+    state->animating = 1;
+    progress_apply_fill_width(bar, state, state->display_value);
 }
 
 void widget_progress_set_indeterminate(SGNode* bar, int indeterminate) {
