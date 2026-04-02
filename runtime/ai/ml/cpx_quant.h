@@ -230,6 +230,23 @@ void cpx_fake_quantize_bwd(const float* grad_out, const float* w,
                               float* grad_in,
                               int N, int K);
 
+/* ════════════════════════════════════════════════════════════════════
+ * 7. W4A32 GEMM WITH ZERO-POINT — arena-based hot path
+ *
+ * C[M, N] = A[M, K] × dequant(W_int4[N, K/2])
+ * W_int4:  packed nibbles, 2 weights per byte, row-major [N, K/2]
+ * scales:  per-row scale [N]
+ * zeros:   per-row zero-point [N]  (NULL → symmetric, zero = 0)
+ * All scratch allocated from arena — no malloc in hot path.
+ * ════════════════════════════════════════════════════════════════════ */
+void CPX_HOT cpx_gemm_w4a32_zp(const uint8_t* W_int4,
+                                  const float*   scales,
+                                  const float*   zeros,
+                                  const float*   A,
+                                  float*         C,
+                                  int M, int N, int K,
+                                  struct CpxArena* arena);
+
 #ifdef __cplusplus
 }
 #endif

@@ -56,6 +56,61 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
                           const i32* targets, i32 batch, i32 seq_len,
                           Tensor** param_grads, MemoryPools* mem);
 
+// ===== GRADIENT CHECKPOINTING =====
+//
+// Standard training stores ALL layer activations during forward pass:
+//   peak memory = O(num_layers × batch × seq × hidden_dim)
+//
+// Gradient checkpointing stores only activations at "checkpoint" layers
+// (every sqrt(num_layers) layers by default).  Backward pass recomputes
+// each segment on the fly.  Trade-off: ~33% more compute, sqrt(L) memory.
+//
+// Usage:
+//   GradCheckpointCtx* ctx = grad_checkpoint_create(model, mem);
+//   transformer_forward_checkpointed(model, ids, B, S, logits, ctx, mem);
+//   // backward (recomputes segments internally) ...
+//   grad_checkpoint_destroy(ctx);
+
+#define GRAD_CKPT_MAX_CHECKPOINTS 32
+
+typedef struct GradCheckpointCtx {
+    i32   num_layers;
+    i32   interval;           // Save every `interval` layers (default sqrt(L))
+    i32   num_checkpoints;    // number of saved inputs = ceil(L / interval)
+
+    // Saved inputs at each checkpoint boundary.
+    // checkpoint_inputs[i] = input tensor to layer (i * interval).
+    // Owned by this struct; freed in grad_checkpoint_destroy.
+    Tensor* checkpoint_inputs[GRAD_CKPT_MAX_CHECKPOINTS];
+} GradCheckpointCtx;
+
+// Create gradient checkpoint context for model.
+// interval = 0 → use ceil(sqrt(num_layers)).
+GradCheckpointCtx* grad_checkpoint_create(const TransformerModel* model,
+                                           MemoryPools* mem,
+                                           i32 interval);
+
+// Forward pass that saves only checkpoint-boundary activations.
+// Equivalent to transformer_forward but with reduced peak memory.
+void transformer_forward_checkpointed(TransformerModel* model,
+                                       const i32* token_ids,
+                                       i32 batch, i32 seq_len,
+                                       Tensor* logits,
+                                       GradCheckpointCtx* ctx,
+                                       MemoryPools* mem);
+
+// Recompute forward for layers [layer_start, layer_end) starting from
+// the saved checkpoint input.  Used internally during backward pass.
+// out: pre-allocated tensor [batch, seq_len, hidden_dim]
+void grad_checkpoint_recompute(TransformerModel* model,
+                                GradCheckpointCtx* ctx,
+                                i32 layer_start, i32 layer_end,
+                                Tensor* out,
+                                MemoryPools* mem);
+
+// Free checkpoint context and all saved tensors.
+void grad_checkpoint_destroy(GradCheckpointCtx* ctx);
+
 // ===== DATA LOADING =====
 
 typedef struct DataLoader {

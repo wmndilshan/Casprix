@@ -168,3 +168,142 @@ void dataloader_reset(DataLoader* loader) {
 void dataloader_destroy(DataLoader* loader) {
     free(loader);
 }
+
+// ===== GRADIENT CHECKPOINTING =====
+
+/* Integer square root (floor). */
+static i32 isqrt32(i32 n) {
+    if (n <= 0) return 0;
+    i32 x = (i32)sqrtf((f32)n);
+    while ((x + 1) * (x + 1) <= n) x++;
+    while (x * x > n) x--;
+    return x;
+}
+
+GradCheckpointCtx* grad_checkpoint_create(const TransformerModel* model,
+                                           MemoryPools* mem,
+                                           i32 interval) {
+    GradCheckpointCtx* ctx = (GradCheckpointCtx*)malloc(sizeof(GradCheckpointCtx));
+    if (!ctx) return NULL;
+    memset(ctx, 0, sizeof(GradCheckpointCtx));
+
+    ctx->num_layers = model->num_layers;
+
+    /* Default interval: ceil(sqrt(num_layers)) */
+    if (interval <= 0) {
+        i32 s = isqrt32(model->num_layers);
+        interval = (s * s < model->num_layers) ? s + 1 : s;
+        if (interval < 1) interval = 1;
+    }
+    ctx->interval = interval;
+
+    /* Number of checkpoint saves = how many segment boundaries exist. */
+    ctx->num_checkpoints = (model->num_layers + interval - 1) / interval;
+    if (ctx->num_checkpoints > GRAD_CKPT_MAX_CHECKPOINTS)
+        ctx->num_checkpoints = GRAD_CKPT_MAX_CHECKPOINTS;
+
+    /* Pre-allocate checkpoint tensors in long-lived memory.
+     * Shape will be filled in during forward; allocate with zeros for now.
+     * Actual data written in transformer_forward_checkpointed. */
+    (void)mem; /* mem used for scratch during recompute, not here */
+    for (i32 i = 0; i < ctx->num_checkpoints; i++) {
+        ctx->checkpoint_inputs[i] = NULL; /* allocated lazily on first forward */
+    }
+
+    return ctx;
+}
+
+void transformer_forward_checkpointed(TransformerModel* model,
+                                       const i32* token_ids,
+                                       i32 batch, i32 seq_len,
+                                       Tensor* logits,
+                                       GradCheckpointCtx* ctx,
+                                       MemoryPools* mem) {
+    i32 hidden_dim = model->hidden_dim;
+
+    /* Embedding. */
+    Tensor* x = arena_alloc_tensor(mem->activations, 3,
+                                    (i32[]){batch, seq_len, hidden_dim});
+    embeddings_forward(model->embeddings, token_ids, batch, seq_len, x);
+
+    Tensor* block_out = arena_alloc_tensor(mem->activations, 3,
+                                            (i32[]){batch, seq_len, hidden_dim});
+
+    for (i32 i = 0; i < model->num_layers; i++) {
+        /* Save checkpoint at start of each segment. */
+        if (i % ctx->interval == 0) {
+            i32 ckpt_idx = i / ctx->interval;
+            if (ckpt_idx < ctx->num_checkpoints) {
+                /* Allocate or reuse checkpoint tensor. */
+                if (!ctx->checkpoint_inputs[ckpt_idx]) {
+                    ctx->checkpoint_inputs[ckpt_idx] =
+                        tensor_create(3, (i32[]){batch, seq_len, hidden_dim});
+                }
+                /* Copy current x into checkpoint. */
+                tensor_copy(x, ctx->checkpoint_inputs[ckpt_idx]);
+            }
+        }
+
+        /* Run the transformer block. */
+        transformer_block_forward(model->blocks[i], x, block_out, mem->activations);
+
+        /* Swap x ↔ block_out for next layer. */
+        Tensor* tmp = x;
+        x = block_out;
+        block_out = tmp;
+    }
+
+    /* Final LayerNorm. */
+    Tensor* ln_out = arena_alloc_tensor(mem->activations, 3,
+                                         (i32[]){batch, seq_len, hidden_dim});
+    layernorm_f32(x->data, model->ln_final_gamma->data, model->ln_final_beta->data,
+                  ln_out->data, batch * seq_len, hidden_dim, 1e-5f);
+
+    /* Project to vocab. */
+    gemm_f32(ln_out->data, model->lm_head->data, logits->data,
+             batch * seq_len, hidden_dim, model->vocab_size);
+}
+
+void grad_checkpoint_recompute(TransformerModel* model,
+                                GradCheckpointCtx* ctx,
+                                i32 layer_start, i32 layer_end,
+                                Tensor* out,
+                                MemoryPools* mem) {
+    /* Find the checkpoint that covers layer_start. */
+    i32 ckpt_idx = layer_start / ctx->interval;
+    if (ckpt_idx >= ctx->num_checkpoints || !ctx->checkpoint_inputs[ckpt_idx]) {
+        /* No checkpoint available — caller error. */
+        return;
+    }
+
+    i32 hidden_dim = model->hidden_dim;
+    Tensor* saved  = ctx->checkpoint_inputs[ckpt_idx];
+    i32     batch  = saved->shape[0];
+    i32     seq_len = saved->shape[1];
+
+    /* Copy checkpoint input into a scratch activation tensor. */
+    Tensor* x = arena_alloc_tensor(mem->activations, 3,
+                                    (i32[]){batch, seq_len, hidden_dim});
+    tensor_copy(saved, x);
+
+    Tensor* tmp_out = arena_alloc_tensor(mem->activations, 3,
+                                          (i32[]){batch, seq_len, hidden_dim});
+
+    /* Re-run layers from layer_start up to (but not including) layer_end. */
+    i32 end = layer_end < model->num_layers ? layer_end : model->num_layers;
+    for (i32 i = layer_start; i < end; i++) {
+        transformer_block_forward(model->blocks[i], x, tmp_out, mem->activations);
+        Tensor* swap = x; x = tmp_out; tmp_out = swap;
+    }
+
+    /* Write result into caller-supplied out. */
+    tensor_copy(x, out);
+}
+
+void grad_checkpoint_destroy(GradCheckpointCtx* ctx) {
+    if (!ctx) return;
+    for (i32 i = 0; i < ctx->num_checkpoints; i++) {
+        tensor_destroy(ctx->checkpoint_inputs[i]);
+    }
+    free(ctx);
+}
