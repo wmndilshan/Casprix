@@ -119,13 +119,52 @@ void cpx_kvcache_destroy(CpxKvCache* cache) {
  * 2. SEQUENCE MANAGEMENT
  * ════════════════════════════════════════════════════════════════════ */
 
+/* Helper: number of pages per (layer, head) slot. */
+static int kv_max_pages(const CpxKvCache* c) {
+    int ps = c->config.page_size > 0 ? c->config.page_size : CPX_KV_PAGE_SIZE;
+    return (c->config.max_seq_len + ps - 1) / ps;
+}
+
+/* Helper: page size in tokens. */
+static int kv_page_size(const CpxKvCache* c) {
+    return c->config.page_size > 0 ? c->config.page_size : CPX_KV_PAGE_SIZE;
+}
+
+/* Helper: pop one free page from pool; returns NULL on exhaustion. */
+static CpxKvPage* kv_alloc_page(CpxKvCache* cache) {
+    if (cache->free_page_top <= 0) return NULL;
+    return cache->free_pages[--cache->free_page_top];
+}
+
+/* Helper: return a page to the free pool. */
+static void kv_free_page(CpxKvCache* cache, CpxKvPage* page) {
+    if (!page || cache->free_page_top >= cache->page_pool_cap) return;
+    cache->free_pages[cache->free_page_top++] = page;
+}
+
 int cpx_kvcache_alloc_seq(CpxKvCache* cache, int initial_len) {
     for (int i = 0; i < cache->config.max_batch; i++) {
         if (cache->seqs[i].seq_id < 0) {
-            cache->seqs[i].seq_id   = i;
-            cache->seqs[i].seq_len  = initial_len;
-            cache->seqs[i].spec_start = -1;
-            cache->seqs[i].spec_len   = 0;
+            CpxKvSeq* s    = &cache->seqs[i];
+            s->seq_id      = i;
+            s->seq_len     = initial_len;
+            s->spec_start  = -1;
+            s->spec_len    = 0;
+
+            if (cache->config.layout == KV_LAYOUT_PAGED) {
+                /* Allocate flat page-table:
+                 * pages[lh * max_pages + page_idx]
+                 * where lh = layer * num_kv_heads + head. */
+                int lh_count  = cache->config.num_layers * cache->config.num_kv_heads;
+                int max_pages = kv_max_pages(cache);
+                int table_sz  = lh_count * max_pages;
+                s->pages     = (CpxKvPage**)calloc(table_sz, sizeof(CpxKvPage*));
+                s->num_pages = max_pages;
+                s->is_paged  = true;
+            } else {
+                s->is_paged  = false;
+            }
+
             cache->num_seqs++;
             return i;
         }
@@ -135,8 +174,25 @@ int cpx_kvcache_alloc_seq(CpxKvCache* cache, int initial_len) {
 
 void cpx_kvcache_free_seq(CpxKvCache* cache, int seq_id) {
     assert(seq_id >= 0 && seq_id < cache->config.max_batch);
-    cache->seqs[seq_id].seq_id  = -1;
-    cache->seqs[seq_id].seq_len = 0;
+    CpxKvSeq* s = &cache->seqs[seq_id];
+
+    if (s->is_paged && s->pages) {
+        /* Return all allocated pages to the free pool. */
+        int lh_count  = cache->config.num_layers * cache->config.num_kv_heads;
+        int max_pages = kv_max_pages(cache);
+        for (int lh = 0; lh < lh_count; lh++) {
+            for (int p = 0; p < max_pages; p++) {
+                CpxKvPage* pg = s->pages[lh * max_pages + p];
+                if (pg) { kv_free_page(cache, pg); }
+            }
+        }
+        free(s->pages);
+        s->pages     = NULL;
+        s->num_pages = 0;
+    }
+
+    s->seq_id  = -1;
+    s->seq_len = 0;
     cache->num_seqs--;
 }
 
@@ -164,11 +220,27 @@ void CPX_HOT cpx_kvcache_write(CpxKvCache* cache, int seq_id,
         size_t off = kv_offset(cache, layer, head, pos);
         memcpy(seq->k_base + off, k, D * sizeof(float));
         memcpy(seq->v_base + off, v, D * sizeof(float));
-    }
-    /* Paged variant left as stub — page allocation needed. */
+    } else {
+        /* Paged layout: find or allocate the page for this token position. */
+        assert(seq->is_paged && seq->pages != NULL);
+        int ps        = kv_page_size(cache);
+        int page_idx  = pos / ps;
+        int page_off  = pos % ps;
+        int lh        = layer * cache->config.num_kv_heads + head;
+        int max_pages = seq->num_pages;
 
-    /* Advance seq_len only on layer 0 head 0 (last head of last layer
-     * should trigger, but for simplicity track externally). */
+        assert(page_idx < max_pages);
+        CpxKvPage** slot = &seq->pages[lh * max_pages + page_idx];
+        if (*slot == NULL) {
+            *slot = kv_alloc_page(cache);
+            assert(*slot != NULL); /* pool exhausted — callers must size pool correctly */
+        }
+        CpxKvPage* pg = *slot;
+        memcpy(pg->k_page + page_off * D, k, D * sizeof(float));
+        memcpy(pg->v_page + page_off * D, v, D * sizeof(float));
+    }
+
+    /* Advance seq_len after the last (layer, head) pair for this token. */
     if (layer == cache->config.num_layers - 1
      && head  == cache->config.num_kv_heads - 1) {
         seq->seq_len++;
@@ -185,7 +257,30 @@ void cpx_kvcache_prefill(CpxKvCache* cache, int seq_id,
         size_t off = kv_offset(cache, layer, head, seq->seq_len);
         memcpy(seq->k_base + off, k, (size_t)P * D * sizeof(float));
         memcpy(seq->v_base + off, v, (size_t)P * D * sizeof(float));
+    } else {
+        /* Paged: write P tokens one at a time, allocating pages as needed. */
+        assert(seq->is_paged && seq->pages != NULL);
+        int ps        = kv_page_size(cache);
+        int max_pages = seq->num_pages;
+        int lh        = layer * cache->config.num_kv_heads + head;
+        int base_pos  = seq->seq_len;
+
+        for (int t = 0; t < P; t++) {
+            int pos      = base_pos + t;
+            int page_idx = pos / ps;
+            int page_off = pos % ps;
+            assert(page_idx < max_pages);
+            CpxKvPage** slot = &seq->pages[lh * max_pages + page_idx];
+            if (*slot == NULL) {
+                *slot = kv_alloc_page(cache);
+                assert(*slot != NULL);
+            }
+            CpxKvPage* pg = *slot;
+            memcpy(pg->k_page + page_off * D, k + t * D, D * sizeof(float));
+            memcpy(pg->v_page + page_off * D, v + t * D, D * sizeof(float));
+        }
     }
+
     /* Advance after last layer/head. */
     if (layer == cache->config.num_layers - 1
      && head  == cache->config.num_kv_heads - 1) {
@@ -204,6 +299,23 @@ void CPX_HOT cpx_kvcache_read_range(const CpxKvCache* cache,
         size_t off = kv_offset(cache, layer, head, start);
         memcpy(k_out, seq->k_base + off, (size_t)(end - start) * D * sizeof(float));
         memcpy(v_out, seq->v_base + off, (size_t)(end - start) * D * sizeof(float));
+    } else {
+        /* Paged layout: copy token-by-token, crossing page boundaries. */
+        assert(seq->is_paged && seq->pages != NULL);
+        int ps        = kv_page_size(cache);
+        int max_pages = seq->num_pages;
+        int lh        = layer * cache->config.num_kv_heads + head;
+
+        for (int pos = start; pos < end; pos++) {
+            int page_idx = pos / ps;
+            int page_off = pos % ps;
+            assert(page_idx < max_pages);
+            const CpxKvPage* pg = seq->pages[lh * max_pages + page_idx];
+            assert(pg != NULL);
+            int out_off = (pos - start) * D;
+            memcpy(k_out + out_off, pg->k_page + page_off * D, D * sizeof(float));
+            memcpy(v_out + out_off, pg->v_page + page_off * D, D * sizeof(float));
+        }
     }
 }
 
@@ -246,11 +358,28 @@ void cpx_kvcache_spec_commit(CpxKvCache* cache, int seq_id, int accepted) {
 void cpx_kvcache_rollback(CpxKvCache* cache, int seq_id, int new_len) {
     CpxKvSeq* seq = &cache->seqs[seq_id];
     assert(new_len <= seq->seq_len);
+
+    if (cache->config.layout == KV_LAYOUT_PAGED && seq->is_paged && seq->pages) {
+        /* Return pages past new_len to the free pool. */
+        int ps          = kv_page_size(cache);
+        int first_free  = (new_len + ps - 1) / ps;  /* first page index no longer needed */
+        int lh_count    = cache->config.num_layers * cache->config.num_kv_heads;
+        int max_pages   = seq->num_pages;
+
+        for (int lh = 0; lh < lh_count; lh++) {
+            for (int p = first_free; p < max_pages; p++) {
+                CpxKvPage** slot = &seq->pages[lh * max_pages + p];
+                if (*slot) {
+                    kv_free_page(cache, *slot);
+                    *slot = NULL;
+                }
+            }
+        }
+    }
+
     seq->seq_len    = new_len;
     seq->spec_start = -1;
     seq->spec_len   = 0;
-    /* For paged caches, return pages past new_len to free pool.
-     * (Contiguous: no dealloc needed.) */
 }
 
 /* ════════════════════════════════════════════════════════════════════
