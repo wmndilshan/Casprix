@@ -4,6 +4,7 @@
  */
 
 #include "support/debug.h"
+#include "support/log.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -851,17 +852,12 @@ void debug_dump_symbols(SymbolTable* table) {
  * --------------------------------------------------------------------------*/
 
 void debug_phase_start(const char* phase_name) {
-    FILE* out = g_debug_config.output ? g_debug_config.output : stdout;
-
-    fprintf(out, "\n");
-    debug_line('*', 60);
-    fprintf(out, "* PHASE: %s\n", phase_name);
-    debug_line('*', 60);
+    cpx_phase_begin(phase_name);
+    cpx_log_write(CPX_LOG_INFO, CPX_CAT_DRIVER, NULL, 0, NULL, "Starting phase: %s", phase_name);
 }
 
 void debug_phase_end(const char* phase_name) {
-    FILE* out = g_debug_config.output ? g_debug_config.output : stdout;
-    fprintf(out, "* %s completed\n", phase_name);
+    cpx_phase_end(phase_name);
 }
 
 void debug_step_wait(void) {

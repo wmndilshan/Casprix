@@ -29,7 +29,7 @@ RANLIB  = ranlib
 # Flags
 # ============================================================================
 
-CFLAGS_BASE = -Wall -Wextra -Wno-unused-parameter -std=c11
+CFLAGS_BASE = -Wall -Wextra -Wno-unused-parameter -std=c11 -D_POSIX_C_SOURCE=200809L
 
 ifdef DEBUG
     CFLAGS = $(CFLAGS_BASE) -g -O0 -DDEBUG
@@ -203,12 +203,18 @@ RUNTIME_MEMORY = \
     $(RUNTIME_DIR)/memory/refcount.c \
     $(RUNTIME_DIR)/memory/tlocal_heap.c
 
+ifeq ($(OS),Windows_NT)
+    COROUTINE_SRC = $(wildcard $(RUNTIME_DIR)/async/coroutine_win32.c)
+else
+    COROUTINE_SRC = $(wildcard $(RUNTIME_DIR)/async/coroutine_posix.c)
+endif
+
 # Optional runtime subsystems (included only if files exist)
 RUNTIME_EXT = \
     $(wildcard $(RUNTIME_DIR)/async/future.c) \
     $(wildcard $(RUNTIME_DIR)/async/task.c) \
     $(wildcard $(RUNTIME_DIR)/async/scheduler.c) \
-    $(wildcard $(RUNTIME_DIR)/async/coroutine_win32.c) \
+    $(COROUTINE_SRC) \
     $(wildcard $(RUNTIME_DIR)/concurrent/channel.c) \
     $(wildcard $(RUNTIME_DIR)/sync/lockfree_deque.c) \
     $(wildcard $(RUNTIME_DIR)/net/socket.c) \

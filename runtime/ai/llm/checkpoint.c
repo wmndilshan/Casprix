@@ -322,7 +322,7 @@ bool checkpoint_save_weights_only(const TransformerModel* model,
                                   const char* path) {
     CheckpointHeader header = {0};
     header.magic = CHECKPOINT_MAGIC;
-    header.version = CHECKPOINT_VERSION;
+    header.version = CHECKPOINT_CURRENT_VERSION;
     header.vocab_size = model->vocab_size;
     header.hidden_dim = model->hidden_dim;
     header.num_layers = model->num_layers;

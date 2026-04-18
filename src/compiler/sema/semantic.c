@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#include <string.h>
 #include "compiler/sema/semantic.h"
 #include "compiler/sema/escape_analysis.h"
 #include "compiler/sema/drop_planner.h"

@@ -146,14 +146,18 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     source_map_add_file(&g_diag.source_map, source_path,
                         ctx.source, (uint32_t)strlen(ctx.source));
 
-    printf("\n");
-    printf("================================================================================\n");
-    printf("  Casprix \xF0\x9F\x91\xBB - High Performance Ghost Language  Version 1.0.0\n");
-    printf("================================================================================\n");
-    printf("  Source: %s\n", source_path);
-    if (!g_config.parse_only && !g_config.check_only)
-        printf("  Output: %s\n", output_file_path);
-    printf("================================================================================\n\n");
+    g_diag.perf.enabled = true;
+
+    if (!g_config.compact_output) {
+        cpx_log_init(g_config.verbose ? CPX_LOG_DEBUG : CPX_LOG_INFO);
+        cpx_log_set_timestamp(false);
+        cpx_log_set_show_category(true);
+
+        CPX_INFO("Casprix \xF0\x9F\x91\xBB v1.0.0");
+        CPX_INFO("Source: %s", source_path);
+        if (!g_config.parse_only && !g_config.check_only)
+            CPX_INFO("Output: %s", output_file_path);
+    }
 
     /* --- Debug config --- */
     debug_init();
@@ -164,31 +168,49 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     g_debug_config.verbose      = g_config.verbose;
 
     /* --- Phase 1: Lexical Analysis --- */
-    debug_phase_start("LEXICAL ANALYSIS");
+    perf_start(&g_diag.perf, "Lexical Analysis", STAGE_LEX);
+    if (!g_config.compact_output) debug_phase_start("LEXICAL ANALYSIS");
     if (g_debug_config.dump_tokens) debug_dump_tokens(ctx.source);
+    
+    /* Token count for compact report */
+    {
+        Lexer l;
+        init_lexer(&l, ctx.source);
+        int count = 0;
+        Token t;
+        do { t = scan_token(&l); count++; } while (t.type != TOKEN_EOF);
+        perf_set_items(&g_diag.perf, count);
+    }
+
     Lexer lexer;
     init_lexer(&lexer, ctx.source);
-    debug_phase_end("Lexical Analysis");
+    perf_end(&g_diag.perf);
+    if (!g_config.compact_output) debug_phase_end("Lexical Analysis");
     debug_step_wait();
 
     /* --- Phase 2: Parsing --- */
-    debug_phase_start("SYNTAX ANALYSIS (PARSING)");
+    perf_start(&g_diag.perf, "Syntax Analysis", STAGE_PARSE);
+    if (!g_config.compact_output) debug_phase_start("SYNTAX ANALYSIS (PARSING)");
     Parser parser;
     init_parser(&parser, &lexer);
     ctx.statements = parse(&parser, &ctx.stmt_count);
     if (had_error) {
-        printf("\n  [ERROR] Parsing failed.\n");
+        if (!g_config.compact_output) CPX_ERROR("Parsing failed.");
         result = 65; goto done;
     }
-    printf("  Parsed %d top-level statement(s)\n", ctx.stmt_count);
-    if (g_debug_config.dump_ast) debug_dump_ast(ctx.statements, ctx.stmt_count);
-    debug_phase_end("Syntax Analysis");
+    perf_set_items(&g_diag.perf, ctx.stmt_count);
+    perf_end(&g_diag.perf);
+    if (!g_config.compact_output) {
+        CPX_INFO("Parsed %d top-level statement(s)", ctx.stmt_count);
+        if (g_debug_config.dump_ast) debug_dump_ast(ctx.statements, ctx.stmt_count);
+        debug_phase_end("Syntax Analysis");
+    }
     debug_step_wait();
 
     if (g_config.parse_only) { result = 0; goto done; }
 
     /* --- Phase 3: Module Resolution --- */
-    debug_phase_start("MODULE RESOLUTION");
+    if (!g_config.compact_output) debug_phase_start("MODULE RESOLUTION");
     init_module_registry(&ctx.module_registry);
     ctx.registry_init = true;
     {
@@ -199,13 +221,13 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
                 Module* mod = load_module(&ctx.module_registry, incl->module_name, NULL);
                 if (mod) {
                     modules_loaded++;
-                    printf("  Loaded module: %s\n", incl->module_name);
+                    CPX_INFO("Loaded module: %s", incl->module_name);
                 } else if (!incl->is_import) {
-                    printf("  [WARN] Module not found: %s\n", incl->module_name);
+                    CPX_WARN("Module not found: %s", incl->module_name);
                 }
             }
         }
-        printf("  Loaded %d module(s)\n", modules_loaded);
+        CPX_INFO("Loaded %d module(s)", modules_loaded);
 
         int total_stmts = ctx.stmt_count;
         for (int i = 0; i < ctx.module_registry.count; i++)
@@ -227,35 +249,41 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         ctx.statements = all_statements;
         ctx.stmt_count = idx;
     }
-    debug_phase_end("Module Resolution");
+    if (!g_config.compact_output) debug_phase_end("Module Resolution");
     debug_step_wait();
 
     /* --- Phase 4: Semantic Analysis --- */
-    debug_phase_start("SEMANTIC ANALYSIS");
+    perf_start(&g_diag.perf, "Semantic Analysis", STAGE_SEMA);
+    if (!g_config.compact_output) debug_phase_start("SEMANTIC ANALYSIS");
     init_semantic_analyzer(&ctx.analyzer);
     ctx.analyzer_init = true;
     if (!analyze_program(&ctx.analyzer, ctx.statements, ctx.stmt_count) || had_error) {
-        printf("\n  [ERROR] Semantic analysis failed.\n");
+        if (!g_config.compact_output) CPX_ERROR("Semantic analysis failed.");
         result = 65; goto done;
     }
-    printf("  Type checking passed — %d symbol(s)\n", ctx.analyzer.symbols->count);
-    if (g_debug_config.dump_symbols) debug_dump_symbols(ctx.analyzer.symbols);
-    debug_phase_end("Semantic Analysis");
+    perf_end(&g_diag.perf);
+    if (!g_config.compact_output) {
+        CPX_INFO("Type checking passed \xE2\x80\x94 %d symbol(s)", ctx.analyzer.symbols->count);
+        if (g_debug_config.dump_symbols) debug_dump_symbols(ctx.analyzer.symbols);
+        debug_phase_end("Semantic Analysis");
+    }
     debug_step_wait();
 
     /* --- Phase 4.5: Ownership Check --- */
-    debug_phase_start("OWNERSHIP CHECK");
+    if (!g_config.compact_output) debug_phase_start("OWNERSHIP CHECK");
     {
         OwnershipChecker own_checker;
         ownership_checker_init(&own_checker, &ctx.analyzer);
         (void)own_checker; /* updates had_error directly */
     }
     if (had_error) {
-        printf("\n  [ERROR] Ownership check failed.\n");
+        CPX_ERROR("Ownership check failed.");
         result = 65; goto done;
     }
-    printf("  Ownership check passed\n");
-    debug_phase_end("Ownership Check");
+    if (!g_config.compact_output) {
+        CPX_INFO("Ownership check passed");
+        debug_phase_end("Ownership Check");
+    }
     debug_step_wait();
 
     if (g_config.check_only) { result = 0; goto done; }
@@ -345,7 +373,7 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         OptimizerContext opt_ctx;
         init_optimizer(&opt_ctx);
         optimize_program(ctx.statements, ctx.stmt_count, &opt_ctx);
-        printf("  Folded %d constants, eliminated %d dead code\n",
+        CPX_INFO("Folded %d constants, eliminated %d dead code",
                opt_ctx.constants_folded, opt_ctx.dead_code_eliminated);
         debug_phase_end("AST Optimization");
         debug_step_wait();
@@ -379,8 +407,9 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         printf("  Falling back to legacy AST codegen.\n");
     }
 
-    debug_phase_start("CODE GENERATION");
-    printf("  Generating x86-64 assembly...\n");
+    perf_start(&g_diag.perf, "Code Generation", STAGE_CODEGEN);
+    if (!g_config.compact_output) debug_phase_start("CODE GENERATION");
+    if (!g_config.compact_output) CPX_INFO("Generating x86-64 assembly...");
     {
         FILE* output = fopen(output_file_path, "w");
         if (!output) {
@@ -392,9 +421,10 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         generate_assembly(&asm_gen, ctx.statements, ctx.stmt_count, ctx.analyzer.symbols);
         free_asm_generator(&asm_gen);
         fclose(output);
-        printf("  Assembly: %s (%d strings)\n", output_file_path, asm_gen.string_size);
+        if (!g_config.compact_output) CPX_INFO("Assembly: %s (%d strings)", output_file_path, asm_gen.string_size);
     }
-    debug_phase_end("Code Generation");
+    perf_end(&g_diag.perf);
+    if (!g_config.compact_output) debug_phase_end("Code Generation");
 
 done:
     compile_ctx_destroy(&ctx);
@@ -414,13 +444,18 @@ int pipeline_assemble(const char* asm_file_path, const char* obj_file_path) {
     snprintf(command, sizeof(command),
              "nasm -f elf64 \"%s\" -o \"%s\"", asm_file_path, obj_file_path);
 #endif
-    debug_phase_start("ASSEMBLY");
-    printf("  Running NASM assembler...\n");
-    if (g_config.verbose) printf("  Command: %s\n", command);
+    perf_start(&g_diag.perf, "Assembly", STAGE_NONE);
+    if (!g_config.compact_output) debug_phase_start("ASSEMBLY");
+    if (!g_config.compact_output) CPX_INFO("Running NASM assembler...");
+    if (g_config.verbose) CPX_INFO("Command: %s", command);
     int result = system(command);
-    if (result != 0) { printf("  [ERROR] Assembly failed (exit %d)\n", result); return 1; }
-    printf("  Object file: %s\n", obj_file_path);
-    debug_phase_end("Assembly");
+    perf_end(&g_diag.perf);
+    if (result != 0) {
+        if (!g_config.compact_output) CPX_ERROR("Assembly failed (exit %d)", result);
+        return 1;
+    }
+    if (!g_config.compact_output) CPX_INFO("Object file: %s", obj_file_path);
+    if (!g_config.compact_output) debug_phase_end("Assembly");
     return 0;
 }
 
@@ -529,7 +564,7 @@ static const char* find_prebuilt_lib(const char* name) {
 int pipeline_link(const char* obj_file_path, const char* asm_file_path,
                   const char* exe_path) {
     if (!check_tool_available(TOOL_GCC, NULL)) {
-        printf("  [ERROR] GCC not found for linking\n");
+        CPX_ERROR("GCC not found for linking");
         download_tool(TOOL_GCC, NULL);
         return 1;
     }
@@ -589,22 +624,27 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
              exe_path, runtime_flags, stdlib_flags);
 #else
     snprintf(command, sizeof(command),
-             "%s %s \"%s\" %s -o \"%s\"%s%s -lm",
+             "%s %s -no-pie \"%s\" %s -o \"%s\"%s%s -lm",
              gcc, opt_flags, obj_file_path, inline_sources,
              exe_path, runtime_flags, stdlib_flags);
 #endif
 
-    debug_phase_start("LINKING");
-    printf("  Running GCC linker...\n");
-    if (g_config.verbose) printf("  Command: %s\n", command);
+    perf_start(&g_diag.perf, "Linking", STAGE_LINK);
+    if (!g_config.compact_output) debug_phase_start("LINKING");
+    if (!g_config.compact_output) CPX_INFO("Running GCC linker...");
+    if (g_config.verbose) CPX_INFO("Command: %s", command);
     int result = system(command);
-    if (result != 0) { printf("  [ERROR] Linking failed (exit %d)\n", result); return 1; }
+    perf_end(&g_diag.perf);
+    if (result != 0) {
+        if (!g_config.compact_output) CPX_ERROR("Linking failed (exit %d)", result);
+        return 1;
+    }
 #ifdef _WIN32
-    printf("  Executable: %s.exe\n", exe_path);
+    if (!g_config.compact_output) CPX_INFO("Executable created: %s.exe", exe_path);
 #else
-    printf("  Executable: %s\n", exe_path);
+    if (!g_config.compact_output) CPX_INFO("Executable created: %s", exe_path);
 #endif
-    debug_phase_end("Linking");
+    if (!g_config.compact_output) debug_phase_end("Linking");
 
     if (!g_config.keep_asm_file) remove(asm_file_path);
     remove(obj_file_path);

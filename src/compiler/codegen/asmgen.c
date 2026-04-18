@@ -2818,9 +2818,9 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     // Main function (Windows uses main as entry point)
     emit_asm(gen, "main:\n");
 #else
-    emit_asm(gen, "global _start\n\n");
-    // Main function (Linux uses _start)
-    emit_asm(gen, "_start:\n");
+    emit_asm(gen, "global main\n\n");
+    // Main function (using main for GCC linking)
+    emit_asm(gen, "main:\n");
 #endif
     emit_asm(gen, "    push rbp\n");
     emit_asm(gen, "    mov rbp, rsp\n");
@@ -2867,17 +2867,9 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     }
     
     // Exit
-#ifdef _WIN32
-    // Windows: return from main
     emit_asm(gen, "    mov rax, 0\n"); // return 0
     emit_asm(gen, "    leave\n");
     emit_asm(gen, "    ret\n\n");
-#else
-    // Linux: syscall exit
-    emit_asm(gen, "    mov rax, 60\n"); // sys_exit
-    emit_asm(gen, "    mov rdi, 0\n");
-    emit_asm(gen, "    syscall\n\n");
-#endif
     
     // Generate functions and class methods
     for (int i = 0; i < count; i++) {

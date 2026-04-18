@@ -268,6 +268,8 @@ if(BUILD_RUNTIME)
     endforeach()
     if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/async/coroutine_win32.c")
         list(APPEND RUNTIME_SOURCES runtime/async/coroutine_win32.c)
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/runtime/async/coroutine_posix.c")
+        list(APPEND RUNTIME_SOURCES runtime/async/coroutine_posix.c)
     endif()
 
     # Concurrent / sync
@@ -443,6 +445,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tools/apk_builder/main.c")
         tools/apk_builder/apk_builder.c
         tools/apk_builder/manifest.c
         tools/apk_builder/zip_writer.c
+        tools/apk_builder/ndk_utils.c
     )
     target_include_directories(apk-builder PRIVATE
         ${CMAKE_SOURCE_DIR}/tools/apk_builder)
