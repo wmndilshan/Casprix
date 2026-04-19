@@ -57,9 +57,6 @@ extern func encode_corpus_to_shards(
     shard_size: i32
 ) -> i32
 
-extern func ptr_create_i32() -> rawptr
-extern func ptr_read_i32(p: rawptr) -> i32
-extern func ptr_free(p: rawptr) -> void
 
 
 // ---------------------------------------------------------------------------
@@ -354,7 +351,7 @@ func main() -> void {
     let cfg: TrainingConfig = new TrainingConfig()
 
     // Uncomment for a quick 10-step smoke test:
-    // cfg.make_tiny_run()
+    cfg.make_tiny_run()
 
     // Phase 1: Train BPE tokenizer from raw text
     train_tokenizer(cfg)

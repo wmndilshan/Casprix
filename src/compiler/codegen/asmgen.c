@@ -20,6 +20,17 @@ static int alloc_local(AssemblyGenerator* gen, const char* name);
 static int find_local(AssemblyGenerator* gen, const char* name);
 static void format_global_var_symbol(const char* name, char* buf, size_t buf_size);
 
+/* --- Calling Convention ABI --- */
+#ifdef _WIN32
+    static const char* ABI_I_REGS[] = {"rcx", "rdx", "r8", "r9"};
+    static const int ABI_I_REG_COUNT = 4;
+    static const int ABI_SHADOW_SPACE = 32;
+#else
+    static const char* ABI_I_REGS[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
+    static const int ABI_I_REG_COUNT = 6;
+    static const int ABI_SHADOW_SPACE = 0; // Linux doesn't use shadow space
+#endif
+
 static MethodSymbol* find_constructor_symbol(ClassSymbol* class_sym) {
     if (!class_sym) return NULL;
 
@@ -343,46 +354,48 @@ static void emit_scope_drops(AssemblyGenerator* gen, const DropEntry* drops,
         emit_asm(gen, "    ; drop '%s' (kind=%d)\n",
                  d->var_name ? d->var_name : "?", d->kind);
 
-        /* Load the variable into rcx (first arg for Win64) */
+        /* Load the variable into the first argument register */
         if (d->stack_offset > 0) {
-            emit_asm(gen, "    mov rcx, [rbp - %d]\n", d->stack_offset);
+            emit_asm(gen, "    mov %s, [rbp - %d]\n", ABI_I_REGS[0], d->stack_offset);
         } else if (d->var_name) {
             int off = find_local(gen, d->var_name);
             if (off)
-                emit_asm(gen, "    mov rcx, [rbp - %d]\n", off);
+                emit_asm(gen, "    mov %s, [rbp - %d]\n", ABI_I_REGS[0], off);
             else
-                emit_asm(gen, "    mov rcx, [rel %s]\n", d->var_name);
+                emit_asm(gen, "    mov %s, [rel %s]\n", ABI_I_REGS[0], d->var_name);
         } else {
             continue;
         }
 
         /* NULL check */
-        emit_asm(gen, "    test rcx, rcx\n");
+        emit_asm(gen, "    test %s, %s\n", ABI_I_REGS[0], ABI_I_REGS[0]);
         int skip_label = gen->label_count++;
         emit_asm(gen, "    jz .drop_skip_%d\n", skip_label);
 
+        int drop_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+
         switch (d->kind) {
             case DROP_ARC:
-                emit_asm(gen, "    sub rsp, 32\n");
+                emit_asm(gen, "    sub rsp, %d\n", drop_stack_adj);
                 emit_asm(gen, "    call arc_release\n");
-                emit_asm(gen, "    add rsp, 32\n");
+                emit_asm(gen, "    add rsp, %d\n", drop_stack_adj);
                 break;
             case DROP_RC:
-                emit_asm(gen, "    sub rsp, 32\n");
+                emit_asm(gen, "    sub rsp, %d\n", drop_stack_adj);
                 emit_asm(gen, "    call rc_release\n");
-                emit_asm(gen, "    add rsp, 32\n");
+                emit_asm(gen, "    add rsp, %d\n", drop_stack_adj);
                 break;
             case DROP_DTOR:
                 if (d->dtor_name) {
-                    emit_asm(gen, "    sub rsp, 32\n");
+                    emit_asm(gen, "    sub rsp, %d\n", drop_stack_adj);
                     emit_asm(gen, "    call %s\n", d->dtor_name);
-                    emit_asm(gen, "    add rsp, 32\n");
+                    emit_asm(gen, "    add rsp, %d\n", drop_stack_adj);
                 }
                 break;
             case DROP_SCOPE_GUARD:
-                emit_asm(gen, "    sub rsp, 32\n");
+                emit_asm(gen, "    sub rsp, %d\n", drop_stack_adj);
                 emit_asm(gen, "    call scope_guard_drop_extern\n");
-                emit_asm(gen, "    add rsp, 32\n");
+                emit_asm(gen, "    add rsp, %d\n", drop_stack_adj);
                 break;
             default:
                 break;
@@ -943,11 +956,12 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
                 // String concatenation: call nuwan_string_concat(left, right)
                 // Windows x64 calling convention: first arg in RCX, second in RDX
                 // Left operand is in reg, right is in rbx
-                emit_asm(gen, "    mov rcx, %s  ; First arg (left string)\n", reg);
-                emit_asm(gen, "    mov rdx, rbx  ; Second arg (right string)\n");
-                emit_asm(gen, "    sub rsp, 32  ; Shadow space\n");
+                emit_asm(gen, "    mov %s, %s  ; First arg (left string)\n", ABI_I_REGS[0], reg);
+                emit_asm(gen, "    mov %s, rbx  ; Second arg (right string)\n", ABI_I_REGS[1]);
+                int str_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+                emit_asm(gen, "    sub rsp, %d  ; Shadow space/alignment\n", str_stack_adj);
                 emit_asm(gen, "    call nuwan_string_concat\n");
-                emit_asm(gen, "    add rsp, 32  ; Restore stack\n");
+                emit_asm(gen, "    add rsp, %d  ; Restore stack\n", str_stack_adj);
                 emit_asm(gen, "    mov %s, rax  ; Result\n", reg);
             } else {
                 emit_asm(gen, "    add %s, rbx\n", reg);
@@ -1075,37 +1089,23 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 call->callee->as.lambda.capture_count > 0) {
                 LambdaExpr* lambda = &call->callee->as.lambda;
                 int total_args = lambda->capture_count + call->arg_count;
-                int extra_args = (total_args > 4) ? (total_args - 4) : 0;
-                int stack_size = 32 + (extra_args * 8);
-
-                if (stack_size % 16 != 0) {
-                    stack_size += 8;
-                }
-
+                int extra_args = (total_args > ABI_I_REG_COUNT) ? (total_args - ABI_I_REG_COUNT) : 0;
+                int stack_size = ABI_SHADOW_SPACE + (extra_args * 8);
+                if (stack_size % 16 != 0) stack_size += 8;
+                
                 emit_asm(gen, "    sub rsp, %d\n", stack_size);
 
-                for (int i = total_args - 1; i >= 4; i--) {
-                    int offset = 32 + (i - 4) * 8;
+                for (int i = total_args - 1; i >= ABI_I_REG_COUNT; i--) {
+                    int offset = ABI_SHADOW_SPACE + (i - ABI_I_REG_COUNT) * 8;
                     emit_lambda_call_arg(gen, lambda, call->arguments, call->arg_count,
                                          i, "rax", symbols);
                     emit_asm(gen, "    mov [rsp + %d], rax\n", offset);
                 }
 
-                if (total_args > 0) {
+                int n_reg = total_args < ABI_I_REG_COUNT ? total_args : ABI_I_REG_COUNT;
+                for (int i = 0; i < n_reg; i++) {
                     emit_lambda_call_arg(gen, lambda, call->arguments, call->arg_count,
-                                         0, "rcx", symbols);
-                }
-                if (total_args > 1) {
-                    emit_lambda_call_arg(gen, lambda, call->arguments, call->arg_count,
-                                         1, "rdx", symbols);
-                }
-                if (total_args > 2) {
-                    emit_lambda_call_arg(gen, lambda, call->arguments, call->arg_count,
-                                         2, "r8", symbols);
-                }
-                if (total_args > 3) {
-                    emit_lambda_call_arg(gen, lambda, call->arguments, call->arg_count,
-                                         3, "r9", symbols);
+                                         i, ABI_I_REGS[i], symbols);
                 }
 
                 {
@@ -1138,39 +1138,26 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 Symbol* closure_sym = lookup_symbol(symbols, call->callee->as.variable.name);
                 if (closure_sym && closure_sym->is_closure_value) {
                     int total_args = closure_sym->closure_capture_count + call->arg_count;
-                    int extra_args = (total_args > 4) ? (total_args - 4) : 0;
-                    int stack_size = 32 + (extra_args * 8);
+                    int extra_args = (total_args > ABI_I_REG_COUNT) ? (total_args - ABI_I_REG_COUNT) : 0;
+                    int stack_size = ABI_SHADOW_SPACE + (extra_args * 8);
 
-                    if (stack_size % 16 != 0) {
-                        stack_size += 8;
-                    }
+                    if (stack_size % 16 != 0) stack_size += 8;
 
                     generate_asm_expr(gen, call->callee, "rax", symbols);
                     emit_asm(gen, "    mov r12, rax  ; closure handle\n");
                     emit_asm(gen, "    sub rsp, %d\n", stack_size);
 
-                    for (int i = total_args - 1; i >= 4; i--) {
-                        int offset = 32 + (i - 4) * 8;
+                    for (int i = total_args - 1; i >= ABI_I_REG_COUNT; i--) {
+                        int offset = ABI_SHADOW_SPACE + (i - ABI_I_REG_COUNT) * 8;
                         emit_closure_call_arg(gen, closure_sym, call->arguments,
                                               call->arg_count, i, "rax", symbols);
                         emit_asm(gen, "    mov [rsp + %d], rax\n", offset);
                     }
 
-                    if (total_args > 0) {
+                    int n_reg = total_args < ABI_I_REG_COUNT ? total_args : ABI_I_REG_COUNT;
+                    for (int i = 0; i < n_reg; i++) {
                         emit_closure_call_arg(gen, closure_sym, call->arguments,
-                                              call->arg_count, 0, "rcx", symbols);
-                    }
-                    if (total_args > 1) {
-                        emit_closure_call_arg(gen, closure_sym, call->arguments,
-                                              call->arg_count, 1, "rdx", symbols);
-                    }
-                    if (total_args > 2) {
-                        emit_closure_call_arg(gen, closure_sym, call->arguments,
-                                              call->arg_count, 2, "r8", symbols);
-                    }
-                    if (total_args > 3) {
-                        emit_closure_call_arg(gen, closure_sym, call->arguments,
-                                              call->arg_count, 3, "r9", symbols);
+                                              call->arg_count, i, ABI_I_REGS[i], symbols);
                     }
 
                     {
@@ -1192,15 +1179,9 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 }
             }
 
-            // Windows x64: RCX, RDX, R8, R9 for first 4 args
-            // Args 5+ go on stack in reverse order
-
-            // Calculate stack space needed:
-            // - 32 bytes shadow space (required by Windows x64)
-            // - 8 bytes per argument beyond the 4th
-            // - Must be 16-byte aligned
-            int extra_args = (call->arg_count > 4) ? (call->arg_count - 4) : 0;
-            int stack_size = 32 + (extra_args * 8);
+            // ABI-specific argument passing
+            int extra_args = (call->arg_count > ABI_I_REG_COUNT) ? (call->arg_count - ABI_I_REG_COUNT) : 0;
+            int stack_size = ABI_SHADOW_SPACE + (extra_args * 8);
             // Ensure 16-byte alignment
             if (stack_size % 16 != 0) {
                 stack_size += 8;
@@ -1208,40 +1189,33 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
 
             emit_asm(gen, "    sub rsp, %d\n", stack_size);
 
-            // Push arguments 5+ onto stack in reverse order (right-to-left)
-            for (int i = call->arg_count - 1; i >= 4; i--) {
+            // Push stack arguments
+            for (int i = call->arg_count - 1; i >= ABI_I_REG_COUNT; i--) {
                 generate_asm_expr(gen, call->arguments[i], "rax", symbols);
-                // Stack offset: 32 (shadow) + (i-4)*8
-                int offset = 32 + (i - 4) * 8;
+                int offset = ABI_SHADOW_SPACE + (i - ABI_I_REG_COUNT) * 8;
                 emit_asm(gen, "    mov [rsp + %d], rax\n", offset);
             }
 
-            // Load first 4 arguments into registers
-            if (call->arg_count > 0) {
-                generate_asm_expr(gen, call->arguments[0], "rcx", symbols);
-            }
-            if (call->arg_count > 1) {
-                generate_asm_expr(gen, call->arguments[1], "rdx", symbols);
-            }
-            if (call->arg_count > 2) {
-                generate_asm_expr(gen, call->arguments[2], "r8", symbols);
-            }
-            if (call->arg_count > 3) {
-                generate_asm_expr(gen, call->arguments[3], "r9", symbols);
+            // Load register arguments
+            int reg_args = call->arg_count < ABI_I_REG_COUNT ? call->arg_count : ABI_I_REG_COUNT;
+            for (int i = 0; i < reg_args; i++) {
+                generate_asm_expr(gen, call->arguments[i], ABI_I_REGS[i], symbols);
             }
 
-            // Check if function is extern or Casprix
+            // Handle float arguments
             Symbol* func_sym = call->name ? lookup_symbol(symbols, call->name) : NULL;
-
-            // Copy float args into XMM registers (Windows x64 ABI)
             if (func_sym && func_sym->param_types) {
-                int n = call->arg_count < 4 ? call->arg_count : 4;
+                int n = call->arg_count < 8 ? call->arg_count : 8; // Linux supports up to 8 XMM
                 for (int i = 0; i < n; i++) {
-                    if (func_sym->param_types[i] == TYPE_FLOAT ||
-                        func_sym->param_types[i] == TYPE_F32 ||
-                        func_sym->param_types[i] == TYPE_F64) {
-                        const char* iregs[] = {"rcx", "rdx", "r8", "r9"};
-                        emit_asm(gen, "    movq xmm%d, %s  ; float arg %d\n", i, iregs[i], i);
+                    DataType pt = func_sym->param_types[i];
+                    if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64) {
+#ifdef _WIN32
+                        if (i < 4) emit_asm(gen, "    movq xmm%d, %s\n", i, ABI_I_REGS[i]);
+#else
+                        // On Linux, floats are often already in XMM if we changed generate_asm_expr,
+                        // but here we copy from the GPR we just loaded.
+                        emit_asm(gen, "    movq xmm%d, %s\n", i, ABI_I_REGS[i]);
+#endif
                     }
                 }
             }
@@ -1304,30 +1278,26 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 emit_asm(gen, "    mov r15, rax  ; Save object pointer in r15\n");
 
                 // Allocate shadow space + stack args (must be 16-byte aligned)
-                int method_stack_args = member->arg_count > 3 ? member->arg_count - 3 : 0;
-                int method_stack_size = 32 + (method_stack_args * 8);
+                int reg_args_limit = ABI_I_REG_COUNT - 1; // 1 for 'this'
+                int method_stack_args = member->arg_count > reg_args_limit ? member->arg_count - reg_args_limit : 0;
+                int method_stack_size = ABI_SHADOW_SPACE + (method_stack_args * 8);
                 if (method_stack_size % 16 != 0) method_stack_size += 8;
-                emit_asm(gen, "    sub rsp, %d  ; Shadow space + stack args\n", method_stack_size);
+                emit_asm(gen, "    sub rsp, %d\n", method_stack_size);
 
                 // Evaluate and place arguments directly into registers/stack
-                if (member->arg_count > 0) {
-                    generate_asm_expr(gen, member->arguments[0], "rdx", symbols);
+                int r_args = member->arg_count < reg_args_limit ? member->arg_count : reg_args_limit;
+                for (int i = 0; i < r_args; i++) {
+                    generate_asm_expr(gen, member->arguments[i], ABI_I_REGS[i + 1], symbols);
                 }
-                if (member->arg_count > 1) {
-                    generate_asm_expr(gen, member->arguments[1], "r8", symbols);
-                }
-                if (member->arg_count > 2) {
-                    generate_asm_expr(gen, member->arguments[2], "r9", symbols);
-                }
-                // Handle args 4+ on stack
-                for (int i = 3; i < member->arg_count; i++) {
+                // Handle remaining args on stack
+                for (int i = reg_args_limit; i < member->arg_count; i++) {
                     generate_asm_expr(gen, member->arguments[i], "rax", symbols);
                     emit_asm(gen, "    mov [rsp + %d], rax  ; Arg %d on stack\n",
-                            32 + (i - 3) * 8, i);
+                            ABI_SHADOW_SPACE + (i - reg_args_limit) * 8, i);
                 }
 
-                // Object pointer ('this') goes in rcx
-                emit_asm(gen, "    mov rcx, r15  ; Load object pointer (this)\n");
+                // Object pointer ('this') goes in the first argument register
+                emit_asm(gen, "    mov %s, r15  ; Load object pointer (this)\n", ABI_I_REGS[0]);
 
                 // Determine the class of the object to find the method
                 // Use the class_name from the object expression (set by semantic analyzer)
@@ -1358,13 +1328,12 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                     // Copy float method args into XMM registers
                     // Method param 0 → RDX (pos 1), param 1 → R8 (pos 2), param 2 → R9 (pos 3)
                     if (method_sym && method_sym->param_types) {
-                        const char* miregs[] = {"rdx", "r8", "r9"};
-                        int mn = method_sym->param_count < 3 ? method_sym->param_count : 3;
+                        int mn = method_sym->param_count < (ABI_I_REG_COUNT - 1) ? method_sym->param_count : (ABI_I_REG_COUNT - 1);
                         for (int mi = 0; mi < mn; mi++) {
                             DataType pt = method_sym->param_types[mi];
                             if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64) {
                                 emit_asm(gen, "    movq xmm%d, %s  ; float method arg %d\n",
-                                        mi + 1, miregs[mi], mi);
+                                        mi + 1, ABI_I_REGS[mi + 1], mi);
                             }
                         }
                     }
@@ -1374,7 +1343,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                         // Virtual method call - indirect through vtable
                         emit_asm(gen, "    ; Virtual method call: %s (vtable index %d)\n",
                                 member->member_name, method_sym->vtable_index);
-                        emit_asm(gen, "    mov rbx, [rcx]  ; Load vtable pointer from object\n");
+                        emit_asm(gen, "    mov rbx, [%s]  ; Load vtable pointer from object\n", ABI_I_REGS[0]);
                         emit_asm(gen, "    call [rbx + %d]  ; Indirect call through vtable\n",
                                 method_sym->vtable_index * 8);
                     } else {
@@ -1402,37 +1371,28 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             SuperExpr* super_expr = &expr->as.super_expr;
             
             if (super_expr->is_method_call) {
-                // Super method call: Super.method(args)
-                // Similar to regular method call, but call parent's implementation directly
-                
                 // Calculate stack space
-                int extra_args = (super_expr->arg_count > 3) ? (super_expr->arg_count - 3) : 0;
-                int stack_size = 32 + (extra_args * 8);
-                if (stack_size % 16 != 0) {
-                    stack_size += 8;
-                }
+                int reg_args_limit = ABI_I_REG_COUNT - 1;
+                int extra_args = (super_expr->arg_count > reg_args_limit) ? (super_expr->arg_count - reg_args_limit) : 0;
+                int stack_size = ABI_SHADOW_SPACE + (extra_args * 8);
+                if (stack_size % 16 != 0) stack_size += 8;
                 
                 emit_asm(gen, "    sub rsp, %d\n", stack_size);
                 
                 // Push extra arguments onto stack
-                for (int i = super_expr->arg_count - 1; i >= 4; i--) {
+                for (int i = super_expr->arg_count - 1; i >= reg_args_limit; i--) {
                     generate_asm_expr(gen, super_expr->arguments[i], "rax", symbols);
-                    int offset = 32 + (i - 4) * 8;
+                    int offset = ABI_SHADOW_SPACE + (i - reg_args_limit) * 8;
                     emit_asm(gen, "    mov [rsp + %d], rax\n", offset);
                 }
                 
                 // First argument is always 'this' for method calls
-                emit_asm(gen, "    mov rcx, [rel this_ptr]\n");
+                emit_asm(gen, "    mov %s, [rel this_ptr]\n", ABI_I_REGS[0]);
                 
                 // Load remaining arguments into registers
-                if (super_expr->arg_count > 0) {
-                    generate_asm_expr(gen, super_expr->arguments[0], "rdx", symbols);
-                }
-                if (super_expr->arg_count > 1) {
-                    generate_asm_expr(gen, super_expr->arguments[1], "r8", symbols);
-                }
-                if (super_expr->arg_count > 2) {
-                    generate_asm_expr(gen, super_expr->arguments[2], "r9", symbols);
+                int s_args = super_expr->arg_count < reg_args_limit ? super_expr->arg_count : reg_args_limit;
+                for (int i = 0; i < s_args; i++) {
+                    generate_asm_expr(gen, super_expr->arguments[i], ABI_I_REGS[i + 1], symbols);
                 }
                 
                 // Call parent's method directly (no virtual dispatch)
@@ -1477,6 +1437,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             break;
         }
         case EXPR_NEW: {
+            // ARC/Class-based new
             NewExpr* new_expr = &expr->as.new_expr;
             MethodSymbol* ctor = NULL;
 
@@ -1493,13 +1454,13 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             emit_asm(gen, "    ; Allocate ARC-managed object: New %s\n", new_expr->class_name);
 
             // Call arc_alloc_full(size, destructor, scanner)
-            // rcx = size, rdx = destructor, r8 = scanner
-            emit_asm(gen, "    sub rsp, 32  ; Shadow space\n");
-            emit_asm(gen, "    mov rcx, %d  ; Object size\n", class_sym->instance_size);
-            emit_asm(gen, "    lea rdx, [__dtor_%s]  ; Destructor\n", new_expr->class_name);
-            emit_asm(gen, "    xor r8, r8  ; Scanner (NULL for now)\n");
+            int arc_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+            emit_asm(gen, "    sub rsp, %d  ; Shadow space/alignment\n", arc_stack_adj);
+            emit_asm(gen, "    mov %s, %d  ; Object size\n", ABI_I_REGS[0], class_sym->instance_size);
+            emit_asm(gen, "    lea %s, [__dtor_%s]  ; Destructor\n", ABI_I_REGS[1], new_expr->class_name);
+            emit_asm(gen, "    xor %s, %s  ; Scanner (NULL for now)\n", ABI_I_REGS[2], ABI_I_REGS[2]);
             emit_asm(gen, "    call arc_alloc_full\n");
-            emit_asm(gen, "    add rsp, 32\n");
+            emit_asm(gen, "    add rsp, %d\n", arc_stack_adj);
             // Object pointer is now in rax (user data, past ArcHeader)
 
             // Set VTable pointer at offset 0 (ObjectHeader)
@@ -1511,42 +1472,36 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             // Save object pointer in a temp register before pushing args
             emit_asm(gen, "    mov r15, rax  ; Save object pointer in r15\n");
 
-            // Prepare constructor arguments
             // Allocate shadow space + space for stack args (must be 16-byte aligned)
-            int stack_args = new_expr->arg_count > 3 ? new_expr->arg_count - 3 : 0;
-            int stack_size = 32 + (stack_args * 8);
-            if (stack_size % 16 != 0) stack_size += 8;
-            emit_asm(gen, "    sub rsp, %d  ; Shadow space + stack args\n", stack_size);
+            int c_reg_limit = ABI_I_REG_COUNT - 1; // 1 for 'this'
+            int c_stack_args = new_expr->arg_count > c_reg_limit ? new_expr->arg_count - c_reg_limit : 0;
+            int c_stack_size = ABI_SHADOW_SPACE + (c_stack_args * 8);
+            if (c_stack_size % 16 != 0) c_stack_size += 8;
+            emit_asm(gen, "    sub rsp, %d  ; Shadow space + stack args\n", c_stack_size);
 
             // Evaluate and place arguments
-            if (new_expr->arg_count > 0) {
-                generate_asm_expr(gen, new_expr->arguments[0], "rdx", symbols);
+            int c_r_args = new_expr->arg_count < c_reg_limit ? new_expr->arg_count : c_reg_limit;
+            for (int i = 0; i < c_r_args; i++) {
+                generate_asm_expr(gen, new_expr->arguments[i], ABI_I_REGS[i + 1], symbols);
             }
-            if (new_expr->arg_count > 1) {
-                generate_asm_expr(gen, new_expr->arguments[1], "r8", symbols);
-            }
-            if (new_expr->arg_count > 2) {
-                generate_asm_expr(gen, new_expr->arguments[2], "r9", symbols);
-            }
-            // Handle args 4+ on stack
-            for (int i = 3; i < new_expr->arg_count; i++) {
+            // Handle args on stack
+            for (int i = c_reg_limit; i < new_expr->arg_count; i++) {
                 generate_asm_expr(gen, new_expr->arguments[i], "rax", symbols);
                 emit_asm(gen, "    mov [rsp + %d], rax  ; Arg %d on stack\n",
-                        32 + (i - 3) * 8, i);
+                        ABI_SHADOW_SPACE + (i - c_reg_limit) * 8, i);
             }
 
-            // Object pointer (this) goes in rcx
-            emit_asm(gen, "    mov rcx, r15  ; Load object pointer (this)\n");
+            // Object pointer (this) goes in the first argument register
+            emit_asm(gen, "    mov %s, r15  ; Load object pointer (this)\n", ABI_I_REGS[0]);
 
             // Copy float constructor args into XMM registers
             if (ctor && ctor->param_types) {
-                const char* ciregs[] = {"rdx", "r8", "r9"};
-                int cn = ctor->param_count < 3 ? ctor->param_count : 3;
+                int cn = ctor->param_count < (ABI_I_REG_COUNT - 1) ? ctor->param_count : (ABI_I_REG_COUNT - 1);
                 for (int ci = 0; ci < cn; ci++) {
                     DataType pt = ctor->param_types[ci];
                     if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64) {
                         emit_asm(gen, "    movq xmm%d, %s  ; float ctor arg %d\n",
-                                ci + 1, ciregs[ci], ci);
+                                ci + 1, ABI_I_REGS[ci + 1], ci);
                     }
                 }
             }
@@ -1556,7 +1511,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 emit_asm(gen, "    call %s_%s\n", new_expr->class_name, ctor->name);
             }
 
-            emit_asm(gen, "    add rsp, %d  ; Clean up stack\n", stack_size);
+            emit_asm(gen, "    add rsp, %d  ; Clean up stack\n", c_stack_size);
 
             // Constructor returns object pointer in rax
             if (strcmp(reg, "rax") != 0) {
@@ -1595,34 +1550,24 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 emit_asm(gen, "    ; Static method call: %s.%s\n",
                         static_access->class_name, static_access->member_name);
 
-                // Calculate stack space needed (Windows x64 calling convention)
-                int extra_args = (static_access->arg_count > 4) ? (static_access->arg_count - 4) : 0;
-                int stack_size = 32 + (extra_args * 8);
-                if (stack_size % 16 != 0) {
-                    stack_size += 8;
-                }
+                // Calculate stack space needed
+                int extra_args = (static_access->arg_count > ABI_I_REG_COUNT) ? (static_access->arg_count - ABI_I_REG_COUNT) : 0;
+                int stack_size = ABI_SHADOW_SPACE + (extra_args * 8);
+                if (stack_size % 16 != 0) stack_size += 8;
 
                 emit_asm(gen, "    sub rsp, %d\n", stack_size);
 
-                // Push arguments 5+ onto stack in reverse order
-                for (int i = static_access->arg_count - 1; i >= 4; i--) {
+                // Push extra arguments onto stack
+                for (int i = static_access->arg_count - 1; i >= ABI_I_REG_COUNT; i--) {
                     generate_asm_expr(gen, static_access->arguments[i], "rax", symbols);
-                    int offset = 32 + (i - 4) * 8;
+                    int offset = ABI_SHADOW_SPACE + (i - ABI_I_REG_COUNT) * 8;
                     emit_asm(gen, "    mov [rsp + %d], rax\n", offset);
                 }
 
-                // Load first 4 arguments into registers
-                if (static_access->arg_count > 0) {
-                    generate_asm_expr(gen, static_access->arguments[0], "rcx", symbols);
-                }
-                if (static_access->arg_count > 1) {
-                    generate_asm_expr(gen, static_access->arguments[1], "rdx", symbols);
-                }
-                if (static_access->arg_count > 2) {
-                    generate_asm_expr(gen, static_access->arguments[2], "r8", symbols);
-                }
-                if (static_access->arg_count > 3) {
-                    generate_asm_expr(gen, static_access->arguments[3], "r9", symbols);
+                // Load first arguments into registers
+                int n_reg = static_access->arg_count < ABI_I_REG_COUNT ? static_access->arg_count : ABI_I_REG_COUNT;
+                for (int i = 0; i < n_reg; i++) {
+                    generate_asm_expr(gen, static_access->arguments[i], ABI_I_REGS[i], symbols);
                 }
 
                 // Call static method with mangled name
@@ -1799,31 +1744,32 @@ static void generate_asm_print(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
     
     DataType type = print->expression->data_type;
     
-    // Windows x64 calling convention: RCX, RDX, R8, R9 for first 4 args
+    // Calling convention: RCX, RDX (Windows) or RDI, RSI (Linux)
     // Stack must be 16-byte aligned before call
-    emit_asm(gen, "    sub rsp, 32\n"); // Shadow space + alignment
+    int stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+    emit_asm(gen, "    sub rsp, %d\n", stack_adj);
     
     generate_asm_expr(gen, print->expression, "rax", symbols);
     
     switch (type) {
         case TYPE_INT:
-            emit_asm(gen, "    lea rcx, [rel fmt_int]\n"); // Format string
-            emit_asm(gen, "    mov rdx, rax\n"); // Value
+            emit_asm(gen, "    lea %s, [rel fmt_int]\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    mov %s, rax\n", ABI_I_REGS[1]);
             emit_asm(gen, "    call printf\n");
             break;
         case TYPE_STRING:
-            emit_asm(gen, "    lea rcx, [rel fmt_str]\n"); // Format string
-            emit_asm(gen, "    mov rdx, rax\n"); // String pointer
+            emit_asm(gen, "    lea %s, [rel fmt_str]\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    mov %s, rax\n", ABI_I_REGS[1]);
             emit_asm(gen, "    call printf\n");
             break;
         case TYPE_FLOAT:
-            // Float printing with printf requires:
-            // - Format string in RCX
-            // - Float value in XMM1 (Windows x64 calling convention)
-            // Note: RAX contains the float as int64 representation
-            emit_asm(gen, "    lea rcx, [rel fmt_float]\n"); // Format string in RCX
-            emit_asm(gen, "    movq xmm1, rax\n"); // Move float bits to XMM1
-            emit_asm(gen, "    mov rax, 1\n"); // AL=1 indicates varargs with 1 float
+            emit_asm(gen, "    lea %s, [rel fmt_float]\n", ABI_I_REGS[0]);
+#ifdef _WIN32
+            emit_asm(gen, "    movq xmm1, rax\n");
+#else
+            emit_asm(gen, "    movq xmm0, rax\n");
+#endif
+            emit_asm(gen, "    mov rax, 1\n");
             emit_asm(gen, "    call printf\n");
             break;
         case TYPE_BOOL: {
@@ -1832,10 +1778,10 @@ static void generate_asm_print(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
             snprintf(true_label, sizeof(true_label), "L%d", gen->label_count++);
             snprintf(end_label, sizeof(end_label), "L%d", gen->label_count++);
             emit_asm(gen, "    jnz %s\n", true_label);
-            emit_asm(gen, "    lea rcx, [rel fmt_false]\n");
+            emit_asm(gen, "    lea %s, [rel fmt_false]\n", ABI_I_REGS[0]);
             emit_asm(gen, "    jmp %s\n", end_label);
             emit_asm(gen, "%s:\n", true_label);
-            emit_asm(gen, "    lea rcx, [rel fmt_true]\n");
+            emit_asm(gen, "    lea %s, [rel fmt_true]\n", ABI_I_REGS[0]);
             emit_asm(gen, "%s:\n", end_label);
             emit_asm(gen, "    call printf\n");
             break;
@@ -1844,7 +1790,7 @@ static void generate_asm_print(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
             break;
     }
     
-    emit_asm(gen, "    add rsp, 32\n"); // Restore stack
+    emit_asm(gen, "    add rsp, %d\n", stack_adj); // Restore stack
 }
 
 static void generate_asm_if(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* symbols) {
@@ -1968,32 +1914,27 @@ static void generate_asm_function(AssemblyGenerator* gen, Stmt* stmt, SymbolTabl
     emit_asm(gen, "    mov rbp, rsp\n");
     emit_prologue_stack(gen);
 
-    /* Store first 4 params into stack slots */
+    /* Store register parameters into stack slots */
     {
-        int n = func->param_count < 4 ? func->param_count : 4;
-        const char* fregs[] = {"rcx", "rdx", "r8", "r9"};
-        for (int j = 0; j < n; j++) {
+        int reg_n = func->param_count < ABI_I_REG_COUNT ? func->param_count : ABI_I_REG_COUNT;
+        for (int j = 0; j < reg_n; j++) {
             DataType pt = func->parameters[j].type;
             int off = find_local(gen, func->parameters[j].name);
             if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64)
                 emit_asm(gen, "    movq [rbp - %d], xmm%d\n", off, j);
             else
-                emit_asm(gen, "    mov [rbp - %d], %s\n", off, fregs[j]);
+                emit_asm(gen, "    mov [rbp - %d], %s\n", off, ABI_I_REGS[j]);
         }
     }
 
-    /* Stack params (5+) — caller frame: [rbp+48], [rbp+56], ... */
-    for (int i = 4; i < func->param_count; i++) {
-        int stack_offset = 48 + (i - 4) * 8;
+    /* Stack parameters (ABI_I_REG_COUNT+) */
+    for (int i = ABI_I_REG_COUNT; i < func->param_count; i++) {
+        int stack_base = ABI_SHADOW_SPACE > 0 ? 48 : 16;
+        int stack_offset = stack_base + (i - ABI_I_REG_COUNT) * 8;
         int off = find_local(gen, func->parameters[i].name);
         emit_asm(gen, "    mov rax, [rbp + %d]\n", stack_offset);
         if (off)
             emit_asm(gen, "    mov [rbp - %d], rax\n", off);
-        else {
-            char global_name[256];
-            format_global_var_symbol(func->parameters[i].name, global_name, sizeof(global_name));
-            emit_asm(gen, "    mov [rel %s], rax\n", global_name);
-        }
     }
 
     /* ── ARC: Enter function scope and register ARC parameters ── */
@@ -2097,17 +2038,9 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
         /* ── Per-method stack frame ── */
         begin_local_frame(gen);
 
-        if (method->is_static) {
-            /* params: rcx, rdx, r8, r9 for first 4; rest on stack */
-            for (int j = 0; j < method->param_count; j++)
-                alloc_local(gen, method->parameters[j].name);
-        } else {
-            /* params: rdx, r8, r9 for first 3 (rcx = this); rest on stack */
-            for (int j = 0; j < method->param_count; j++)
-                alloc_local(gen, method->parameters[j].name);
-        }
+        for (int j = 0; j < method->param_count; j++)
+            alloc_local(gen, method->parameters[j].name);
         prescan_locals(gen, method->body);
-
 
         /* Now frame_size is known, emit label + prologue */
         emit_asm(gen, "\n%s:\n", mangled_name);
@@ -2116,47 +2049,36 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
         emit_prologue_stack(gen);
 
         if (!method->is_static) {
-            /* 'this' pointer stays in the global for now */
-            emit_asm(gen, "    mov [rel this_ptr], rcx\n");
+            /* 'this' pointer comes in the first argument register */
+            emit_asm(gen, "    mov [rel this_ptr], %s\n", ABI_I_REGS[0]);
         }
 
         /* Store parameters into stack slots */
-        if (method->is_static) {
-            const char* siregs[] = {"rcx", "rdx", "r8", "r9"};
-            int n = method->param_count < 4 ? method->param_count : 4;
-            for (int j = 0; j < n; j++) {
-                DataType pt = method->parameters[j].type;
-                int off = find_local(gen, method->parameters[j].name);
-                if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64)
-                    emit_asm(gen, "    movq [rbp - %d], xmm%d\n", off, j);
-                else
-                    emit_asm(gen, "    mov [rbp - %d], %s\n", off, siregs[j]);
-            }
-            for (int j = 4; j < method->param_count; j++) {
-                int stack_offset = 48 + (j - 4) * 8;
-                int off = find_local(gen, method->parameters[j].name);
-                emit_asm(gen, "    mov rax, [rbp + %d]\n", stack_offset);
-                emit_asm(gen, "    mov [rbp - %d], rax\n", off);
-            }
-        } else {
-            const char* iregs[] = {"rdx", "r8", "r9"};
-            int xmm_ids[] = {1, 2, 3};
-            int n = method->param_count < 3 ? method->param_count : 3;
-            for (int j = 0; j < n; j++) {
-                DataType pt = method->parameters[j].type;
-                int off = find_local(gen, method->parameters[j].name);
-                if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64)
-                    emit_asm(gen, "    movq [rbp - %d], xmm%d\n", off, xmm_ids[j]);
-                else
-                    emit_asm(gen, "    mov [rbp - %d], %s\n", off, iregs[j]);
-            }
-            for (int j = 3; j < method->param_count; j++) {
-                int stack_offset = 48 + (j - 3) * 8;
-                int off = find_local(gen, method->parameters[j].name);
-                emit_asm(gen, "    mov rax, [rbp + %d]\n", stack_offset);
-                emit_asm(gen, "    mov [rbp - %d], rax\n", off);
-            }
+        int first_arg_idx = method->is_static ? 0 : 1;
+        int reg_param_count = method->param_count < (ABI_I_REG_COUNT - first_arg_idx) ? 
+                              method->param_count : (ABI_I_REG_COUNT - first_arg_idx);
+
+        for (int j = 0; j < reg_param_count; j++) {
+            DataType pt = method->parameters[j].type;
+            int off = find_local(gen, method->parameters[j].name);
+            const char* reg = ABI_I_REGS[j + first_arg_idx];
+            if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64)
+                emit_asm(gen, "    movq [rbp - %d], xmm%d\n", off, j + first_arg_idx);
+            else
+                emit_asm(gen, "    mov [rbp - %d], %s\n", off, reg);
         }
+
+        for (int j = reg_param_count; j < method->param_count; j++) {
+            // Stack arguments start after return address and saved RBP
+            // Windows: after 32-byte shadow space (total 48-byte offset)
+            // Linux: immediately after RBP (total 16-byte offset)
+            int stack_base = ABI_SHADOW_SPACE > 0 ? 48 : 16;
+            int stack_offset = stack_base + (j - reg_param_count) * 8;
+            int off = find_local(gen, method->parameters[j].name);
+            emit_asm(gen, "    mov rax, [rbp + %d]\n", stack_offset);
+            emit_asm(gen, "    mov [rbp - %d], rax\n", off);
+        }
+
 
         /* ── ARC: Enter method scope and register ARC parameters ── */
         drop_planner_enter_scope(&gen->drop_ctx);
@@ -2204,16 +2126,17 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
             class_sym->fields[i].type == TYPE_STRBUF) {
             emit_asm(gen, "    ; Release field '%s' at offset %d\n",
                     class_sym->fields[i].name, class_sym->fields[i].offset);
-            emit_asm(gen, "    push rcx  ; Save object ptr\n");
-            emit_asm(gen, "    mov rcx, [rcx + %d]  ; Load field ref\n",
-                    class_sym->fields[i].offset);
-            emit_asm(gen, "    test rcx, rcx  ; Check for NULL\n");
+            emit_asm(gen, "    push %s  ; Save object ptr\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    mov %s, [%s + %d]  ; Load field ref\n",
+                    ABI_I_REGS[0], ABI_I_REGS[0], class_sym->fields[i].offset);
+            emit_asm(gen, "    test %s, %s  ; Check for NULL\n", ABI_I_REGS[0], ABI_I_REGS[0]);
             emit_asm(gen, "    jz .dtor_%s_skip_%d\n", class_stmt->name, i);
-            emit_asm(gen, "    sub rsp, 32\n");
+            int dtor_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+            emit_asm(gen, "    sub rsp, %d\n", dtor_stack_adj);
             emit_asm(gen, "    call arc_release\n");
-            emit_asm(gen, "    add rsp, 32\n");
+            emit_asm(gen, "    add rsp, %d\n", dtor_stack_adj);
             emit_asm(gen, ".dtor_%s_skip_%d:\n", class_stmt->name, i);
-            emit_asm(gen, "    pop rcx  ; Restore object ptr\n");
+            emit_asm(gen, "    pop %s  ; Restore object ptr\n", ABI_I_REGS[0]);
         }
     }
     emit_asm(gen, "    pop rbp\n");
@@ -2611,19 +2534,20 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             /* Store as current exception */
             emit_asm(gen, "    mov [rel cpx_current_exception], rax  ; store thrown value\n");
             /* longjmp to nearest try handler */
-            emit_asm(gen, "    mov rcx, [rel cpx_jmp_buf_ptr]  ; load jmp_buf ptr\n");
-            emit_asm(gen, "    test rcx, rcx\n");
+            emit_asm(gen, "    mov %s, [rel cpx_jmp_buf_ptr]  ; load jmp_buf ptr\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    test %s, %s\n", ABI_I_REGS[0], ABI_I_REGS[0]);
             emit_asm(gen, "    jz .no_handler_%d  ; if no handler, abort\n", gen->label_count);
-            emit_asm(gen, "    mov rdx, 1  ; setjmp return value\n");
-            emit_asm(gen, "    sub rsp, 32\n");
+            emit_asm(gen, "    mov %s, 1  ; setjmp return value\n", ABI_I_REGS[1]);
+            int jump_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+            emit_asm(gen, "    sub rsp, %d\n", jump_stack_adj);
             emit_asm(gen, "    call longjmp\n");
-            emit_asm(gen, "    add rsp, 32\n");
+            emit_asm(gen, "    add rsp, %d\n", jump_stack_adj);
             emit_asm(gen, ".no_handler_%d:\n", gen->label_count++);
             emit_asm(gen, "    ; Unhandled exception — abort\n");
-            emit_asm(gen, "    xor rcx, rcx\n");
-            emit_asm(gen, "    sub rsp, 32\n");
+            emit_asm(gen, "    xor %s, %s\n", ABI_I_REGS[0], ABI_I_REGS[0]);
+            emit_asm(gen, "    sub rsp, %d\n", jump_stack_adj);
             emit_asm(gen, "    call abort\n");
-            emit_asm(gen, "    add rsp, 32\n");
+            emit_asm(gen, "    add rsp, %d\n", jump_stack_adj);
             break;
         }
 
@@ -2656,10 +2580,10 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             /* Set new jmp_buf */
             emit_asm(gen, "    lea rcx, [rbp - %d]  ; address of local jmp_buf\n", jbuf_off);
             emit_asm(gen, "    mov [rel cpx_jmp_buf_ptr], rcx\n");
-            /* Call setjmp */
-            emit_asm(gen, "    sub rsp, 32\n");
+            int jmp_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+            emit_asm(gen, "    sub rsp, %d\n", jmp_stack_adj);
             emit_asm(gen, "    call setjmp\n");
-            emit_asm(gen, "    add rsp, 32\n");
+            emit_asm(gen, "    add rsp, %d\n", jmp_stack_adj);
             emit_asm(gen, "    test rax, rax\n");
             emit_asm(gen, "    jnz %s  ; exception thrown — go to catch\n", catch_lbl);
 
@@ -2949,9 +2873,10 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     // Call the user's main function if it exists
     Symbol* main_symbol = lookup_symbol(symbols, "main");
     if (main_symbol && main_symbol->kind == SYMBOL_FUNCTION) {
-        emit_asm(gen, "    sub rsp, 32\n");
+        int main_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+        emit_asm(gen, "    sub rsp, %d\n", main_stack_adj);
         emit_asm(gen, "    call __casprix_main\n");
-        emit_asm(gen, "    add rsp, 32\n");
+        emit_asm(gen, "    add rsp, %d\n", main_stack_adj);
     }
     
     // Exit
