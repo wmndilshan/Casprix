@@ -89,6 +89,9 @@ typedef enum {
     // === Generic Type Parameter ===
     TYPE_GENERIC,        // Type variable (e.g., T)
 
+    // === Async / Future ===
+    TYPE_FUTURE,         // Asynchronous future/promise
+
     // === Special ===
     TYPE_ERROR           // Unresolved / error sentinel
 } DataType;
@@ -185,10 +188,15 @@ typedef enum {
     EXPR_NEW,            // Object instantiation: New ClassName(args)
     EXPR_INDEX,          // Array indexing: arr[index]
     EXPR_LAMBDA,         // Lambda: |x: Int, y: Int| => x + y
-    EXPR_GENERIC_INST    // Generic instantiation: List<Int>
+    EXPR_GENERIC_INST,   // Generic instantiation: List<Int>
+    EXPR_AWAIT           // Await expression: await future
 } ExprType;
 
 typedef struct Expr Expr;
+
+typedef struct {
+    Expr* expression;
+} AwaitExpr;
 
 typedef struct {
     Expr* left;
@@ -334,6 +342,7 @@ struct Expr {
         IndexExpr index;
         LambdaExpr lambda;
         GenericInstExpr generic_inst;
+        AwaitExpr await_expr;
     } as;
 };
 
@@ -414,6 +423,7 @@ typedef struct {
     int param_count;
     DataType return_type;
     Stmt* body;
+    bool is_async;
     // Generic support
     TypeParam* type_params;    // Generic type parameters (NULL if not generic)
     int type_param_count;
@@ -673,6 +683,7 @@ Expr* create_static_access_expr(char* class_name, char* member_name, bool is_met
 Expr* create_this_expr(char* class_name, int line, int col);
 Expr* create_new_expr(char* class_name, Expr** arguments, int arg_count, int line, int col);
 Expr* create_index_expr(Expr* array, Expr* index, int line, int col);
+Expr* create_await_expr(Expr* expression, int line, int col);
 
 Stmt* create_declaration_stmt(char* name, DataType type, Expr* init, int line, int col);
 Stmt* create_assignment_stmt(Expr* target, Expr* value, int line, int col);

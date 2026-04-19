@@ -162,6 +162,7 @@ void init_asm_generator(AssemblyGenerator* gen, FILE* output, void* unused) {
     gen->local_count = 0;
     gen->local_capacity = 0;
     gen->frame_size = 0;
+    drop_planner_init(&gen->drop_ctx);
 }
 
 void free_asm_generator(AssemblyGenerator* gen) {
@@ -326,8 +327,6 @@ static void emit_prologue_stack(AssemblyGenerator* gen) {
  *   - At return statements (early exit — drops all enclosing scopes)
  *   - At block scope exit (inner blocks)
  */
-static void emit_scope_drops(AssemblyGenerator* gen, const DropEntry* drops,
-                              int drop_count) __attribute__((unused));
 static void emit_scope_drops(AssemblyGenerator* gen, const DropEntry* drops,
                               int drop_count) {
     if (!drops || drop_count <= 0) return;
@@ -1703,6 +1702,13 @@ static void generate_asm_declaration(AssemblyGenerator* gen, Stmt* stmt, SymbolT
             emit_asm(gen, "    mov qword [rel %s], 0\n", global_name);
         }
     }
+
+    /* ── ARC: Register the variable for drop tracking if it is reference-counted ── */
+    if (decl->type == TYPE_CLASS || decl->type == TYPE_STRING || decl->type == TYPE_STRBUF) {
+        int off = find_local(gen, decl->name);
+        drop_planner_register(&gen->drop_ctx, decl->name,
+                               off, DROP_ARC, NULL, false);
+    }
 }
 
 static void generate_asm_assignment(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* symbols) {
@@ -1898,6 +1904,9 @@ static void generate_asm_while(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
 static void generate_asm_for(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* symbols) {
     ForStmt* for_stmt = &stmt->as.for_stmt;
     
+    /* ── ARC: enter loop scope (loop variable + body-local variables) ── */
+    drop_planner_enter_scope(&gen->drop_ctx);
+    
     // Initialization
     generate_asm_expr(gen, for_stmt->initializer, "rax", symbols);
     emit_store_var(gen, for_stmt->variable, "rax");
@@ -1908,7 +1917,6 @@ static void generate_asm_for(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* sy
     snprintf(end_label, sizeof(end_label), "L%d", gen->label_count++);
     
     // Push loop labels onto stack for break/continue
-    // For 'for' loops, continue should jump to the increment, not the condition
     if (gen->loop_depth < 32) {
         strcpy(gen->loop_start_labels[gen->loop_depth], continue_label);
         strcpy(gen->loop_end_labels[gen->loop_depth], end_label);
@@ -1931,6 +1939,14 @@ static void generate_asm_for(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* sy
     
     // Pop loop labels from stack
     gen->loop_depth--;
+    
+    /* ── ARC: drop any objects allocated in the loop scope ── */
+    {
+        int drop_count = 0;
+        const DropEntry* drops = drop_planner_get_scope_drops(&gen->drop_ctx, &drop_count);
+        emit_scope_drops(gen, drops, drop_count);
+    }
+    drop_planner_exit_scope(&gen->drop_ctx);
 }
 
 static void generate_asm_function(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* symbols) {
@@ -1980,7 +1996,26 @@ static void generate_asm_function(AssemblyGenerator* gen, Stmt* stmt, SymbolTabl
         }
     }
 
+    /* ── ARC: Enter function scope and register ARC parameters ── */
+    drop_planner_enter_scope(&gen->drop_ctx);
+    for (int j = 0; j < func->param_count; j++) {
+        DataType pt = func->parameters[j].type;
+        if (pt == TYPE_CLASS || pt == TYPE_STRING || pt == TYPE_STRBUF) {
+            int off = find_local(gen, func->parameters[j].name);
+            drop_planner_register(&gen->drop_ctx, func->parameters[j].name,
+                                   off, DROP_ARC, NULL, true);
+        }
+    }
+
     generate_asm_stmt(gen, func->body, symbols);
+
+    /* ── ARC: Drop all remaining function-scope variables at function exit ── */
+    {
+        int drop_count = 0;
+        const DropEntry* drops = drop_planner_get_scope_drops(&gen->drop_ctx, &drop_count);
+        emit_scope_drops(gen, drops, drop_count);
+    }
+    drop_planner_exit_scope(&gen->drop_ctx);
 
     if (func->return_type == TYPE_VOID) {
         emit_asm(gen, "    mov rax, 0\n");
@@ -1995,8 +2030,22 @@ static void generate_asm_return(AssemblyGenerator* gen, Stmt* stmt, SymbolTable*
 
     if (ret->value) {
         generate_asm_expr(gen, ret->value, "rax", symbols);
+        /* Save return value while we emit drops */
+        emit_asm(gen, "    push rax  ; save return value across drops\n");
     } else {
         emit_asm(gen, "    mov rax, 0\n");
+    }
+
+    /* ── ARC: flush ALL pending drops from every scope to function root ── */
+    {
+        int drop_count = 0;
+        const DropEntry* drops = drop_planner_get_drops_to_scope(
+            &gen->drop_ctx, 0, &drop_count);
+        emit_scope_drops(gen, drops, drop_count);
+    }
+
+    if (ret->value) {
+        emit_asm(gen, "    pop rax   ; restore return value\n");
     }
     emit_asm(gen, "    leave\n");
     emit_asm(gen, "    ret\n");
@@ -2109,8 +2158,27 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
             }
         }
 
+        /* ── ARC: Enter method scope and register ARC parameters ── */
+        drop_planner_enter_scope(&gen->drop_ctx);
+        for (int j = 0; j < method->param_count; j++) {
+            DataType pt = method->parameters[j].type;
+            if (pt == TYPE_CLASS || pt == TYPE_STRING || pt == TYPE_STRBUF) {
+                int off = find_local(gen, method->parameters[j].name);
+                drop_planner_register(&gen->drop_ctx, method->parameters[j].name,
+                                       off, DROP_ARC, NULL, true);
+            }
+        }
+
         /* Generate method body */
         generate_asm_stmt(gen, method->body, symbols);
+
+        /* ── ARC: Drop any remaining method-scope variables ── */
+        {
+            int drop_count = 0;
+            const DropEntry* drops = drop_planner_get_scope_drops(&gen->drop_ctx, &drop_count);
+            emit_scope_drops(gen, drops, drop_count);
+        }
+        drop_planner_exit_scope(&gen->drop_ctx);
 
         /* Epilogue */
         if (method->is_constructor) {
@@ -2358,9 +2426,17 @@ static void emit_lambda_functions_from_stmt(AssemblyGenerator* gen, Stmt* stmt, 
 
 static void generate_asm_block(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* symbols) {
     BlockStmt* block = &stmt->as.block;
+    drop_planner_enter_scope(&gen->drop_ctx);
+    
     for (int i = 0; i < block->stmt_count; i++) {
         generate_asm_stmt(gen, block->statements[i], symbols);
     }
+    
+    int drop_count = 0;
+    const DropEntry* drops = drop_planner_get_scope_drops(&gen->drop_ctx, &drop_count);
+    emit_scope_drops(gen, drops, drop_count);
+    
+    drop_planner_exit_scope(&gen->drop_ctx);
 }
 
 static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* symbols) {
@@ -2401,7 +2477,13 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             // Include statements are processed during module resolution
             break;
         case STMT_BREAK:
-            // break jumps to end of current loop
+            /* ── ARC: flush current scope's drops before jumping out ── */
+            {
+                int drop_count = 0;
+                const DropEntry* drops = drop_planner_get_scope_drops(
+                    &gen->drop_ctx, &drop_count);
+                emit_scope_drops(gen, drops, drop_count);
+            }
             if (gen->loop_depth > 0) {
                 emit_asm(gen, "    jmp %s  ; break\n", gen->loop_end_labels[gen->loop_depth - 1]);
             } else {
@@ -2409,7 +2491,13 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             }
             break;
         case STMT_CONTINUE:
-            // continue jumps to start of current loop
+            /* ── ARC: flush current scope's drops before continuing ── */
+            {
+                int drop_count = 0;
+                const DropEntry* drops = drop_planner_get_scope_drops(
+                    &gen->drop_ctx, &drop_count);
+                emit_scope_drops(gen, drops, drop_count);
+            }
             if (gen->loop_depth > 0) {
                 emit_asm(gen, "    jmp %s  ; continue\n", gen->loop_start_labels[gen->loop_depth - 1]);
             } else {

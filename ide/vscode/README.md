@@ -40,11 +40,12 @@ Type a prefix and press `Tab`:
 | `impl`  | Impl block        |
 | `enum`  | Enum definition   |
 | `let`   | Let binding       |
-| `letm`  | Mutable binding   |
+| `mut`   | Mutable binding   |
 | `if`    | If statement      |
 | `ife`   | If-else           |
 | `for`   | For-in range loop |
-| `each`  | For-each loop     |
+| `alloc` | Alloc region      |
+| `lambda`| Lambda expression |
 | `while` | While loop        |
 | `match` | Match expression  |
 | `try`   | Try-catch block   |

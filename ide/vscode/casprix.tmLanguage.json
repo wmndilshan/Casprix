@@ -120,15 +120,15 @@
         },
         "keywords_control": {
             "name": "keyword.control.cpx",
-            "match": "\\b(if|else|elif|for|while|return|break|continue|match|each|in|to|async|await|spawn|select|try|throw|catch|finally|import|from|as|yield)\\b"
+            "match": "\\b(if|else|elif|for|while|return|break|continue|match|in|async|await|spawn|try|throw|catch|finally|import|alloc)\\b"
         },
         "keywords_declaration": {
             "name": "keyword.declaration.cpx",
-            "match": "\\b(func|class|struct|enum|union|trait|interface|impl|new|type|module|package)\\b"
+            "match": "\\b(func|class|struct|enum|union|trait|impl|new|type)\\b"
         },
         "keywords_modifier": {
             "name": "storage.modifier.cpx",
-            "match": "\\b(let|const|mut|field|static|pub|public|private|protected|abstract|extern|extends|implements|uses|move|copy|where|unsafe|override|virtual|inline|comptime)\\b"
+            "match": "\\b(let|const|mut|static|public|private|protected|abstract|extern|extends|implements|move|copy|where|unsafe|dyn|lambda)\\b"
         },
         "constants": {
             "patterns": [
@@ -140,7 +140,7 @@
         },
         "builtin_types": {
             "name": "support.type.cpx",
-            "match": "\\b(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f16|f32|f64|bf16|int|uint|float|double|string|strbuf|bool|void|char|byte|array|slice|ptr|rawptr|ref|tensor|vec2|vec3|vec4|vec8|vec16|mat2|mat3|mat4|channel|Any)\\b"
+            "match": "\\b(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f16|f32|f64|bf16|int|float|string|strbuf|bool|void|char|array|slice|ptr|rawptr|ref|tensor|vec2|vec3|vec4|vec8|vec16|mat2|mat3|mat4|Int|Float|String|Bool|Void)\\b"
         },
         "builtin_functions": {
             "name": "support.function.builtin.cpx",

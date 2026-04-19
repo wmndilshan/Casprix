@@ -81,3 +81,18 @@ long long nuwan_lcm(long long a, long long b) {
 
 
 
+void nuwan_print_int(int64_t val) {
+    printf("%lld\n", (long long)val);
+}
+
+void nuwan_print_float(double val) {
+    printf("%g\n", val);
+}
+
+void nuwan_print_bool(bool val) {
+    printf("%s\n", val ? "true" : "false");
+}
+
+void nuwan_print_str(const char* val) {
+    if (val) printf("%s\n", val);
+}

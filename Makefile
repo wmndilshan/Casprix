@@ -143,7 +143,8 @@ MIR_SOURCES = \
     $(SRC_DIR)/compiler/ir/mir_backend.c \
     $(SRC_DIR)/compiler/ir/mir_c_backend.c \
     $(SRC_DIR)/compiler/ir/mir_mem2reg.c \
-    $(SRC_DIR)/compiler/ir/mir_inline.c
+    $(SRC_DIR)/compiler/ir/mir_inline.c \
+    $(SRC_DIR)/compiler/ir/mir_async.c
 
 # Code generation (x86-64)
 CODEGEN_SOURCES = \

@@ -98,10 +98,10 @@
         ],
         "description": "Declare an immutable variable"
     },
-    "letmut": {
-        "prefix": "letm",
+    "mut": {
+        "prefix": "mut",
         "body": [
-            "let mut ${1:name}: ${2:int} = ${3:0}"
+            "mut ${1:name}: ${2:int} = ${3:0}"
         ],
         "description": "Declare a mutable variable"
     },
@@ -134,14 +134,30 @@
         ],
         "description": "For-in range loop"
     },
-    "foreach": {
-        "prefix": "each",
+    "alloc": {
+        "prefix": "alloc",
         "body": [
-            "each ${1:item} in ${2:collection} {",
+            "alloc {",
             "\t$0",
             "}"
         ],
-        "description": "For-each loop over a collection"
+        "description": "Create a high-performance allocation region"
+    },
+    "lambda": {
+        "prefix": "lambda",
+        "body": [
+            "|${1:params}| => $0"
+        ],
+        "description": "Expression lambda"
+    },
+    "lambda_block": {
+        "prefix": "lambdab",
+        "body": [
+            "|${1:params}| -> ${2:void} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Block lambda"
     },
     "while": {
         "prefix": "while",
