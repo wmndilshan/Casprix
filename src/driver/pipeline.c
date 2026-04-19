@@ -8,6 +8,7 @@
 #include "driver/pipeline.h"
 #include "driver/cli.h"
 #include "driver/io.h"
+#include "compiler/middle/async.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,6 +60,8 @@ typedef struct {
     bool              analyzer_init;
     ModuleRegistry    module_registry;
     bool              registry_init;
+    AsyncContext      async_ctx;
+    bool              async_init;
     MirModule*        mir_module;
 } CompileCtx;
 
@@ -70,6 +73,7 @@ static void compile_ctx_destroy(CompileCtx* ctx) {
     if (ctx->mir_module)    { mir_module_destroy(ctx->mir_module);    ctx->mir_module = NULL; }
     if (ctx->analyzer_init) { free_semantic_analyzer(&ctx->analyzer); ctx->analyzer_init = false; }
     if (ctx->registry_init) { free_module_registry(&ctx->module_registry); ctx->registry_init = false; }
+    if (ctx->async_init)    { free_async(&ctx->async_ctx); ctx->async_init = false; }
     /* Skip per-stmt free: merged module+user stmts array causes crash in free_stmt.
      * Leaking AST nodes is acceptable for a short-lived compiler process. */
     free(ctx->statements); ctx->statements = NULL;
@@ -286,6 +290,22 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     }
     debug_step_wait();
 
+    /* --- Phase 4.7: Async Transformation --- */
+    if (!g_config.compact_output) debug_phase_start("ASYNC TRANSFORMATION");
+    init_async(&ctx.async_ctx);
+    ctx.async_init = true;
+    for (int i = 0; i < ctx.stmt_count; i++) {
+        if (ctx.statements[i] && ctx.statements[i]->type == STMT_FUNCTION &&
+            ctx.statements[i]->as.function.is_async) {
+            transform_async_function(&ctx.statements[i]->as.function, &ctx.async_ctx);
+        }
+    }
+    if (!g_config.compact_output) {
+        CPX_INFO("Transformed %d async function(s)", ctx.async_ctx.state_machines_generated);
+        debug_phase_end("Async Transformation");
+    }
+    debug_step_wait();
+
     if (g_config.check_only) { result = 0; goto done; }
 
     /* --- Phase 5: MIR pipeline (when enabled) --- */
@@ -307,6 +327,21 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
             printf("\n  === MIR (after lowering) ===\n");
             mir_print_module(ctx.mir_module, stdout);
         }
+
+        /* Async MIR Transformation */
+        debug_phase_start("ASYNC MIR TRANSFORM");
+        perf_start(&g_diag.perf, "Async MIR Transform", STAGE_MIR);
+        int async_transformed = 0;
+        for (MirFunction* f = ctx.mir_module->func_list; f; f = f->next_func) {
+            if (f->is_async) {
+                async_transformed += mir_transform_async(f);
+            }
+        }
+        printf("  Transformed %d async function(s) to MIR state machines\n", async_transformed);
+        perf_end(&g_diag.perf);
+        debug_phase_end("Async MIR Transform");
+        debug_step_wait();
+
         debug_phase_end("MIR Lowering");
         debug_step_wait();
 

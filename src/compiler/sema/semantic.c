@@ -11,6 +11,7 @@ static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_stmt(SemanticAnalyzer* analyzer, Stmt* stmt);
 static void analyze_static_access_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr);
+static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr);
 
 /* ─── Global memory-model analysis contexts ─── */
 static EscapeAnalyzer   g_escape_ctx;
@@ -24,6 +25,7 @@ void init_semantic_analyzer(SemanticAnalyzer* analyzer) {
     analyzer->scope_depth = 0;
     analyzer->current_function_return_type = TYPE_VOID;
     analyzer->in_function = false;
+    analyzer->in_async_function = false;
     analyzer->current_class = NULL;
     analyzer->current_method = NULL;
     analyzer->loop_depth = 0;  // Initialize loop depth tracking
@@ -1350,6 +1352,9 @@ static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             // Generic instantiation is handled during parsing/monomorphization
             // Expression type is already set
             break;
+        case EXPR_AWAIT:
+            analyze_await_expr(analyzer, expr);
+            break;
     }
 }
 
@@ -1374,6 +1379,35 @@ static void register_error_declaration(SemanticAnalyzer* analyzer,
         symbol->is_initialized = true;
         symbol->is_mutable = decl->is_mutable;
         symbol->is_const = decl->is_const;
+    }
+}
+
+static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr) {
+    if (!analyzer->in_async_function) {
+        report_semantic_error(expr->line, expr->column, "'await' expression outside of async function");
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    analyze_expr(analyzer, expr->as.await_expr.expression);
+    
+    // Check if the expression returns a Future
+    // For now, we'll be lenient and allow awaiting anything, 
+    // but ideally we check if expression->data_type == TYPE_FUTURE.
+    
+    // If it's a future, the result of await is the element type of the future.
+    if (expr->as.await_expr.expression->data_type == TYPE_FUTURE) {
+        if (expr->as.await_expr.expression->type_info && expr->as.await_expr.expression->type_info->element_type) {
+            expr->data_type = expr->as.await_expr.expression->type_info->element_type->base;
+            expr->type_info = expr->as.await_expr.expression->type_info->element_type; // Copy type info for nested types
+        } else {
+            expr->data_type = TYPE_VOID; // Default for Future<Void>
+        }
+    } else {
+        // If not a future, just pass through (auto-wrap synchronous values?)
+        // Many languages allow 'await 5' -> 5.
+        expr->data_type = expr->as.await_expr.expression->data_type;
+        expr->type_info = expr->as.await_expr.expression->type_info;
     }
 }
 
@@ -1881,8 +1915,11 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     // Set function context
     DataType prev_return_type = analyzer->current_function_return_type;
     bool prev_in_function = analyzer->in_function;
+    bool prev_in_async = analyzer->in_async_function;
+
     analyzer->current_function_return_type = func->return_type;
     analyzer->in_function = true;
+    analyzer->in_async_function = func->is_async;
 
     /* ── Memory model: enter function scope ── */
     escape_analyzer_reset(&g_escape_ctx);
@@ -1917,6 +1954,7 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     // Restore context
     analyzer->current_function_return_type = prev_return_type;
     analyzer->in_function = prev_in_function;
+    analyzer->in_async_function = prev_in_async;
     
     exit_scope(analyzer->symbols, &analyzer->scope_depth);
 }

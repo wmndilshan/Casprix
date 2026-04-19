@@ -14,12 +14,63 @@ void init_async(AsyncContext* ctx) {
     ctx->state_machines_generated = 0;
 }
 
-// Mark function as async
-void mark_async_function(FunctionStmt* func) {
-    // Add async metadata
-    // In full implementation, would modify AST
-    printf("Marking function %s as async\n", func->name);
+typedef struct {
+    const char* name;
+    DataType type;
+} LocalVar;
+
+static void collect_locals_stmt(Stmt* stmt, LocalVar** locals, int* count);
+
+// Collect all local variables (including parameters) that need to be in state struct
+static void collect_locals(FunctionStmt* func, LocalVar** locals, int* count) {
+    // Add parameters first
+    for (int i = 0; i < func->param_count; i++) {
+        *locals = realloc(*locals, (*count + 1) * sizeof(LocalVar));
+        (*locals)[*count].name = func->parameters[i].name;
+        (*locals)[*count].type = func->parameters[i].type;
+        (*count)++;
+    }
+
+    // Add variables declared in body
+    collect_locals_stmt(func->body, locals, count);
 }
+
+static void collect_locals_stmt(Stmt* stmt, LocalVar** locals, int* count) {
+    if (!stmt) return;
+
+    switch (stmt->type) {
+        case STMT_DECLARATION: {
+            *locals = realloc(*locals, (*count + 1) * sizeof(LocalVar));
+            (*locals)[*count].name = stmt->as.declaration.name;
+            (*locals)[*count].type = stmt->as.declaration.type;
+            (*count)++;
+            break;
+        }
+        case STMT_BLOCK: {
+            for (int i = 0; i < stmt->as.block.stmt_count; i++) {
+                collect_locals_stmt(stmt->as.block.statements[i], locals, count);
+            }
+            break;
+        }
+        case STMT_IF: {
+            collect_locals_stmt(stmt->as.if_stmt.then_branch, locals, count);
+            collect_locals_stmt(stmt->as.if_stmt.else_branch, locals, count);
+            break;
+        }
+        case STMT_WHILE: {
+            collect_locals_stmt(stmt->as.while_stmt.body, locals, count);
+            break;
+        }
+        case STMT_FOR: {
+            collect_locals_stmt(stmt->as.for_stmt.body, locals, count);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// Mark function as async
 
 // Find all await expressions in statement
 static void find_await_points(Stmt* stmt, Expr*** awaits, int* count) {
@@ -27,9 +78,23 @@ static void find_await_points(Stmt* stmt, Expr*** awaits, int* count) {
 
     switch (stmt->type) {
         case STMT_EXPR:
-            if (stmt->as.expr_stmt.expression && stmt->as.expr_stmt.expression->type == EXPR_CALL) {
-                // Check if it's an await expression
-                // Would check for special await marker
+            if (stmt->as.expr_stmt.expression && stmt->as.expr_stmt.expression->type == EXPR_AWAIT) {
+                *awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                (*awaits)[(*count)++] = stmt->as.expr_stmt.expression;
+            }
+            break;
+
+        case STMT_ASSIGNMENT:
+            if (stmt->as.assignment.value && stmt->as.assignment.value->type == EXPR_AWAIT) {
+                *awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                (*awaits)[(*count)++] = stmt->as.assignment.value;
+            }
+            break;
+
+        case STMT_DECLARATION:
+            if (stmt->as.declaration.initializer && stmt->as.declaration.initializer->type == EXPR_AWAIT) {
+                *awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                (*awaits)[(*count)++] = stmt->as.declaration.initializer;
             }
             break;
 
@@ -53,8 +118,9 @@ static void find_await_points(Stmt* stmt, Expr*** awaits, int* count) {
             break;
 
         case STMT_RETURN:
-            if (stmt->as.return_stmt.value && stmt->as.return_stmt.value->type == EXPR_CALL) {
-                // Check if it's an await expression
+            if (stmt->as.return_stmt.value && stmt->as.return_stmt.value->type == EXPR_AWAIT) {
+                *awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                (*awaits)[(*count)++] = stmt->as.return_stmt.value;
             }
             break;
 
@@ -145,10 +211,7 @@ Stmt* generate_await(Expr* awaited_expr, const char* result_var) {
 
 // Check if expression is await
 bool is_await_expr(Expr* expr) {
-    if (!expr || expr->type != EXPR_CALL) return false;
-
-    // Would check for await marker in AST
-    return false;  // Placeholder
+    return expr && expr->type == EXPR_AWAIT;
 }
 
 void free_async(AsyncContext* ctx) {
