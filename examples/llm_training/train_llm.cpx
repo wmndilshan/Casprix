@@ -117,8 +117,8 @@ class TrainingConfig {
         // Learning rate: cosine decay from 3e-4 to 3e-5
         this.max_lr = 0.0003
         this.min_lr = 0.00003
-        this.warmup_steps = 700
-        this.total_steps = 19073      // ~1 epoch over TinyStories at 16K tokens/step
+        this.warmup_steps = 100
+        this.total_steps = 1050      // A realistic epoch test scale
 
         // AdamW hyperparameters (GPT-2 defaults)
         this.beta1 = 0.9
@@ -128,10 +128,10 @@ class TrainingConfig {
         this.grad_clip = 1.0
 
         // Logging and checkpointing
-        this.log_interval = 10
+        this.log_interval = 50
         this.val_interval = 250
         this.val_steps = 20
-        this.save_interval = 1000
+        this.save_interval = 500
     }
 
     // Quick config for testing (10 steps only)
@@ -351,7 +351,7 @@ func main() -> void {
     let cfg: TrainingConfig = new TrainingConfig()
 
     // Uncomment for a quick 10-step smoke test:
-    cfg.make_tiny_run()
+    // cfg.make_tiny_run()
 
     // Phase 1: Train BPE tokenizer from raw text
     train_tokenizer(cfg)
