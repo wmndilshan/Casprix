@@ -84,6 +84,15 @@ static bool types_compatible(DataType t1, DataType t2) {
         return true;
     }
 
+    // Allow integer literal 0 (null) to be assigned to pointer types (C-FFI interop)
+    // This enables: let p: rawptr = 0
+    if (type_is_integer(t1) && (t2 == TYPE_RAWPTR || t2 == TYPE_PTR || t2 == TYPE_REF)) {
+        return true;
+    }
+    if (type_is_integer(t2) && (t1 == TYPE_RAWPTR || t1 == TYPE_PTR || t1 == TYPE_REF)) {
+        return true;
+    }
+
     return false;
 }
 
