@@ -79,6 +79,11 @@ static bool types_compatible(DataType t1, DataType t2) {
         return true;
     }
 
+    // class/struct and ref are compatible (implicit reference taking)
+    if ((t1 == TYPE_CLASS || t1 == TYPE_STRUCT) && t2 == TYPE_REF) {
+        return true;
+    }
+
     return false;
 }
 
@@ -418,6 +423,13 @@ static void analyze_variable_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         char msg[256];
         snprintf(msg, sizeof(msg), "Undefined variable '%s'", var->name);
         report_semantic_error(expr->line, expr->column, msg);
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    /* Verify ownership/borrowing validity */
+    if (!check_ownership_valid(&g_ownership_ctx, var->name, expr->line)) {
+        // Error reported by check_ownership_valid
         expr->data_type = TYPE_ERROR;
         return;
     }
@@ -847,6 +859,16 @@ static void analyze_index_expr(SemanticAnalyzer* analyzer, Expr* expr) {
 
 static void analyze_member_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     MemberAccessExpr* member = &expr->as.member;
+    ClassSymbol* class_sym = NULL;
+    
+    if (!member->object) {
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    /* Analyze the base object first. This will trigger ownership checks
+       if the object is a variable access. */
+    analyze_expr(analyzer, member->object);
 
     // Check for static access BEFORE analyzing the object
     // This prevents error messages about undefined variables when the "variable" is actually a class name
@@ -889,7 +911,6 @@ static void analyze_member_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
 
     // Get the class symbol - for 'this', use current class
-    ClassSymbol* class_sym = NULL;
     if (member->object->type == EXPR_THIS) {
         class_sym = analyzer->current_class;
     } else if (member->object->type == EXPR_MEMBER_ACCESS) {
@@ -1424,6 +1445,11 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     if (decl->initializer) {
         analyze_expr(analyzer, decl->initializer);
 
+        // If this is a move expression, mark the source variable as moved
+        if (is_move_expr(decl->initializer)) {
+            mark_moved(&g_ownership_ctx, decl->initializer->as.variable.name, stmt->line);
+        }
+
         if (decl->initializer->type == EXPR_LAMBDA) {
             LambdaExpr* lambda = &decl->initializer->as.lambda;
             if (lambda->capture_count > 0) {
@@ -1576,6 +1602,11 @@ static void analyze_assignment_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
 
     // Analyze the value expression (r-value)
     analyze_expr(analyzer, assign->value);
+
+    // If this is a move expression, mark the source variable as moved
+    if (is_move_expr(assign->value)) {
+        mark_moved(&g_ownership_ctx, assign->value->as.variable.name, stmt->line);
+    }
 
     // Type checking
     if (assign->target->data_type != TYPE_ERROR &&
@@ -1949,6 +1980,7 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     escape_analyze_function(&g_escape_ctx, stmt);
 
     /* ── Memory model: exit function scope (drop planner) ── */
+    validate_scope_end(&g_ownership_ctx, analyzer->scope_depth);
     drop_planner_exit_scope(&g_drop_ctx);
     
     // Restore context
@@ -1975,6 +2007,28 @@ static void analyze_return_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             report_semantic_error(stmt->line, stmt->column,
                 "Returning capturing closure values is not implemented yet");
             return;
+        }
+
+        /* ── Memory model safety: prevent returning references to local stack-allocated variables ── */
+        if (ret->value->type == EXPR_VARIABLE) {
+            const char* var_name = ret->value->as.variable.name;
+            Symbol* sym = lookup_symbol(analyzer->symbols, var_name);
+            DataType ret_type = analyzer->current_function_return_type;
+            
+            if (sym && (ret_type == TYPE_REF || ret_type == TYPE_PTR || ret_type == TYPE_RAWPTR)) {
+                bool is_stack = false;
+                if (sym->type == TYPE_STRUCT || type_is_primitive(sym->type)) {
+                    is_stack = true;
+                } else if (escape_can_stack_alloc(&g_escape_ctx, var_name)) {
+                    is_stack = true;
+                }
+
+                if (is_stack) {
+                     char msg[256];
+                     snprintf(msg, sizeof(msg), "Cannot return reference to local stack-allocated variable '%s'", var_name);
+                     report_semantic_error(stmt->line, stmt->column, msg);
+                }
+            }
         }
         
         if (ret->value->data_type != TYPE_ERROR &&

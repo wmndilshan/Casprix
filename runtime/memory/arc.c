@@ -17,11 +17,13 @@
     #define ATOMIC_INC(x)  __sync_add_and_fetch((x), 1)
     #define ATOMIC_DEC(x)  __sync_sub_and_fetch((x), 1)
     #define ATOMIC_LOAD(x) __sync_add_and_fetch((x), 0)
+    #define ATOMIC_CAS(x, oldval, newval) __sync_val_compare_and_swap((x), (oldval), (newval))
 #else
     // Fallback: non-atomic (single-threaded only)
     #define ATOMIC_INC(x)  (++(*(x)))
     #define ATOMIC_DEC(x)  (--(*(x)))
     #define ATOMIC_LOAD(x) (*(x))
+    #define ATOMIC_CAS(x, oldval, newval) (*(x) == (oldval) ? (*(x) = (newval), (oldval)) : *(x))
 #endif
 
 // Global ARC statistics
@@ -173,20 +175,24 @@ void* arc_weak_upgrade(ArcWeak weak) {
         return NULL;
     }
 
-    // Try to increment strong count, but only if it's currently > 0
-    // This is a simplified version; a fully lock-free implementation
-    // would use CAS loop
+    /* CAS Loop: try to increment strong count, but only if it's currently > 0.
+       This prevents a TOCTOU race where the object is freed between the check
+       and the increment. */
     int32_t count = ATOMIC_LOAD(&weak.header->strong_count);
-    if (count <= 0) {
-        g_arc_stats.weak_upgrade_fails++;
-        return NULL;
+    while (count > 0) {
+        int32_t old_count = ATOMIC_CAS(&weak.header->strong_count, count, count + 1);
+        if (old_count == count) {
+            // Success!
+            g_arc_stats.total_retains++;
+            g_arc_stats.weak_upgrades++;
+            return ARC_HEADER_TO_OBJ(weak.header);
+        }
+        // Someone else changed the count, retry with new value
+        count = old_count;
     }
 
-    ATOMIC_INC(&weak.header->strong_count);
-    g_arc_stats.total_retains++;
-    g_arc_stats.weak_upgrades++;
-
-    return ARC_HEADER_TO_OBJ(weak.header);
+    g_arc_stats.weak_upgrade_fails++;
+    return NULL;
 }
 
 void arc_weak_release(ArcWeak* weak) {
