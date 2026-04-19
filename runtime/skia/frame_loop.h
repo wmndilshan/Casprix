@@ -19,10 +19,8 @@
 #include "scene_graph.h"
 #include "events.h"
 #include "animation.h"
+#include "skia_window_host.h"
 #include "text.h"
-
-/* Forward declare — defined in skia_window_win32.c */
-typedef struct SkiaWindow SkiaWindow;
 
 #ifdef __cplusplus
 extern "C" {

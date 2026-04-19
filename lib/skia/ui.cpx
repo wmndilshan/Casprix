@@ -3,6 +3,141 @@
 // classes wrapping the low-level extern functions from skia.cpx.
 
 import "lib/skia/skia"
+import "lib/stdlib/Exceptions"
+
+class SkiaUIException extends Exception {
+    func new(msg: string) -> SkiaUIException {
+        this.message = msg
+        this.errorCode = 4100
+        return this
+    }
+}
+
+class SkiaValidationException extends IllegalArgumentException {
+    func new(msg: string) -> SkiaValidationException {
+        this.message = msg
+        this.errorCode = 4101
+        return this
+    }
+}
+
+class SkiaInitializationException extends IllegalStateException {
+    func new(msg: string) -> SkiaInitializationException {
+        this.message = msg
+        this.errorCode = 4102
+        return this
+    }
+}
+
+class Alignment {
+    value: i64;
+    label: string;
+
+    func new(raw: i64, name: string) -> Alignment {
+        this.value = raw
+        this.label = name
+        return this
+    }
+}
+
+class ImageFit {
+    value: i64;
+    label: string;
+
+    func new(raw: i64, name: string) -> ImageFit {
+        this.value = raw
+        this.label = name
+        return this
+    }
+}
+
+let ALIGN_START = new Alignment(SG_ALIGN_START, "start")
+let ALIGN_CENTER = new Alignment(SG_ALIGN_CENTER, "center")
+let ALIGN_END = new Alignment(SG_ALIGN_END, "end")
+let ALIGN_STRETCH = new Alignment(SG_ALIGN_STRETCH, "stretch")
+
+let IMAGE_FIT_FILL = new ImageFit(SG_IMAGE_FIT_FILL, "fill")
+let IMAGE_FIT_CONTAIN = new ImageFit(SG_IMAGE_FIT_CONTAIN, "contain")
+let IMAGE_FIT_COVER = new ImageFit(SG_IMAGE_FIT_COVER, "cover")
+
+func ui_bool_to_i64(value: bool) -> i64 {
+    if value {
+        return 1
+    }
+    return 0
+}
+
+func ui_require(condition: bool, message: string) -> void {
+    if !condition {
+        throw new SkiaValidationException(message)
+    }
+}
+
+func ui_require_state(condition: bool, message: string) -> void {
+    if !condition {
+        throw new SkiaInitializationException(message)
+    }
+}
+
+func ui_require_handle(handle: i64, context: string) -> void {
+    if handle == 0 {
+        throw new SkiaUIException(context + " is not initialized or has already been destroyed")
+    }
+}
+
+func ui_require_non_empty(value: string, context: string) -> void {
+    if value == "" {
+        throw new SkiaValidationException(context + " must not be empty")
+    }
+}
+
+func ui_require_non_negative(value: float, context: string) -> void {
+    if value < 0.0 {
+        throw new SkiaValidationException(context + " must be >= 0")
+    }
+}
+
+func ui_require_positive_i64(value: i64, context: string) -> void {
+    if value <= 0 {
+        throw new SkiaValidationException(context + " must be > 0")
+    }
+}
+
+func ui_require_non_negative_i64(value: i64, context: string) -> void {
+    if value < 0 {
+        throw new SkiaValidationException(context + " must be >= 0")
+    }
+}
+
+func ui_require_range(min_val: float, max_val: float, context: string) -> void {
+    if max_val < min_val {
+        throw new SkiaValidationException(context + " max must be greater than or equal to min")
+    }
+}
+
+func ui_require_value_in_range(value: float, min_val: float, max_val: float, context: string) -> void {
+    if value < min_val || value > max_val {
+        throw new SkiaValidationException(context + " must be between min and max")
+    }
+}
+
+func create_font(family: string, size: float) -> i64 {
+    ui_require_non_empty(family, "Font family")
+    ui_require(size > 0.0, "Font size must be > 0")
+
+    let font = skia_font_create(family, size)
+    ui_require_state(font != 0, "Failed to create font '" + family + "'")
+    return font
+}
+
+func create_font_from_file(path: string, size: float) -> i64 {
+    ui_require_non_empty(path, "Font file path")
+    ui_require(size > 0.0, "Font size must be > 0")
+
+    let font = skia_font_create_from_file(path, size)
+    ui_require_state(font != 0, "Failed to create font from file '" + path + "'")
+    return font
+}
 
 // ========================================================================
 // Application
@@ -14,49 +149,86 @@ class App {
     font_handle: i64;
 
     func new(title: string, width: i64, height: i64) -> void {
+        ui_require_non_empty(title, "App title")
+        ui_require_positive_i64(width, "App width")
+        ui_require_positive_i64(height, "App height")
+
         this.handle = sg_app_create(title, width, height)
-        this.font_handle = skia_font_create("Segoe UI", 14.0)
+        ui_require_state(this.handle != 0, "Failed to initialize the Skia renderer")
+
+        try {
+            this.font_handle = create_font("Segoe UI", 14.0)
+        } catch (ex: Exception) {
+            sg_app_destroy(this.handle)
+            this.handle = 0
+            throw new SkiaInitializationException("Skia renderer started, but the default UI font could not be created")
+        }
     }
 
     func set_root(node: i64) -> void {
+        ui_require_handle(this.handle, "App")
+        ui_require_handle(node, "App root node")
         this.root_handle = node
         sg_app_set_root(this.handle, node)
     }
 
     func run() -> void {
+        ui_require_handle(this.handle, "App")
         sg_app_run(this.handle)
     }
 
     func quit() -> void {
+        ui_require_handle(this.handle, "App")
         sg_app_quit(this.handle)
     }
 
     func get_font() -> i64 {
+        ui_require_handle(this.font_handle, "App font")
         return this.font_handle
     }
 
     func set_fps(fps: i64) -> void {
+        ui_require_handle(this.handle, "App")
+        ui_require_positive_i64(fps, "Target FPS")
         sg_app_set_fps(this.handle, fps)
     }
 
     func get_anim_pool() -> i64 {
-        return sg_app_get_animations(this.handle)
+        ui_require_handle(this.handle, "App")
+        let pool = sg_app_get_animations(this.handle)
+        ui_require_handle(pool, "Animation pool")
+        return pool
     }
 
     func fade_in(node: i64, duration: float) -> i64 {
-        return sg_fade_in(sg_app_get_animations(this.handle), node, duration)
+        ui_require_handle(this.handle, "App")
+        ui_require_handle(node, "Animated node")
+        ui_require(duration > 0.0, "Fade-in duration must be > 0")
+        return sg_fade_in(this.get_anim_pool(), node, duration)
     }
 
     func fade_out(node: i64, duration: float) -> i64 {
-        return sg_fade_out(sg_app_get_animations(this.handle), node, duration)
+        ui_require_handle(this.handle, "App")
+        ui_require_handle(node, "Animated node")
+        ui_require(duration > 0.0, "Fade-out duration must be > 0")
+        return sg_fade_out(this.get_anim_pool(), node, duration)
     }
 
     func invalidate() -> void {
+        ui_require_handle(this.handle, "App")
         sg_app_invalidate(this.handle)
     }
 
     func destroy() -> void {
-        sg_app_destroy(this.handle)
+        if this.font_handle != 0 {
+            skia_font_destroy(this.font_handle)
+            this.font_handle = 0
+        }
+        if this.handle != 0 {
+            sg_app_destroy(this.handle)
+            this.handle = 0
+        }
+        this.root_handle = 0
     }
 }
 
@@ -68,47 +240,75 @@ class Column {
     handle: i64;
 
     func new(spacing: float) -> void {
+        ui_require_non_negative(spacing, "Column spacing")
         this.handle = widget_column(spacing)
+        ui_require_state(this.handle != 0, "Failed to create Column")
     }
 
     func add(child: i64) -> void {
+        ui_require_handle(this.handle, "Column")
+        ui_require_handle(child, "Column child")
         sg_node_add_child(this.handle, child)
     }
 
     func set_padding(p: float) -> void {
+        ui_require_handle(this.handle, "Column")
+        ui_require_non_negative(p, "Column padding")
         sg_style_set_padding_uniform(this.handle, p)
     }
 
     func set_background(color: i64) -> void {
+        ui_require_handle(this.handle, "Column")
         sg_style_set_background(this.handle, color)
     }
 
     func set_border(color: i64, width: float, radius: float) -> void {
+        ui_require_handle(this.handle, "Column")
+        ui_require_non_negative(width, "Column border width")
+        ui_require_non_negative(radius, "Column border radius")
         sg_style_set_border(this.handle, color, width, radius)
     }
 
     func set_min_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "Column")
+        ui_require_non_negative(w, "Column minimum width")
+        ui_require_non_negative(h, "Column minimum height")
         sg_node_set_min_size(this.handle, w, h)
     }
 
     func set_max_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "Column")
+        ui_require_non_negative(w, "Column maximum width")
+        ui_require_non_negative(h, "Column maximum height")
         sg_node_set_max_size(this.handle, w, h)
     }
 
     func set_flex_grow(grow: float) -> void {
+        ui_require_handle(this.handle, "Column")
+        ui_require_non_negative(grow, "Column flex grow")
         sg_node_set_flex_grow(this.handle, grow)
     }
 
-    func set_align_self(align: i64) -> void {
-        sg_node_set_align_self(this.handle, align)
+    func set_align_self(align: Alignment) -> void {
+        ui_require_handle(this.handle, "Column")
+        sg_node_set_align_self(this.handle, align.value)
     }
 
-    func set_align_items(align: i64) -> void {
-        sg_node_set_align_items(this.handle, align)
+    func set_align_items(align: Alignment) -> void {
+        ui_require_handle(this.handle, "Column")
+        sg_node_set_align_items(this.handle, align.value)
     }
 
-    func set_visible(v: i64) -> void {
-        sg_node_set_visible(this.handle, v)
+    func set_visible(v: bool) -> void {
+        ui_require_handle(this.handle, "Column")
+        sg_node_set_visible(this.handle, ui_bool_to_i64(v))
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -116,39 +316,61 @@ class Row {
     handle: i64;
 
     func new(spacing: float) -> void {
+        ui_require_non_negative(spacing, "Row spacing")
         this.handle = widget_row(spacing)
+        ui_require_state(this.handle != 0, "Failed to create Row")
     }
 
     func add(child: i64) -> void {
+        ui_require_handle(this.handle, "Row")
+        ui_require_handle(child, "Row child")
         sg_node_add_child(this.handle, child)
     }
 
     func set_padding(p: float) -> void {
+        ui_require_handle(this.handle, "Row")
+        ui_require_non_negative(p, "Row padding")
         sg_style_set_padding_uniform(this.handle, p)
     }
 
     func set_background(color: i64) -> void {
+        ui_require_handle(this.handle, "Row")
         sg_style_set_background(this.handle, color)
     }
 
     func set_min_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "Row")
+        ui_require_non_negative(w, "Row minimum width")
+        ui_require_non_negative(h, "Row minimum height")
         sg_node_set_min_size(this.handle, w, h)
     }
 
     func set_flex_grow(grow: float) -> void {
+        ui_require_handle(this.handle, "Row")
+        ui_require_non_negative(grow, "Row flex grow")
         sg_node_set_flex_grow(this.handle, grow)
     }
 
-    func set_align_self(align: i64) -> void {
-        sg_node_set_align_self(this.handle, align)
+    func set_align_self(align: Alignment) -> void {
+        ui_require_handle(this.handle, "Row")
+        sg_node_set_align_self(this.handle, align.value)
     }
 
-    func set_align_items(align: i64) -> void {
-        sg_node_set_align_items(this.handle, align)
+    func set_align_items(align: Alignment) -> void {
+        ui_require_handle(this.handle, "Row")
+        sg_node_set_align_items(this.handle, align.value)
     }
 
-    func set_visible(v: i64) -> void {
-        sg_node_set_visible(this.handle, v)
+    func set_visible(v: bool) -> void {
+        ui_require_handle(this.handle, "Row")
+        sg_node_set_visible(this.handle, ui_bool_to_i64(v))
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -157,30 +379,48 @@ class Stack {
 
     func new() -> void {
         this.handle = widget_stack()
+        ui_require_state(this.handle != 0, "Failed to create Stack")
     }
 
     func add(child: i64) -> void {
+        ui_require_handle(this.handle, "Stack")
+        ui_require_handle(child, "Stack child")
         sg_node_add_child(this.handle, child)
     }
 
     func set_background(color: i64) -> void {
+        ui_require_handle(this.handle, "Stack")
         sg_style_set_background(this.handle, color)
     }
 
     func set_min_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "Stack")
+        ui_require_non_negative(w, "Stack minimum width")
+        ui_require_non_negative(h, "Stack minimum height")
         sg_node_set_min_size(this.handle, w, h)
     }
 
     func set_flex_grow(grow: float) -> void {
+        ui_require_handle(this.handle, "Stack")
+        ui_require_non_negative(grow, "Stack flex grow")
         sg_node_set_flex_grow(this.handle, grow)
     }
 
-    func set_align_self(align: i64) -> void {
-        sg_node_set_align_self(this.handle, align)
+    func set_align_self(align: Alignment) -> void {
+        ui_require_handle(this.handle, "Stack")
+        sg_node_set_align_self(this.handle, align.value)
     }
 
-    func set_visible(v: i64) -> void {
-        sg_node_set_visible(this.handle, v)
+    func set_visible(v: bool) -> void {
+        ui_require_handle(this.handle, "Stack")
+        sg_node_set_visible(this.handle, ui_bool_to_i64(v))
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -192,11 +432,21 @@ class Text {
     handle: i64;
 
     func new(content: string, font: i64, color: i64) -> void {
+        ui_require_handle(font, "Text font")
         this.handle = widget_text(content, font, color)
+        ui_require_state(this.handle != 0, "Failed to create Text node")
     }
 
     func set_text(content: string) -> void {
+        ui_require_handle(this.handle, "Text")
         widget_text_set(this.handle, content)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -204,31 +454,52 @@ class Button {
     handle: i64;
 
     func new(label: string, font: i64) -> void {
+        ui_require_handle(font, "Button font")
         this.handle = widget_button(label, font, 0, 0)
+        ui_require_state(this.handle != 0, "Failed to create Button")
     }
 
     func set_background(color: i64) -> void {
+        ui_require_handle(this.handle, "Button")
         sg_style_set_background(this.handle, color)
     }
 
     func set_border(color: i64, width: float, radius: float) -> void {
+        ui_require_handle(this.handle, "Button")
+        ui_require_non_negative(width, "Button border width")
+        ui_require_non_negative(radius, "Button border radius")
         sg_style_set_border(this.handle, color, width, radius)
     }
 
     func set_padding(p: float) -> void {
+        ui_require_handle(this.handle, "Button")
+        ui_require_non_negative(p, "Button padding")
         sg_style_set_padding_uniform(this.handle, p)
     }
 
-    func set_enabled(e: i64) -> void {
-        widget_button_set_enabled(this.handle, e)
+    func set_enabled(e: bool) -> void {
+        ui_require_handle(this.handle, "Button")
+        widget_button_set_enabled(this.handle, ui_bool_to_i64(e))
     }
 
     func set_on_click(callback: i64, ctx: i64) -> void {
+        ui_require_handle(this.handle, "Button")
+        ui_require(callback != 0 || ctx == 0, "Button callback context requires a non-zero callback")
         widget_button_set_callback(this.handle, callback, ctx)
     }
 
     func set_min_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "Button")
+        ui_require_non_negative(w, "Button minimum width")
+        ui_require_non_negative(h, "Button minimum height")
         sg_node_set_min_size(this.handle, w, h)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -236,91 +507,161 @@ class TextInput {
     handle: i64;
 
     func new(placeholder: string, font: i64) -> void {
+        ui_require_handle(font, "TextInput font")
         this.handle = widget_text_input(placeholder, font)
+        ui_require_state(this.handle != 0, "Failed to create TextInput")
     }
 
     func get_value() -> string {
+        ui_require_handle(this.handle, "TextInput")
         return widget_text_input_get_value(this.handle)
     }
 
     func set_value(text: string) -> void {
+        ui_require_handle(this.handle, "TextInput")
         widget_text_input_set_value(this.handle, text)
     }
 
     func set_on_change(callback: i64, ctx: i64) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        ui_require(callback != 0 || ctx == 0, "TextInput callback context requires a non-zero callback")
         widget_text_input_on_change(this.handle, callback, ctx)
     }
 
     func set_min_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        ui_require_non_negative(w, "TextInput minimum width")
+        ui_require_non_negative(h, "TextInput minimum height")
         sg_node_set_min_size(this.handle, w, h)
     }
 
     func set_flex_grow(grow: float) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        ui_require_non_negative(grow, "TextInput flex grow")
         sg_node_set_flex_grow(this.handle, grow)
     }
 
-    func set_align_self(align: i64) -> void {
-        sg_node_set_align_self(this.handle, align)
+    func set_align_self(align: Alignment) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        sg_node_set_align_self(this.handle, align.value)
     }
 
     func set_background(color: i64) -> void {
+        ui_require_handle(this.handle, "TextInput")
         sg_style_set_background(this.handle, color)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
 class Checkbox {
     handle: i64;
 
-    func new(label: string, font: i64, initial: i64) -> void {
-        this.handle = widget_checkbox(label, font, initial)
+    func new(label: string, font: i64, initial: bool) -> void {
+        ui_require_handle(font, "Checkbox font")
+        this.handle = widget_checkbox(label, font, ui_bool_to_i64(initial))
+        ui_require_state(this.handle != 0, "Failed to create Checkbox")
     }
 
-    func is_checked() -> i64 {
-        return widget_checkbox_is_checked(this.handle)
+    func is_checked() -> bool {
+        ui_require_handle(this.handle, "Checkbox")
+        return widget_checkbox_is_checked(this.handle) != 0
     }
 
-    func set_checked(val: i64) -> void {
-        widget_checkbox_set_checked(this.handle, val)
+    func set_checked(val: bool) -> void {
+        ui_require_handle(this.handle, "Checkbox")
+        widget_checkbox_set_checked(this.handle, ui_bool_to_i64(val))
     }
 
     func set_on_change(callback: i64, ctx: i64) -> void {
+        ui_require_handle(this.handle, "Checkbox")
+        ui_require(callback != 0 || ctx == 0, "Checkbox callback context requires a non-zero callback")
         widget_checkbox_on_change(this.handle, callback, ctx)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
 class Slider {
     handle: i64;
+    min_value: float;
+    max_value: float;
 
     func new(min_val: float, max_val: float, initial: float) -> void {
+        ui_require_range(min_val, max_val, "Slider range")
+        ui_require_value_in_range(initial, min_val, max_val, "Slider initial value")
+        this.min_value = min_val
+        this.max_value = max_val
         this.handle = widget_slider(min_val, max_val, initial)
+        ui_require_state(this.handle != 0, "Failed to create Slider")
     }
 
     func get_value() -> float {
+        ui_require_handle(this.handle, "Slider")
         return widget_slider_get_value(this.handle)
     }
 
     func set_value(val: float) -> void {
+        ui_require_handle(this.handle, "Slider")
+        ui_require_value_in_range(val, this.min_value, this.max_value, "Slider value")
         widget_slider_set_value(this.handle, val)
     }
 
     func set_on_change(callback: i64, ctx: i64) -> void {
+        ui_require_handle(this.handle, "Slider")
+        ui_require(callback != 0 || ctx == 0, "Slider callback context requires a non-zero callback")
         widget_slider_on_change(this.handle, callback, ctx)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
 class ImageView {
     handle: i64;
 
-    func new(path: string, fit: i64) -> void {
-        this.handle = widget_image(path, fit)
+    func new(path: string, fit: ImageFit) -> void {
+        ui_require_non_empty(path, "Image path")
+        this.handle = widget_image(path, fit.value)
+        ui_require_state(this.handle != 0, "Failed to create ImageView")
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
 class Separator {
     handle: i64;
 
-    func new(horizontal: i64, color: i64, thickness: float) -> void {
-        this.handle = widget_separator(horizontal, color, thickness)
+    func new(horizontal: bool, color: i64, thickness: float) -> void {
+        ui_require_non_negative(thickness, "Separator thickness")
+        this.handle = widget_separator(ui_bool_to_i64(horizontal), color, thickness)
+        ui_require_state(this.handle != 0, "Failed to create Separator")
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -328,7 +669,16 @@ class Spacer {
     handle: i64;
 
     func new(grow: float) -> void {
+        ui_require_non_negative(grow, "Spacer grow")
         this.handle = widget_spacer(grow)
+        ui_require_state(this.handle != 0, "Failed to create Spacer")
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -341,31 +691,52 @@ class Card {
 
     func new() -> void {
         this.handle = widget_container()
+        ui_require_state(this.handle != 0, "Failed to create Card")
         sg_style_card(this.handle)
     }
 
     func add(child: i64) -> void {
+        ui_require_handle(this.handle, "Card")
+        ui_require_handle(child, "Card child")
         sg_node_add_child(this.handle, child)
     }
 
     func set_padding(p: float) -> void {
+        ui_require_handle(this.handle, "Card")
+        ui_require_non_negative(p, "Card padding")
         sg_style_set_padding_uniform(this.handle, p)
     }
 
     func set_elevation(e: i64) -> void {
+        ui_require_handle(this.handle, "Card")
+        ui_require_non_negative_i64(e, "Card elevation")
         sg_style_elevated(this.handle, e)
     }
 
     func set_shadow(ox: float, oy: float, blur: float, color: i64) -> void {
+        ui_require_handle(this.handle, "Card")
+        ui_require_non_negative(blur, "Card shadow blur")
         sg_style_set_shadow(this.handle, ox, oy, blur, color)
     }
 
     func set_opacity(o: float) -> void {
+        ui_require_handle(this.handle, "Card")
+        ui_require(o >= 0.0 && o <= 1.0, "Card opacity must be between 0 and 1")
         sg_style_set_opacity(this.handle, o)
     }
 
     func set_min_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "Card")
+        ui_require_non_negative(w, "Card minimum width")
+        ui_require_non_negative(h, "Card minimum height")
         sg_node_set_min_size(this.handle, w, h)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -378,30 +749,50 @@ class ScrollView {
 
     func new() -> void {
         this.handle = widget_scroll_view()
+        ui_require_state(this.handle != 0, "Failed to create ScrollView")
     }
 
     func set_content(content: i64) -> void {
+        ui_require_handle(this.handle, "ScrollView")
+        ui_require_handle(content, "ScrollView content")
         widget_scroll_view_set_content(this.handle, content)
     }
 
     func scroll_to(x: float, y: float) -> void {
+        ui_require_handle(this.handle, "ScrollView")
+        ui_require_non_negative(x, "ScrollView scroll X")
+        ui_require_non_negative(y, "ScrollView scroll Y")
         widget_scroll_to(this.handle, x, y)
     }
 
     func set_min_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "ScrollView")
+        ui_require_non_negative(w, "ScrollView minimum width")
+        ui_require_non_negative(h, "ScrollView minimum height")
         sg_node_set_min_size(this.handle, w, h)
     }
 
     func set_flex_grow(grow: float) -> void {
+        ui_require_handle(this.handle, "ScrollView")
+        ui_require_non_negative(grow, "ScrollView flex grow")
         sg_node_set_flex_grow(this.handle, grow)
     }
 
-    func set_align_self(align: i64) -> void {
-        sg_node_set_align_self(this.handle, align)
+    func set_align_self(align: Alignment) -> void {
+        ui_require_handle(this.handle, "ScrollView")
+        sg_node_set_align_self(this.handle, align.value)
     }
 
     func set_background(color: i64) -> void {
+        ui_require_handle(this.handle, "ScrollView")
         sg_style_set_background(this.handle, color)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -411,21 +802,39 @@ class ScrollView {
 
 class ProgressBar {
     handle: i64;
+    min_value: float;
+    max_value: float;
 
     func new(min_val: float, max_val: float, value: float) -> void {
+        ui_require_range(min_val, max_val, "ProgressBar range")
+        ui_require_value_in_range(value, min_val, max_val, "ProgressBar initial value")
+        this.min_value = min_val
+        this.max_value = max_val
         this.handle = widget_progress_bar(min_val, max_val, value)
+        ui_require_state(this.handle != 0, "Failed to create ProgressBar")
     }
 
     func set_value(v: float) -> void {
+        ui_require_handle(this.handle, "ProgressBar")
+        ui_require_value_in_range(v, this.min_value, this.max_value, "ProgressBar value")
         widget_progress_set_value(this.handle, v)
     }
 
-    func set_indeterminate(n: i64) -> void {
-        widget_progress_set_indeterminate(this.handle, n)
+    func set_indeterminate(n: bool) -> void {
+        ui_require_handle(this.handle, "ProgressBar")
+        widget_progress_set_indeterminate(this.handle, ui_bool_to_i64(n))
     }
 
     func set_colors(fill: i64, bg: i64) -> void {
+        ui_require_handle(this.handle, "ProgressBar")
         widget_progress_set_colors(this.handle, fill, bg)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 
@@ -435,33 +844,73 @@ class ProgressBar {
 
 class TabPanel {
     handle: i64;
+    tab_count: i64;
 
     func new() -> void {
         this.handle = 0
+        this.tab_count = 0
     }
 
     func new2(l1: string, c1: i64, l2: string, c2: i64) -> void {
+        ui_require_non_empty(l1, "Tab 1 label")
+        ui_require_non_empty(l2, "Tab 2 label")
+        ui_require_handle(c1, "Tab 1 content")
+        ui_require_handle(c2, "Tab 2 content")
         this.handle = widget_tabpanel(l1, c1, l2, c2, "", 0, "", 0)
+        this.tab_count = 2
+        ui_require_state(this.handle != 0, "Failed to create TabPanel")
     }
 
     func new3(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64) -> void {
+        ui_require_non_empty(l1, "Tab 1 label")
+        ui_require_non_empty(l2, "Tab 2 label")
+        ui_require_non_empty(l3, "Tab 3 label")
+        ui_require_handle(c1, "Tab 1 content")
+        ui_require_handle(c2, "Tab 2 content")
+        ui_require_handle(c3, "Tab 3 content")
         this.handle = widget_tabpanel(l1, c1, l2, c2, l3, c3, "", 0)
+        this.tab_count = 3
+        ui_require_state(this.handle != 0, "Failed to create TabPanel")
     }
 
     func new4(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64, l4: string, c4: i64) -> void {
+        ui_require_non_empty(l1, "Tab 1 label")
+        ui_require_non_empty(l2, "Tab 2 label")
+        ui_require_non_empty(l3, "Tab 3 label")
+        ui_require_non_empty(l4, "Tab 4 label")
+        ui_require_handle(c1, "Tab 1 content")
+        ui_require_handle(c2, "Tab 2 content")
+        ui_require_handle(c3, "Tab 3 content")
+        ui_require_handle(c4, "Tab 4 content")
         this.handle = widget_tabpanel(l1, c1, l2, c2, l3, c3, l4, c4)
+        this.tab_count = 4
+        ui_require_state(this.handle != 0, "Failed to create TabPanel")
     }
 
     func get_active() -> i64 {
+        ui_require_handle(this.handle, "TabPanel")
         return widget_tabpanel_get_active(this.handle)
     }
 
     func set_active(index: i64) -> void {
+        ui_require_handle(this.handle, "TabPanel")
+        ui_require_non_negative_i64(index, "TabPanel active index")
+        ui_require(index < this.tab_count, "TabPanel active index is out of range")
         widget_tabpanel_set_active(this.handle, index)
     }
 
     func set_min_size(w: float, h: float) -> void {
+        ui_require_handle(this.handle, "TabPanel")
+        ui_require_non_negative(w, "TabPanel minimum width")
+        ui_require_non_negative(h, "TabPanel minimum height")
         sg_node_set_min_size(this.handle, w, h)
+    }
+
+    func destroy() -> void {
+        if this.handle != 0 {
+            sg_node_destroy(this.handle)
+            this.handle = 0
+        }
     }
 }
 

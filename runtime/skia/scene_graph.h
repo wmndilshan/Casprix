@@ -141,13 +141,25 @@ typedef struct {
     void* user_data;
 } SGHandlerSlot;
 
+typedef void (*SGNodeCleanupFn)(SGNode* node);
+
 /* ========================================================================
  * Scene Graph Node
  * ======================================================================== */
 
+#define SG_NODE_OWNER_RUNTIME     0x0001u
+#define SG_NODE_OWNER_PARENT      0x0002u
+#define SG_NODE_OWNER_APP         0x0004u
+#define SG_NODE_OWNS_FONT         0x0010u
+#define SG_NODE_OWNS_IMAGE        0x0020u
+#define SG_NODE_OWNS_PATH         0x0040u
+#define SG_NODE_OWNS_GRADIENT     0x0080u
+
 struct SGNode {
     SGNodeType type;
     uint32_t id;                  /* Unique node ID */
+    uint32_t ref_count;           /* Shared lifetime across wrappers/parents/app */
+    uint32_t ownership_flags;     /* SG_NODE_OWNER_* | SG_NODE_OWNS_* */
 
     /* Geometry */
     SGRect bounds;                /* Computed bounds (set by layout) */
@@ -211,6 +223,7 @@ struct SGNode {
 
     /* User data pointer (for widget state, etc.) */
     void* user_data;
+    SGNodeCleanupFn cleanup;
 };
 
 /* ========================================================================
@@ -218,8 +231,11 @@ struct SGNode {
  * ======================================================================== */
 
 SGNode* sg_node_create(SGNodeType type);
-void    sg_node_destroy(SGNode* node);              /* Recursive destroy */
+void    sg_node_destroy(SGNode* node);              /* Release one owner/reference */
+void    sg_node_destroy_tree(SGNode* node);         /* Release root of subtree */
 void    sg_node_destroy_single(SGNode* node);       /* Destroy only this node */
+void    sg_node_retain(SGNode* node);
+void    sg_node_set_cleanup(SGNode* node, SGNodeCleanupFn cleanup);
 
 /* ========================================================================
  * Tree Operations

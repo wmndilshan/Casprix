@@ -194,6 +194,10 @@ void sg_focus_rebuild_tab_order(SGEventManager* mgr);
 /* Get currently focused node */
 SGNode* sg_focus_get(SGEventManager* mgr);
 
+/* Process-wide active focus manager helpers */
+SGEventManager* sg_focus_manager_get_active(void);
+SGNode*         sg_focus_get_global(void);
+
 /* ========================================================================
  * Mouse Capture
  * ======================================================================== */

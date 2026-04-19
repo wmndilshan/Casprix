@@ -4,6 +4,19 @@
 // passed as opaque i64 values.
 
 // ========================================================================
+// Scene Graph Constants
+// ========================================================================
+
+let SG_ALIGN_START   = 0
+let SG_ALIGN_CENTER  = 1
+let SG_ALIGN_END     = 2
+let SG_ALIGN_STRETCH = 3
+
+let SG_IMAGE_FIT_FILL    = 0
+let SG_IMAGE_FIT_CONTAIN = 1
+let SG_IMAGE_FIT_COVER   = 2
+
+// ========================================================================
 // Color Utilities
 // ========================================================================
 

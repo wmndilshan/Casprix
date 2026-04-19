@@ -13,6 +13,10 @@
 #include <string.h>
 #include <math.h>
 
+#define WIDGET_FOCUS_RING_COLOR  0xFF1A73E8
+#define WIDGET_FOCUS_RING_SHADOW 8.0f
+#define WIDGET_FOCUS_RING_WIDTH  2.0f
+
 /* ========================================================================
  * Internal Utilities
  * ======================================================================== */
@@ -31,6 +35,68 @@ static uint32_t color_darken(uint32_t c, int amount) {
     int g = ((c >>  8) & 0xFF) - amount; if (g < 0) g = 0;
     int b = ((c      ) & 0xFF) - amount; if (b < 0) b = 0;
     return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+typedef struct {
+    WidgetType type;    /* WIDGET_TAB_PANEL */
+    SGNode**   contents;
+    int        count;
+    int        active;
+    SGNode*    header;
+} TabPanelState;
+
+static void widget_apply_focus_ring(SGNode* node,
+                                    int* focus_visible,
+                                    uint32_t* saved_border_color,
+                                    float* saved_border_width,
+                                    int* saved_elevation,
+                                    float* saved_shadow_offset_x,
+                                    float* saved_shadow_offset_y,
+                                    float* saved_shadow_blur,
+                                    uint32_t* saved_shadow_color) {
+    if (!node || !focus_visible || *focus_visible) return;
+
+    *saved_border_color = node->style.border_color;
+    *saved_border_width = node->style.border_width;
+    *saved_elevation = node->style.elevation;
+    *saved_shadow_offset_x = node->style.shadow_offset_x;
+    *saved_shadow_offset_y = node->style.shadow_offset_y;
+    *saved_shadow_blur = node->style.shadow_blur;
+    *saved_shadow_color = node->style.shadow_color;
+    *focus_visible = 1;
+
+    node->style.border_color = WIDGET_FOCUS_RING_COLOR;
+    if (node->style.border_width < WIDGET_FOCUS_RING_WIDTH) {
+        node->style.border_width = WIDGET_FOCUS_RING_WIDTH;
+    }
+    node->style.elevation = 0;
+    node->style.shadow_offset_x = 0.0f;
+    node->style.shadow_offset_y = 0.0f;
+    node->style.shadow_blur = WIDGET_FOCUS_RING_SHADOW;
+    node->style.shadow_color = 0x401A73E8;
+    sg_node_mark_dirty(node, SG_DIRTY_PAINT);
+}
+
+static void widget_restore_focus_ring(SGNode* node,
+                                      int* focus_visible,
+                                      uint32_t* saved_border_color,
+                                      float* saved_border_width,
+                                      int* saved_elevation,
+                                      float* saved_shadow_offset_x,
+                                      float* saved_shadow_offset_y,
+                                      float* saved_shadow_blur,
+                                      uint32_t* saved_shadow_color) {
+    if (!node || !focus_visible || !*focus_visible) return;
+
+    node->style.border_color = *saved_border_color;
+    node->style.border_width = *saved_border_width;
+    node->style.elevation = *saved_elevation;
+    node->style.shadow_offset_x = *saved_shadow_offset_x;
+    node->style.shadow_offset_y = *saved_shadow_offset_y;
+    node->style.shadow_blur = *saved_shadow_blur;
+    node->style.shadow_color = *saved_shadow_color;
+    *focus_visible = 0;
+    sg_node_mark_dirty(node, SG_DIRTY_PAINT);
 }
 
 /* ========================================================================
@@ -77,6 +143,44 @@ static void button_on_click(SGNode* node, int event_type, void* event_data, void
     }
 }
 
+static void button_on_focus_in(SGNode* node, int event_type, void* event_data, void* udata) {
+    (void)event_type; (void)event_data; (void)udata;
+    ButtonWidgetState* state = (ButtonWidgetState*)node->user_data;
+    if (!state || state->state == BUTTON_DISABLED) return;
+    widget_apply_focus_ring(node, &state->focus_visible,
+                            &state->saved_border_color, &state->saved_border_width,
+                            &state->saved_elevation, &state->saved_shadow_offset_x,
+                            &state->saved_shadow_offset_y, &state->saved_shadow_blur,
+                            &state->saved_shadow_color);
+}
+
+static void button_on_focus_out(SGNode* node, int event_type, void* event_data, void* udata) {
+    (void)event_type; (void)event_data; (void)udata;
+    ButtonWidgetState* state = (ButtonWidgetState*)node->user_data;
+    if (!state) return;
+    widget_restore_focus_ring(node, &state->focus_visible,
+                              &state->saved_border_color, &state->saved_border_width,
+                              &state->saved_elevation, &state->saved_shadow_offset_x,
+                              &state->saved_shadow_offset_y, &state->saved_shadow_blur,
+                              &state->saved_shadow_color);
+}
+
+static void button_on_key_down(SGNode* node, int event_type, void* event_data, void* udata) {
+    SGEvent* evt = (SGEvent*)event_data;
+    ButtonWidgetState* state;
+
+    (void)event_type; (void)udata;
+    if (!evt) return;
+
+    state = (ButtonWidgetState*)node->user_data;
+    if (!state || state->state == BUTTON_DISABLED) return;
+
+    if (evt->data.key.keycode == SG_KEY_RETURN || evt->data.key.keycode == SG_KEY_SPACE) {
+        button_on_click(node, SG_EVENT_CLICK, event_data, udata);
+        evt->consumed = 1;
+    }
+}
+
 SGNode* widget_button(const char* label, SkiaFont font,
                        ButtonClickCallback on_click, void* user_data) {
     /* Create button container */
@@ -120,6 +224,9 @@ SGNode* widget_button(const char* label, SkiaFont font,
     sg_node_on(btn, SG_EVENT_MOUSE_LEAVE, button_on_mouse_leave, NULL);
     sg_node_on(btn, SG_EVENT_MOUSE_DOWN, button_on_mouse_down, NULL);
     sg_node_on(btn, SG_EVENT_CLICK, button_on_click, NULL);
+    sg_node_on(btn, SG_EVENT_FOCUS_IN, button_on_focus_in, NULL);
+    sg_node_on(btn, SG_EVENT_FOCUS_OUT, button_on_focus_out, NULL);
+    sg_node_on(btn, SG_EVENT_KEY_DOWN, button_on_key_down, NULL);
 
     return btn;
 }
@@ -181,6 +288,7 @@ SGNode* widget_text(const char* text, SkiaFont font, uint32_t color) {
         strcpy(node->data.text.text, text);
     }
     node->data.text.font = font;
+    node->ownership_flags &= ~SG_NODE_OWNS_FONT;
     node->data.text.color = color;
     node->data.text.align = SG_TEXT_ALIGN_LEFT;
     return node;
@@ -202,32 +310,62 @@ void widget_text_set(SGNode* node, const char* text) {
  * Text Input Widget
  * ======================================================================== */
 
-static void text_input_ensure_capacity(TextInputWidgetState* state, int needed) {
-    if (state->text_capacity >= needed) return;
-    int new_cap = state->text_capacity * 2;
-    if (new_cap < needed) new_cap = needed;
-    if (new_cap < 64) new_cap = 64;
-    state->text = (char*)realloc(state->text, new_cap);
-    state->text_capacity = new_cap;
+static void text_input_sync_node_text(SGNode* node, TextInputWidgetState* state) {
+    if (!node || !state) return;
+    node->data.text.text = state->text;
 }
 
-static void text_input_insert(TextInputWidgetState* state, const char* str, int len) {
-    text_input_ensure_capacity(state, state->text_len + len + 1);
+static void text_input_notify_change(SGNode* node, TextInputWidgetState* state) {
+    if (state && state->on_change) {
+        state->on_change(node, state->text ? state->text : "", state->callback_data);
+    }
+}
+
+static int text_input_ensure_capacity(TextInputWidgetState* state, int needed) {
+    char* resized;
+    int new_cap;
+
+    if (!state || needed <= 0) return 0;
+    if (state->text_capacity >= needed) return 1;
+
+    new_cap = state->text_capacity > 0 ? state->text_capacity * 2 : 64;
+    if (new_cap < needed) new_cap = needed;
+    if (new_cap < 64) new_cap = 64;
+
+    resized = (char*)realloc(state->text, (size_t)new_cap);
+    if (!resized) return 0;
+
+    state->text = resized;
+    state->text_capacity = new_cap;
+    return 1;
+}
+
+static int text_input_insert(TextInputWidgetState* state, const char* str, int len) {
+    if (!state || !str || len <= 0) return 0;
+    if (state->cursor_pos < 0) state->cursor_pos = 0;
+    if (state->cursor_pos > state->text_len) state->cursor_pos = state->text_len;
+    if (!text_input_ensure_capacity(state, state->text_len + len + 1)) return 0;
+
     /* Shift text after cursor */
     memmove(state->text + state->cursor_pos + len,
             state->text + state->cursor_pos,
             state->text_len - state->cursor_pos + 1);
     memcpy(state->text + state->cursor_pos, str, len);
     state->text_len += len;
+    state->text[state->text_len] = '\0';
     state->cursor_pos += len;
+    return 1;
 }
 
-static void text_input_delete_range(TextInputWidgetState* state, int start, int end) {
-    if (start >= end || start < 0 || end > state->text_len) return;
+static int text_input_delete_range(TextInputWidgetState* state, int start, int end) {
+    if (!state) return 0;
+    if (start >= end || start < 0 || end > state->text_len) return 0;
     memmove(state->text + start, state->text + end,
             state->text_len - end + 1);
     state->text_len -= (end - start);
+    state->text[state->text_len] = '\0';
     state->cursor_pos = start;
+    return 1;
 }
 
 static void text_input_on_focus_in(SGNode* node, int event_type, void* event_data, void* udata) {
@@ -236,8 +374,11 @@ static void text_input_on_focus_in(SGNode* node, int event_type, void* event_dat
     if (!state) return;
     state->focused = 1;
     state->cursor_blink_time = 0;
-    node->style.border_color = 0xFF4285F4;
-    sg_node_mark_dirty(node, SG_DIRTY_PAINT);
+    widget_apply_focus_ring(node, &state->focus_visible,
+                            &state->saved_border_color, &state->saved_border_width,
+                            &state->saved_elevation, &state->saved_shadow_offset_x,
+                            &state->saved_shadow_offset_y, &state->saved_shadow_blur,
+                            &state->saved_shadow_color);
 }
 
 static void text_input_on_focus_out(SGNode* node, int event_type, void* event_data, void* udata) {
@@ -247,8 +388,11 @@ static void text_input_on_focus_out(SGNode* node, int event_type, void* event_da
     state->focused = 0;
     state->selection_start = -1;
     state->selection_end = -1;
-    node->style.border_color = 0xFFCCCCCC;
-    sg_node_mark_dirty(node, SG_DIRTY_PAINT);
+    widget_restore_focus_ring(node, &state->focus_visible,
+                              &state->saved_border_color, &state->saved_border_width,
+                              &state->saved_elevation, &state->saved_shadow_offset_x,
+                              &state->saved_shadow_offset_y, &state->saved_shadow_blur,
+                              &state->saved_shadow_color);
 }
 
 static void text_input_on_key_down(SGNode* node, int event_type, void* event_data, void* udata) {
@@ -259,19 +403,25 @@ static void text_input_on_key_down(SGNode* node, int event_type, void* event_dat
 
     int key = evt->data.key.keycode;
     int mods = evt->mods;
+    int handled = 0;
+    int changed = 0;
 
     switch (key) {
         case SG_KEY_LEFT:
             if (state->cursor_pos > 0) state->cursor_pos--;
+            handled = 1;
             break;
         case SG_KEY_RIGHT:
             if (state->cursor_pos < state->text_len) state->cursor_pos++;
+            handled = 1;
             break;
         case SG_KEY_HOME:
             state->cursor_pos = 0;
+            handled = 1;
             break;
         case SG_KEY_END:
             state->cursor_pos = state->text_len;
+            handled = 1;
             break;
         case SG_KEY_BACKSPACE:
             if (state->selection_start >= 0 && state->selection_start != state->selection_end) {
@@ -279,11 +429,13 @@ static void text_input_on_key_down(SGNode* node, int event_type, void* event_dat
                         state->selection_start : state->selection_end;
                 int e = state->selection_start > state->selection_end ?
                         state->selection_start : state->selection_end;
-                text_input_delete_range(state, s, e);
+                changed = text_input_delete_range(state, s, e);
                 state->selection_start = -1;
+                state->selection_end = -1;
             } else if (state->cursor_pos > 0) {
-                text_input_delete_range(state, state->cursor_pos - 1, state->cursor_pos);
+                changed = text_input_delete_range(state, state->cursor_pos - 1, state->cursor_pos);
             }
+            handled = 1;
             break;
         case SG_KEY_DELETE:
             if (state->selection_start >= 0 && state->selection_start != state->selection_end) {
@@ -291,25 +443,35 @@ static void text_input_on_key_down(SGNode* node, int event_type, void* event_dat
                         state->selection_start : state->selection_end;
                 int e = state->selection_start > state->selection_end ?
                         state->selection_start : state->selection_end;
-                text_input_delete_range(state, s, e);
+                changed = text_input_delete_range(state, s, e);
                 state->selection_start = -1;
+                state->selection_end = -1;
             } else if (state->cursor_pos < state->text_len) {
-                text_input_delete_range(state, state->cursor_pos, state->cursor_pos + 1);
+                changed = text_input_delete_range(state, state->cursor_pos, state->cursor_pos + 1);
             }
+            handled = 1;
             break;
         case SG_KEY_A:
             if (mods & SG_MOD_CTRL) {
                 state->selection_start = 0;
                 state->selection_end = state->text_len;
                 state->cursor_pos = state->text_len;
+                handled = 1;
             }
             break;
         default:
             break;
     }
 
+    if (!handled) return;
+
+    if (changed) {
+        text_input_sync_node_text(node, state);
+        text_input_notify_change(node, state);
+    }
+
     state->cursor_blink_time = 0; /* Reset blink on key press */
-    sg_node_mark_dirty(node, SG_DIRTY_PAINT);
+    sg_node_mark_dirty(node, changed ? (SG_DIRTY_LAYOUT | SG_DIRTY_PAINT) : SG_DIRTY_PAINT);
     evt->consumed = 1;
 }
 
@@ -332,15 +494,14 @@ static void text_input_on_text(SGNode* node, int event_type, void* event_data, v
     /* Insert typed text */
     int len = (int)strlen(evt->data.text_input.text);
     if (len > 0) {
-        text_input_insert(state, evt->data.text_input.text, len);
-
-        if (state->on_change) {
-            state->on_change(node, state->text, state->callback_data);
+        if (text_input_insert(state, evt->data.text_input.text, len)) {
+            text_input_sync_node_text(node, state);
+            text_input_notify_change(node, state);
         }
     }
 
     state->cursor_blink_time = 0;
-    sg_node_mark_dirty(node, SG_DIRTY_PAINT);
+    sg_node_mark_dirty(node, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
     evt->consumed = 1;
 }
 
@@ -395,6 +556,7 @@ SGNode* widget_text_input(const char* placeholder, SkiaFont font) {
     node->min_width = 120.0f;
 
     node->data.text.font = font;
+    node->ownership_flags &= ~SG_NODE_OWNS_FONT;
     node->data.text.color = 0xFF333333;
 
     /* Widget state */
@@ -434,7 +596,7 @@ void widget_text_input_set_value(SGNode* node, const char* text) {
     if (!state || state->type != WIDGET_TEXT_INPUT) return;
 
     int len = text ? (int)strlen(text) : 0;
-    text_input_ensure_capacity(state, len + 1);
+    if (!text_input_ensure_capacity(state, len + 1)) return;
     if (text) {
         memcpy(state->text, text, len);
     }
@@ -442,9 +604,10 @@ void widget_text_input_set_value(SGNode* node, const char* text) {
     state->text_len = len;
     state->cursor_pos = len;
     state->selection_start = -1;
+    state->selection_end = -1;
 
     /* Update the node text pointer */
-    node->data.text.text = state->text;
+    text_input_sync_node_text(node, state);
     sg_node_mark_dirty(node, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
 }
 
@@ -738,13 +901,14 @@ void widget_scroll_view_set_content(SGNode* sv, SGNode* content) {
     }
 
     sg_node_add_child(sv, content);
+    sg_node_mark_dirty(sv, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
 }
 
 void widget_scroll_to(SGNode* sv, double x, double y) {
     ScrollViewState* state = (ScrollViewState*)sv->user_data;
     if (!state || state->type != WIDGET_SCROLL_VIEW) return;
-    state->scroll_x = x;
-    state->scroll_y = y;
+    state->scroll_x = sg_clampf((float)x, 0.0f, fmaxf(0.0f, state->content_w - state->viewport_w));
+    state->scroll_y = sg_clampf((float)y, 0.0f, fmaxf(0.0f, state->content_h - state->viewport_h));
     sg_node_mark_dirty(sv, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
 }
 
@@ -756,6 +920,9 @@ SGNode* widget_image(const char* path, int fit) {
     SGNode* node = sg_node_create(SG_NODE_IMAGE);
     if (path) {
         node->data.image.image = skia_image_load_from_file(path);
+        if (node->data.image.image) {
+            node->ownership_flags |= SG_NODE_OWNS_IMAGE;
+        }
     }
     node->data.image.fit = fit;
     return node;
@@ -764,6 +931,7 @@ SGNode* widget_image(const char* path, int fit) {
 SGNode* widget_image_from_handle(SkiaImage img, int fit) {
     SGNode* node = sg_node_create(SG_NODE_IMAGE);
     node->data.image.image = img;
+    node->ownership_flags &= ~SG_NODE_OWNS_IMAGE;
     node->data.image.fit = fit;
     return node;
 }
@@ -830,12 +998,25 @@ void widget_cleanup(SGNode* node) {
             free(state);
             break;
         }
+        case WIDGET_TAB_PANEL: {
+            TabPanelState* state = (TabPanelState*)node->user_data;
+            free(state->contents);
+            free(state);
+            break;
+        }
+        case WIDGET_CUSTOM_CANVAS: {
+            CustomCanvasState* state = (CustomCanvasState*)node->user_data;
+            if (state->destroy_data && state->draw_data) {
+                state->destroy_data(state->draw_data);
+            }
+            free(state);
+            break;
+        }
         case WIDGET_BUTTON:
         case WIDGET_CHECKBOX:
         case WIDGET_SLIDER:
         case WIDGET_SCROLL_VIEW:
         case WIDGET_PROGRESS_BAR:
-        case WIDGET_CUSTOM_CANVAS:
             free(node->user_data);
             break;
         default:
@@ -948,6 +1129,7 @@ SGNode* widget_canvas(float width, float height, CanvasDrawCallback draw_fn, voi
     CustomCanvasState* state = (CustomCanvasState*)calloc(1, sizeof(CustomCanvasState));
     state->type = WIDGET_CUSTOM_CANVAS;
     state->draw_fn = draw_fn;
+    state->destroy_data = NULL;
     state->draw_data = user_data;
     state->width = width;
     state->height = height;
@@ -974,6 +1156,16 @@ void widget_canvas_set_callback(SGNode* canvas, CanvasDrawCallback draw_fn, void
     canvas->data.canvas.draw_fn = widget_canvas_draw_adapter;
     canvas->data.canvas.ctx = state;
     sg_node_mark_dirty(canvas, SG_DIRTY_PAINT);
+}
+
+void widget_canvas_set_data_destructor(SGNode* canvas, CanvasDestroyCallback destroy_data) {
+    CustomCanvasState* state;
+
+    if (!canvas) return;
+    state = (CustomCanvasState*)canvas->user_data;
+    if (!state || state->type != WIDGET_CUSTOM_CANVAS) return;
+
+    state->destroy_data = destroy_data;
 }
 
 /* ========================================================================
@@ -1042,6 +1234,7 @@ SGNode* widget_tabs(const char** labels, int count, TabChangeCallback on_change,
         /* Tab label */
         SkiaFont font = skia_font_create("Arial", 14.0f);
         SGNode* label = widget_text(labels[i], font, (i == 0) ? 0xFFFFFFFF : 0xFF333333);
+        label->ownership_flags |= SG_NODE_OWNS_FONT;
         sg_node_add_child(tab, label);
         
         /* Click handler */
@@ -1135,7 +1328,6 @@ SGNode* widget_menu(const char** items, int count, MenuItemCallback on_select, v
     menu->flags &= ~SG_VISIBLE;  /* Start hidden */
     
     /* Create menu items */
-    SkiaFont font = skia_font_create("Arial", 14.0f);
     for (int i = 0; i < count; i++) {
         SGNode* item = sg_node_create(SG_NODE_CONTAINER);
         item->layout_type = SG_LAYOUT_ROW;
@@ -1147,7 +1339,9 @@ SGNode* widget_menu(const char** items, int count, MenuItemCallback on_select, v
         item->style.padding[3] = 16.0f;
         item->min_height = 32.0f;
         
+        SkiaFont font = skia_font_create("Arial", 14.0f);
         SGNode* label = widget_text(items[i], font, 0xFF333333);
+        label->ownership_flags |= SG_NODE_OWNS_FONT;
         sg_node_add_child(item, label);
         
         sg_node_on(item, SG_EVENT_CLICK, menu_item_on_click, (void*)(intptr_t)i);
@@ -1195,14 +1389,6 @@ void widget_menu_hide(SGNode* menu) {
  * Tab Panel — compound widget with auto content switching
  * ======================================================================== */
 
-typedef struct {
-    WidgetType type;    /* WIDGET_TABS */
-    SGNode**   contents;
-    int        count;
-    int        active;
-    SGNode*    header;
-} TabPanelState;
-
 static void tabpanel_on_change(SGNode* tabs, int index, void* data) {
     TabPanelState* state = (TabPanelState*)data;
     for (int i = 0; i < state->count; i++)
@@ -1226,7 +1412,7 @@ SGNode* widget_tabpanel(const char* l1, SGNode* c1,
     if (count == 0) return NULL;
 
     TabPanelState* state = (TabPanelState*)malloc(sizeof(TabPanelState));
-    state->type     = WIDGET_TABS;
+    state->type     = WIDGET_TAB_PANEL;
     state->count    = count;
     state->active   = 0;
     state->contents = (SGNode**)malloc(count * sizeof(SGNode*));

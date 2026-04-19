@@ -38,6 +38,8 @@ option(BUILD_TESTS           "Build and register the test suite"     ON)
 option(ENABLE_AVX2           "Enable AVX2/FMA SIMD optimizations"    ON)
 option(ENABLE_DEBUG_LOGGING  "Compile with DEBUG_LOGGING defined"    OFF)
 option(ENABLE_SKIA_GUI       "Enable Skia-based GUI framework"       OFF)
+option(SKIA_GUI_ENABLE_ASAN  "Enable AddressSanitizer for skia_gui consumers" OFF)
+option(SKIA_GUI_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for skia_gui consumers" OFF)
 
 # NASM — optional, needed for SIMD assembly kernels
 include(CheckLanguage)
@@ -375,15 +377,15 @@ if(BUILD_PACKAGE_MANAGER AND EXISTS "${CMAKE_SOURCE_DIR}/pkg/core/registry.c")
 endif()
 
 # ============================================================================
-# Skia GUI framework (optional)
+# Skia GUI framework
 # ============================================================================
 
-if(ENABLE_SKIA_GUI)
+if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/skia/scene_graph.c")
     set(SKIA_DIR "${CMAKE_SOURCE_DIR}/third_party/skia")
     option(USE_SKIA_BACKEND
         "Use real Skia C++ backend (requires MSVC-compatible toolchain)" OFF)
 
-    if(USE_SKIA_BACKEND AND EXISTS "${SKIA_DIR}/lib/skia.lib")
+    if(ENABLE_SKIA_GUI AND USE_SKIA_BACKEND AND EXISTS "${SKIA_DIR}/lib/skia.lib")
         enable_language(CXX)
         set(CMAKE_CXX_STANDARD 17)
         set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -404,12 +406,18 @@ if(ENABLE_SKIA_GUI)
         runtime/skia/layout.c
         runtime/skia/events.c
         runtime/skia/widgets.c
+        runtime/skia/charts.c
+        runtime/skia/effects.c
+        runtime/skia/shapes.c
         runtime/skia/style.c
         runtime/skia/text.c
         runtime/skia/animation.c
         runtime/skia/frame_loop.c
         runtime/skia/skia_window_win32.c
     )
+    if(ANDROID AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/skia/frame_loop_android.c")
+        list(APPEND SKIA_GUI_SOURCES runtime/skia/frame_loop_android.c)
+    endif()
     if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/android/android_runtime.c")
         list(APPEND SKIA_GUI_SOURCES runtime/android/android_runtime.c)
     endif()
@@ -421,6 +429,25 @@ if(ENABLE_SKIA_GUI)
     target_link_libraries(skia_gui PUBLIC
         skia_c
         $<$<BOOL:${WIN32}>:user32 gdi32 ole32 oleaut32>)
+
+    if(SKIA_GUI_ENABLE_ASAN)
+        if(MSVC)
+            target_compile_options(skia_gui PUBLIC /fsanitize=address)
+            target_link_options(skia_gui INTERFACE /fsanitize=address)
+        else()
+            target_compile_options(skia_gui PUBLIC -fsanitize=address -fno-omit-frame-pointer)
+            target_link_options(skia_gui INTERFACE -fsanitize=address)
+        endif()
+    endif()
+
+    if(SKIA_GUI_ENABLE_UBSAN)
+        if(MSVC)
+            message(WARNING "SKIA_GUI_ENABLE_UBSAN is not supported on MSVC; ignoring toggle")
+        else()
+            target_compile_options(skia_gui PUBLIC -fsanitize=undefined -fno-omit-frame-pointer)
+            target_link_options(skia_gui INTERFACE -fsanitize=undefined)
+        endif()
+    endif()
 
     if(BUILD_RUNTIME)
         target_link_libraries(casprix_runtime PUBLIC skia_gui)

@@ -26,7 +26,10 @@ void sg_app_destroy(SGApp* app) {
         app->on_cleanup(app->user_data);
     }
 
-    if (app->root) sg_node_destroy(app->root);
+    if (app->root) {
+        app->root->ownership_flags &= ~SG_NODE_OWNER_APP;
+        sg_node_destroy(app->root);
+    }
     if (app->events) sg_event_manager_destroy(app->events);
     if (app->animations) sg_animation_pool_destroy(app->animations);
     if (app->fonts) font_manager_destroy(app->fonts);
@@ -39,9 +42,19 @@ void sg_app_set_root(SGApp* app, SGNode* root) {
 
     if (app->events) {
         sg_event_manager_destroy(app->events);
+        app->events = NULL;
+    }
+
+    if (app->root) {
+        app->root->ownership_flags &= ~SG_NODE_OWNER_APP;
+        sg_node_destroy(app->root);
     }
 
     app->root = root;
+    if (root) {
+        sg_node_retain(root);
+        root->ownership_flags |= SG_NODE_OWNER_APP;
+    }
     app->events = root ? sg_event_manager_create(root) : NULL;
     if (app->events) {
         sg_focus_rebuild_tab_order(app->events);

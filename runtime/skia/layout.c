@@ -7,6 +7,7 @@
  */
 
 #include "layout.h"
+#include "widgets.h"
 #include "skia_c.h"
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,11 @@ float sg_clampf(float val, float min_val, float max_val) {
 
 static float maxf(float a, float b) { return a > b ? a : b; }
 static float minf(float a, float b) { return a < b ? a : b; }
+
+static WidgetType node_widget_type(const SGNode* node) {
+    if (!node || !node->user_data) return WIDGET_NONE;
+    return *(const WidgetType*)node->user_data;
+}
 
 /* Get total horizontal padding */
 static float pad_h(SGNode* node) {
@@ -367,6 +373,61 @@ static void arrange_flex(SGNode* parent, SGRect content, int is_row) {
 
 /* Stack layout — each child fills the available rect */
 static void arrange_stack(SGNode* parent, SGRect content) {
+    if (node_widget_type(parent) == WIDGET_SCROLL_VIEW) {
+        ScrollViewState* state = (ScrollViewState*)parent->user_data;
+        float content_w = 0.0f;
+        float content_h = 0.0f;
+
+        if (!state) return;
+
+        state->viewport_w = content.w;
+        state->viewport_h = content.h;
+
+        for (SGNode* child = parent->first_child; child; child = child->next_sibling) {
+            SGSize measured;
+            float child_w;
+            float child_h;
+
+            if (!(child->flags & SG_VISIBLE)) continue;
+
+            measured = sg_layout_measure(child, SG_CONSTRAINTS_NONE);
+            child_w = maxf(measured.w, content.w - margin_h(child));
+            child_h = maxf(measured.h, content.h - margin_v(child));
+            if (child_w < 0) child_w = 0;
+            if (child_h < 0) child_h = 0;
+
+            content_w = maxf(content_w, child_w + margin_h(child));
+            content_h = maxf(content_h, child_h + margin_v(child));
+        }
+
+        state->content_w = content_w;
+        state->content_h = content_h;
+        state->scroll_x = sg_clampf(state->scroll_x, 0.0f, maxf(0.0f, content_w - content.w));
+        state->scroll_y = sg_clampf(state->scroll_y, 0.0f, maxf(0.0f, content_h - content.h));
+
+        for (SGNode* child = parent->first_child; child; child = child->next_sibling) {
+            SGSize measured;
+            float child_w;
+            float child_h;
+
+            if (!(child->flags & SG_VISIBLE)) continue;
+
+            measured = sg_layout_measure(child, SG_CONSTRAINTS_NONE);
+            child_w = maxf(measured.w, content.w - margin_h(child));
+            child_h = maxf(measured.h, content.h - margin_v(child));
+            if (child_w < 0) child_w = 0;
+            if (child_h < 0) child_h = 0;
+
+            child->bounds.x = content.x + child->style.margin[3] - state->scroll_x;
+            child->bounds.y = content.y + child->style.margin[0] - state->scroll_y;
+            child->bounds.w = child_w;
+            child->bounds.h = child_h;
+
+            sg_layout_arrange(child, child->bounds);
+        }
+        return;
+    }
+
     for (SGNode* child = parent->first_child; child; child = child->next_sibling) {
         if (!(child->flags & SG_VISIBLE)) continue;
 

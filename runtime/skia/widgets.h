@@ -34,6 +34,7 @@ typedef enum {
     WIDGET_CUSTOM_CANVAS,
     WIDGET_TABS,
     WIDGET_MENU,
+    WIDGET_TAB_PANEL,
 } WidgetType;
 
 /* ========================================================================
@@ -52,11 +53,19 @@ typedef void (*ButtonClickCallback)(SGNode* button, void* user_data);
 typedef struct {
     WidgetType type;              /* WIDGET_BUTTON */
     ButtonState state;
+    int focus_visible;
     uint32_t normal_color;        /* Default background */
     uint32_t hover_color;         /* Hovered background */
     uint32_t press_color;         /* Pressed background */
     uint32_t disabled_color;      /* Disabled background */
     uint32_t text_color;
+    uint32_t saved_border_color;
+    float saved_border_width;
+    int saved_elevation;
+    float saved_shadow_offset_x;
+    float saved_shadow_offset_y;
+    float saved_shadow_blur;
+    uint32_t saved_shadow_color;
     ButtonClickCallback on_click;
     void* callback_data;
 } ButtonWidgetState;
@@ -105,8 +114,16 @@ typedef struct {
     int selection_end;            /* Selection end */
     char* placeholder;            /* Placeholder text */
     int focused;                  /* Is this input focused? */
+    int focus_visible;
     float scroll_offset;          /* Horizontal scroll for overflow text */
     double cursor_blink_time;     /* For cursor blink animation */
+    uint32_t saved_border_color;
+    float saved_border_width;
+    int saved_elevation;
+    float saved_shadow_offset_x;
+    float saved_shadow_offset_y;
+    float saved_shadow_blur;
+    uint32_t saved_shadow_color;
     TextChangeCallback on_change;
     void* callback_data;
 } TextInputWidgetState;
@@ -236,10 +253,12 @@ void    widget_progress_set_colors(SGNode* bar, uint32_t fill, uint32_t bg);
  * ======================================================================== */
 
 typedef void (*CanvasDrawCallback)(SkiaCanvas canvas, float width, float height, void* user_data);
+typedef void (*CanvasDestroyCallback)(void* user_data);
 
 typedef struct {
     WidgetType type;              /* WIDGET_CUSTOM_CANVAS */
     CanvasDrawCallback draw_fn;   /* User-provided draw function */
+    CanvasDestroyCallback destroy_data;
     void* draw_data;              /* User data passed to draw_fn */
     float width, height;          /* Canvas dimensions */
 } CustomCanvasState;
@@ -247,6 +266,7 @@ typedef struct {
 SGNode* widget_canvas(float width, float height, CanvasDrawCallback draw_fn, void* user_data);
 void    widget_canvas_invalidate(SGNode* canvas);
 void    widget_canvas_set_callback(SGNode* canvas, CanvasDrawCallback draw_fn, void* user_data);
+void    widget_canvas_set_data_destructor(SGNode* canvas, CanvasDestroyCallback destroy_data);
 
 /* ========================================================================
  * Tabs Widget

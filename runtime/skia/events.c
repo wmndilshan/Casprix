@@ -22,6 +22,14 @@
 #define DOUBLE_CLICK_TIME   0.4    /* seconds */
 #define DOUBLE_CLICK_DIST   4.0f   /* pixels */
 
+static SGEventManager* g_active_focus_manager = NULL;
+
+static int sg_node_is_focusable(const SGNode* node) {
+    if (!node) return 0;
+    if (!(node->flags & SG_VISIBLE)) return 0;
+    return (node->flags & SG_INTERACTIVE) != 0;
+}
+
 /* ========================================================================
  * Creation / Destruction
  * ======================================================================== */
@@ -32,17 +40,24 @@ SGEventManager* sg_event_manager_create(SGNode* root) {
     mgr->root = root;
     mgr->tab_capacity = 64;
     mgr->tab_order = (SGNode**)calloc(mgr->tab_capacity, sizeof(SGNode*));
+    if (!g_active_focus_manager) {
+        g_active_focus_manager = mgr;
+    }
     return mgr;
 }
 
 void sg_event_manager_destroy(SGEventManager* mgr) {
     if (!mgr) return;
+    if (g_active_focus_manager == mgr) {
+        g_active_focus_manager = NULL;
+    }
     free(mgr->tab_order);
     free(mgr);
 }
 
 void sg_event_manager_set_root(SGEventManager* mgr, SGNode* root) {
     if (!mgr) return;
+    g_active_focus_manager = mgr;
     mgr->root = root;
     mgr->hovered = NULL;
     mgr->focused = NULL;
@@ -167,9 +182,7 @@ void sg_dispatch_mouse_down(SGEventManager* mgr, float x, float y, int button, i
     SGNode* target = mgr->captured ? mgr->captured : sg_hit_test(mgr->root, x, y);
 
     /* Update focus */
-    if (target != mgr->focused) {
-        sg_focus_set(mgr, target);
-    }
+    sg_focus_set(mgr, target);
 
     mgr->pressed = target;
     mgr->mouse_buttons |= (1 << button);
@@ -387,6 +400,10 @@ void sg_dispatch_event(SGEventManager* mgr, SGEvent* event) {
 
 void sg_focus_set(SGEventManager* mgr, SGNode* node) {
     if (!mgr) return;
+    g_active_focus_manager = mgr;
+    if (!sg_node_is_focusable(node)) {
+        node = NULL;
+    }
     if (mgr->focused == node) return;
 
     /* Send focus out to old node */
@@ -416,6 +433,14 @@ void sg_focus_clear(SGEventManager* mgr) {
 
 SGNode* sg_focus_get(SGEventManager* mgr) {
     return mgr ? mgr->focused : NULL;
+}
+
+SGEventManager* sg_focus_manager_get_active(void) {
+    return g_active_focus_manager;
+}
+
+SGNode* sg_focus_get_global(void) {
+    return g_active_focus_manager ? g_active_focus_manager->focused : NULL;
 }
 
 /* Recursive helper to collect focusable nodes in DFS order */

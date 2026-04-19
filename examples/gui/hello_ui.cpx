@@ -12,7 +12,7 @@ func main() -> int {
     // Create application window
     let app = new App("Hello Casperix", 800, 600)
     let font = app.get_font()
-    let title_font = skia_font_create("Segoe UI", 28.0)
+    let title_font = create_font("Segoe UI", 28.0)
     skia_font_set_bold(title_font, 1)
 
     // Build UI tree
@@ -29,7 +29,7 @@ func main() -> int {
     root.add(subtitle.handle)
 
     // Separator
-    let sep = new Separator(1, 0xFFBDBDBD, 1.0)
+    let sep = new Separator(true, 0xFFBDBDBD, 1.0)
     root.add(sep.handle)
 
     // Card with form inputs
@@ -67,7 +67,7 @@ func main() -> int {
     root.add(buttons.handle)
 
     // Checkbox
-    let checkbox = new Checkbox("I agree to the terms", font, 0)
+    let checkbox = new Checkbox("I agree to the terms", font, false)
     root.add(checkbox.handle)
 
     // Slider
