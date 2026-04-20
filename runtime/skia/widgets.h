@@ -12,6 +12,7 @@
 #define WIDGETS_H
 
 #include "scene_graph.h"
+#include "animation.h"
 #include "events.h"
 
 #ifdef __cplusplus
@@ -235,16 +236,24 @@ SGNode* widget_spacer(double grow);
 
 typedef struct {
     WidgetType type;              /* WIDGET_PROGRESS_BAR */
-    float value;                  /* Current value (min_val to max_val) */
+    float value;                  /* Target logical value */
+    float display_value;          /* Animated displayed value */
+    float anim_from_value;
     float min_val, max_val;       /* Value range */
     int indeterminate;            /* Indeterminate animation mode */
     uint32_t fill_color;          /* Progress fill color */
     uint32_t bg_color;            /* Background color */
     float anim_pos;               /* Animation position for indeterminate */
+    float anim_duration_sec;      /* 0 = instant updates */
+    SGEasing anim_easing;
+    int animating;
+    float anim_elapsed_sec;
 } ProgressBarState;
 
 SGNode* widget_progress_bar(double min_val, double max_val, double value);
 void    widget_progress_set_value(SGNode* bar, double value);
+void    widget_progress_configure_animation(SGNode* bar, float duration_sec, SGEasing easing);
+void    widget_progress_tick(SGNode* bar, float dt_sec);
 void    widget_progress_set_indeterminate(SGNode* bar, int indeterminate);
 void    widget_progress_set_colors(SGNode* bar, uint32_t fill, uint32_t bg);
 

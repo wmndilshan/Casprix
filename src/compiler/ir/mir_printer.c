@@ -350,6 +350,10 @@ void mir_print_inst(MirInst* inst, FILE* out) {
         case MIR_NOP:
             fprintf(out, "nop");
             break;
+        case MIR_SUSPEND:
+            fprintf(out, "suspend bb%u, ", inst->as.suspend.resume_bb->id);
+            print_value(inst->as.suspend.future, out);
+            break;
         case MIR_DEBUGLOC:
             fprintf(out, "debugloc %s:%d:%d",
                     inst->as.debug.file ? inst->as.debug.file : "?",
@@ -402,6 +406,7 @@ void mir_print_function(MirFunction* func, FILE* out) {
     }
 
     mir_print_type(func->return_type, out);
+    if (func->is_async) fprintf(out, " async");
     fprintf(out, " @%s(", func->name);
 
     for (int i = 0; i < func->param_count; i++) {

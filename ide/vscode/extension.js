@@ -22,26 +22,27 @@ const LANGUAGE_ID = 'casprix';
 /** All keywords for completion */
 const KEYWORDS = [
     'if', 'else', 'elif', 'for', 'while', 'return', 'break', 'continue',
-    'match', 'each', 'in', 'to', 'async', 'await', 'spawn', 'select',
-    'try', 'throw', 'catch', 'finally', 'import', 'from', 'as', 'yield',
-    'func', 'class', 'struct', 'enum', 'union', 'trait', 'interface', 'impl',
-    'new', 'type', 'module', 'package',
-    'let', 'const', 'mut', 'field', 'static', 'pub', 'public', 'private',
-    'protected', 'abstract', 'extern', 'extends', 'implements', 'uses',
-    'move', 'copy', 'where', 'unsafe', 'override', 'virtual', 'inline', 'comptime',
-    'true', 'false', 'null', 'nil', 'this', 'self', 'super',
-    'or', 'and', 'not', 'is',
+    'match', 'in', 'async', 'await', 'spawn',
+    'try', 'throw', 'catch', 'finally', 'import',
+    'func', 'class', 'struct', 'enum', 'union', 'trait', 'impl',
+    'new', 'type', 'alloc',
+    'let', 'const', 'mut', 'static', 'public', 'private',
+    'protected', 'abstract', 'extern', 'extends', 'implements',
+    'move', 'copy', 'where', 'unsafe', 'dyn', 'lambda',
+    'true', 'false', 'null', 'this', 'super',
+    'or', 'and', 'not',
 ];
 
 const BUILTIN_TYPES = [
     'i8', 'i16', 'i32', 'i64', 'i128',
     'u8', 'u16', 'u32', 'u64', 'u128',
     'f16', 'f32', 'f64', 'bf16',
-    'int', 'uint', 'float', 'double',
-    'string', 'strbuf', 'bool', 'void', 'char', 'byte',
+    'int', 'float',
+    'string', 'strbuf', 'bool', 'void', 'char',
     'array', 'slice', 'ptr', 'rawptr', 'ref',
     'tensor', 'vec2', 'vec3', 'vec4', 'vec8', 'vec16',
-    'mat2', 'mat3', 'mat4', 'channel', 'Any',
+    'mat2', 'mat3', 'mat4',
+    'Int', 'Float', 'String', 'Bool', 'Void',
 ];
 
 const BUILTIN_FUNCTIONS = [
@@ -75,7 +76,9 @@ const HOVER_DOCS = {
     'len': '**`len()`** — Returns the length of an array, slice, or string.',
     'assert': '**`assert()`** — Panics if the condition is false.',
     'typeof': '**`typeof()`** — Returns the type of an expression as a string.',
-    'sizeof': '**`sizeof()`** — Returns the byte size of a type.',
+    'dyn': '**`dyn`** — Marks a type for dynamic dispatch (trait objects).\n```cpx\nlet x: dyn[Printable] = ...\n```',
+    'lambda': '**`lambda`** — Keyword for explicit lambda type annotation.',
+    'alloc': '**`alloc`** — Creates a high-performance memory allocation region.',
 };
 
 // ============================================================================

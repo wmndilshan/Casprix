@@ -116,6 +116,36 @@ SGSize sg_layout_measure(SGNode* node, SGConstraints constraints) {
         return size;
     }
 
+    /* Flex-wrap measure (single pass over children) */
+    if (node->layout_type == SG_LAYOUT_WRAP) {
+        float line_w = 0.0f, line_h = 0.0f, total_h = 0.0f, max_line_w = 0.0f;
+        int li = 0;
+        for (SGNode* ch = node->first_child; ch; ch = ch->next_sibling) {
+            if (!(ch->flags & SG_VISIBLE)) continue;
+            SGSize csz = sg_layout_measure(ch, constraints);
+            float cw2 = csz.w + margin_h(ch);
+            float ch2 = csz.h + margin_v(ch);
+            if (li > 0 && line_w + node->spacing + cw2 > constraints.max_width && line_w > 0.0f) {
+                total_h += line_h + node->spacing;
+                max_line_w = maxf(max_line_w, line_w);
+                line_w = cw2;
+                line_h = ch2;
+            } else {
+                if (li > 0) line_w += node->spacing;
+                line_w += cw2;
+                line_h = maxf(line_h, ch2);
+            }
+            li++;
+        }
+        total_h += line_h;
+        max_line_w = maxf(max_line_w, line_w);
+        SGSize size = { max_line_w + pad_h(node), total_h + pad_v(node) };
+        size = apply_size_constraints(node, size);
+        size.w = sg_clampf(size.w, constraints.min_width, constraints.max_width);
+        size.h = sg_clampf(size.h, constraints.min_height, constraints.max_height);
+        return size;
+    }
+
     /* Container: aggregate children based on layout type */
     float content_w = 0, content_h = 0;
     int child_idx = 0;
@@ -371,6 +401,135 @@ static void arrange_flex(SGNode* parent, SGRect content, int is_row) {
     if (n > 32) free(items);
 }
 
+/* Row flex with line wrapping (SG_LAYOUT_WRAP) */
+static void arrange_flex_wrap(SGNode* parent, SGRect content) {
+    int n = 0;
+    for (SGNode* c = parent->first_child; c; c = c->next_sibling) {
+        if (c->flags & SG_VISIBLE) n++;
+    }
+    if (n == 0) return;
+
+    FlexItem* items;
+    FlexItem stack_items[32];
+    if (n <= 32) items = stack_items;
+    else {
+        items = (FlexItem*)malloc((size_t)n * sizeof(FlexItem));
+        if (!items) return;
+    }
+
+    int idx = 0;
+    SGConstraints child_constraints = SG_CONSTRAINTS_NONE;
+    for (SGNode* c = parent->first_child; c; c = c->next_sibling) {
+        if (!(c->flags & SG_VISIBLE)) continue;
+        SGSize measured = sg_layout_measure(c, child_constraints);
+        FlexItem* item = &items[idx];
+        item->node = c;
+        item->flex_grow = c->flex_grow;
+        item->flex_shrink = (c->flex_shrink > 0) ? c->flex_shrink : 1.0f;
+        item->base_size = (c->flex_basis > 0) ? c->flex_basis : measured.w;
+        item->cross_size = measured.h;
+        item->main_margin = margin_h(c);
+        item->cross_margin = margin_v(c);
+        item->final_size = item->base_size;
+        idx++;
+    }
+
+    float gap = parent->spacing;
+    float y = content.y;
+    float content_w = content.w;
+    if (content_w <= 1.0f) content_w = 1e6f;
+
+    int line_start = 0;
+    while (line_start < n) {
+        int line_end = line_start;
+        float line_used = 0.0f;
+        while (line_end < n) {
+            FlexItem* it = &items[line_end];
+            float need = it->final_size + it->main_margin;
+            if (line_end > line_start) need += gap;
+            if (line_used + need > content_w + 0.5f && line_end > line_start) break;
+            line_used += need;
+            line_end++;
+        }
+
+        float line_cross = 0.0f;
+        for (int j = line_start; j < line_end; j++) {
+            float ch = items[j].cross_size + items[j].cross_margin;
+            if (ch > line_cross) line_cross = ch;
+        }
+
+        float line_inner = 0.0f;
+        for (int j = line_start; j < line_end; j++) {
+            FlexItem* it = &items[j];
+            line_inner += it->final_size + it->main_margin;
+            if (j > line_start) line_inner += gap;
+        }
+
+        float cursor = content.x;
+        switch (parent->justify) {
+            case SG_JUSTIFY_CENTER:
+                cursor += (content_w - line_inner) * 0.5f;
+                break;
+            case SG_JUSTIFY_END:
+                cursor += content_w - line_inner;
+                break;
+            default:
+                break;
+        }
+
+        for (int j = line_start; j < line_end; j++) {
+            FlexItem* item = &items[j];
+            SGNode* child = item->node;
+            float m_start = child->style.margin[3];
+            float m_end   = child->style.margin[1];
+            cursor += m_start;
+
+            int align = child->align_self;
+            if (align == SG_ALIGN_START && parent->align_items != SG_ALIGN_START) {
+                align = parent->align_items;
+            }
+
+            float c_m_start = child->style.margin[0];
+            float c_m_end   = child->style.margin[2];
+            float cross_avail = line_cross - c_m_start - c_m_end;
+            float cross_size, cross_pos;
+
+            switch (align) {
+                case SG_ALIGN_CENTER:
+                    cross_size = minf(item->cross_size, cross_avail);
+                    cross_pos = c_m_start + (cross_avail - cross_size) * 0.5f;
+                    break;
+                case SG_ALIGN_END:
+                    cross_size = minf(item->cross_size, cross_avail);
+                    cross_pos = c_m_start + cross_avail - cross_size;
+                    break;
+                case SG_ALIGN_STRETCH:
+                    cross_size = cross_avail;
+                    cross_pos = c_m_start;
+                    break;
+                default:
+                    cross_size = minf(item->cross_size, cross_avail);
+                    cross_pos = c_m_start;
+                    break;
+            }
+
+            child->bounds.x = cursor;
+            child->bounds.y = y + cross_pos;
+            child->bounds.w = item->final_size;
+            child->bounds.h = cross_size;
+
+            sg_layout_arrange(child, child->bounds);
+
+            cursor += item->final_size + m_end + gap;
+        }
+
+        y += line_cross + gap;
+        line_start = line_end;
+    }
+
+    if (n > 32) free(items);
+}
+
 /* Stack layout — each child fills the available rect */
 static void arrange_stack(SGNode* parent, SGRect content) {
     if (node_widget_type(parent) == WIDGET_SCROLL_VIEW) {
@@ -492,8 +651,7 @@ void sg_layout_arrange(SGNode* node, SGRect available) {
             arrange_stack(node, content);
             break;
         case SG_LAYOUT_WRAP:
-            /* TODO: flex wrap — fall back to row for now */
-            arrange_flex(node, content, 1);
+            arrange_flex_wrap(node, content);
             break;
         default:
             arrange_none(node, content);

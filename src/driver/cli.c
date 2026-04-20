@@ -35,6 +35,7 @@ CompilerConfig g_config = {
     .max_errors                   = 0,
     .diag_no_color                = false,
     .perf_trace                   = false,
+    .compact_output               = true,
     .min_severity                 = DIAG_ERROR,
 };
 
@@ -81,6 +82,8 @@ void cli_print_usage(const char* program_name) {
     printf("  --max-errors=N        Stop after N errors (0 = unlimited)\n");
     printf("  --diag-no-color       Disable ANSI color codes in diagnostics\n");
     printf("  --perf-trace          Show pass-level timing report\n");
+    printf("  --compact             Show minimalist high-density summary (default)\n");
+    printf("  --no-compact          Disable compact summary output\n");
     printf("  --Weverything         Enable all warnings (default: errors only)\n");
 
     printf("\nExamples:\n");
@@ -179,6 +182,8 @@ int cli_parse_args(int argc, char* argv[], const char** input_file) {
         }
         else if (strcmp(argv[i], "--diag-no-color") == 0) { g_config.diag_no_color = true; }
         else if (strcmp(argv[i], "--perf-trace")    == 0) { g_config.perf_trace    = true; }
+        else if (strcmp(argv[i], "--compact")       == 0) { g_config.compact_output = true; }
+        else if (strcmp(argv[i], "--no-compact")    == 0) { g_config.compact_output = false; }
         else if (strcmp(argv[i], "--Weverything")   == 0) { g_config.min_severity  = DIAG_DEBUG; }
         else if (argv[i][0] != '-') {
             *input_file = argv[i];

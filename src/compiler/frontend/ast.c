@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#include <string.h>
 #include "compiler/frontend/ast.h"
 
 // Expression creators
@@ -145,6 +147,18 @@ Expr* create_index_expr(Expr* array, Expr* index, int line, int col) {
     expr->column = col;
     expr->as.index.array = array;
     expr->as.index.index = index;
+    return expr;
+}
+
+Expr* create_await_expr(Expr* expression, int line, int col) {
+    Expr* expr = ALLOCATE(Expr, 1);
+    expr->type = EXPR_AWAIT;
+    expr->data_type = TYPE_ERROR;
+    expr->class_name = NULL;
+    expr->type_info = NULL;
+    expr->line = line;
+    expr->column = col;
+    expr->as.await_expr.expression = expression;
     return expr;
 }
 
@@ -463,6 +477,9 @@ void free_expr(Expr* expr) {
             if (expr->as.generic_inst.type_arg_classes) {
                 free(expr->as.generic_inst.type_arg_classes);
             }
+            break;
+        case EXPR_AWAIT:
+            free_expr(expr->as.await_expr.expression);
             break;
     }
 

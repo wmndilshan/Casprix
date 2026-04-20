@@ -298,9 +298,11 @@ static bool c_begin_module(MirBackend* self, MirModule* module) {
     fprintf(data->out, "#include <stdint.h>\n");
     fprintf(data->out, "#include <stdlib.h>\n");
     fprintf(data->out, "#include <string.h>\n\n");
-    fprintf(data->out, "typedef struct AndroidApp AndroidApp;\n");
-    fprintf(data->out, "void android_app_bind_current(AndroidApp* app);\n\n");
     fprintf(data->out, "static void* cpx_obj_alloc(size_t size) { return calloc(1, size); }\n\n");
+    fprintf(data->out, "void nuwan_print_int(int64_t val);\n");
+    fprintf(data->out, "void nuwan_print_float(double val);\n");
+    fprintf(data->out, "void nuwan_print_bool(bool val);\n");
+    fprintf(data->out, "void nuwan_print_str(const char* val);\n\n");
     c_emit_global_decls(data->out, module);
 
     for (MirFunction* func = module->func_list; func; func = func->next_func) {
@@ -317,9 +319,9 @@ static void c_end_module(MirBackend* self) {
     if (!data->out) return;
 
     if (data->has_entry) {
-        fprintf(data->out, "void cpx_app_main(AndroidApp* app) {\n");
-        fprintf(data->out, "    android_app_bind_current(app);\n");
+        fprintf(data->out, "int main(int argc, char** argv) {\n");
         fprintf(data->out, "    __casprix_entry();\n");
+        fprintf(data->out, "    return 0;\n");
         fprintf(data->out, "}\n");
     }
 }

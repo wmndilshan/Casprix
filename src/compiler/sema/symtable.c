@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#include <string.h>
 #include "compiler/sema/symtable.h"
 
 void init_symbol_table(SymbolTable* table) {

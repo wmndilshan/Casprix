@@ -63,4 +63,27 @@ HttpResponse* http_response_ok(const char* body);
 HttpResponse* http_response_json(const char* json);
 HttpResponse* http_response_error(int status_code, const char* message);
 
+/* -------------------------------------------------------------------------
+ * Synchronous route table (method + path → handler), for tests and thin apps
+ * ------------------------------------------------------------------------- */
+
+typedef void (*CpxSyncHttpHandler)(HttpRequest* req, HttpResponse* res, void* userdata);
+
+typedef struct CpxRoute {
+    char               method[8];
+    char               path[256];
+    CpxSyncHttpHandler handler;
+    void*              userdata;
+} CpxRoute;
+
+typedef struct CpxRouter {
+    CpxRoute routes[64];
+    int      route_count;
+} CpxRouter;
+
+void cpx_router_init(CpxRouter* r);
+void cpx_router_add(CpxRouter* r, const char* method, const char* path,
+                    CpxSyncHttpHandler handler, void* userdata);
+void cpx_router_dispatch(CpxRouter* r, HttpRequest* req, HttpResponse* res);
+
 #endif // CASPERIX_HTTP_SERVER_H

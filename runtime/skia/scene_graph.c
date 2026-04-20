@@ -52,6 +52,9 @@ SGNode* sg_node_create(SGNodeType type) {
     node->flex_basis = -1.0f;  /* Auto */
     node->max_width = -1.0f;
     node->max_height = -1.0f;
+    node->layout_version   = 0;
+    node->dirty_rect_valid = 0;
+    node->dirty_rect       = (SGRect){ 0, 0, 0, 0 };
 
     return node;
 }
@@ -284,6 +287,7 @@ void sg_node_mark_dirty(SGNode* node, uint32_t flags) {
 }
 
 void sg_node_mark_layout_dirty(SGNode* node) {
+    if (node) node->layout_version++;
     sg_node_mark_dirty(node, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
 }
 
@@ -292,11 +296,73 @@ void sg_node_mark_paint_dirty(SGNode* node) {
 }
 
 void sg_node_clear_dirty(SGNode* node) {
-    if (node) node->flags &= ~(SG_DIRTY_LAYOUT | SG_DIRTY_PAINT | SG_DIRTY_CHILDREN);
+    if (!node) return;
+    node->flags &= ~(SG_DIRTY_LAYOUT | SG_DIRTY_PAINT | SG_DIRTY_CHILDREN);
+    node->dirty_rect_valid = 0;
 }
 
 int sg_node_is_dirty(SGNode* node, uint32_t flags) {
     return node ? (node->flags & flags) != 0 : 0;
+}
+
+/* ------------------------------------------------------------------------
+ * Dirty-region helpers & selective repaint
+ * ------------------------------------------------------------------------ */
+
+static uint32_t g_sg_paint_node_count  = 0;
+
+uint32_t sg_debug_paint_node_count(void) { return g_sg_paint_node_count; }
+void sg_debug_reset_paint_node_count(void) { g_sg_paint_node_count = 0; }
+
+void sg_mark_dirty(SGNode* node) {
+    sg_node_mark_paint_dirty(node);
+}
+
+void sg_mark_dirty_rect(SGNode* node, SGRect rect) {
+    if (!node) return;
+    if (!node->dirty_rect_valid) {
+        node->dirty_rect       = rect;
+        node->dirty_rect_valid = 1;
+    } else {
+        float x1 = node->dirty_rect.x;
+        float y1 = node->dirty_rect.y;
+        float x2 = node->dirty_rect.x + node->dirty_rect.w;
+        float y2 = node->dirty_rect.y + node->dirty_rect.h;
+        float rx1 = rect.x;
+        float ry1 = rect.y;
+        float rx2 = rect.x + rect.w;
+        float ry2 = rect.y + rect.h;
+        float nx1 = x1 < rx1 ? x1 : rx1;
+        float ny1 = y1 < ry1 ? y1 : ry1;
+        float nx2 = x2 > rx2 ? x2 : rx2;
+        float ny2 = y2 > ry2 ? y2 : ry2;
+        node->dirty_rect.x = nx1;
+        node->dirty_rect.y = ny1;
+        node->dirty_rect.w = nx2 - nx1;
+        node->dirty_rect.h = ny2 - ny1;
+    }
+    sg_node_mark_paint_dirty(node);
+}
+
+int sg_is_subtree_dirty(const SGNode* node) {
+    if (!node) return 0;
+    if (node->flags & (SG_DIRTY_LAYOUT | SG_DIRTY_PAINT | SG_DIRTY_CHILDREN)) return 1;
+    for (SGNode* c = node->first_child; c; c = c->next_sibling) {
+        if (sg_is_subtree_dirty(c)) return 1;
+    }
+    return 0;
+}
+
+void sg_clear_dirty(SGNode* node) {
+    sg_node_clear_dirty(node);
+}
+
+void sg_clear_dirty_recursive(SGNode* root) {
+    if (!root) return;
+    sg_node_clear_dirty(root);
+    for (SGNode* c = root->first_child; c; c = c->next_sibling) {
+        sg_clear_dirty_recursive(c);
+    }
 }
 
 /* ========================================================================
@@ -718,15 +784,14 @@ static int sg_point_in_rect(float x, float y, SGRect rect) {
  * Rendering — Public API
  * ======================================================================== */
 
-static void sg_render_node(SGNode* node, SkiaCanvas canvas) {
+static void sg_render_node(SGNode* node, SkiaCanvas canvas, int dirty_only) {
     if (!node || !(node->flags & SG_VISIBLE)) return;
+    if (dirty_only && !sg_is_subtree_dirty(node)) return;
 
     sg_ensure_paints();
 
-    /* Save canvas state */
     skia_canvas_save(canvas);
 
-    /* Apply local transform */
     SGTransform* t = &node->transform;
     if (t->tx != 0.0f || t->ty != 0.0f) {
         skia_canvas_translate(canvas, t->tx, t->ty);
@@ -742,11 +807,6 @@ static void sg_render_node(SGNode* node, SkiaCanvas canvas) {
         skia_canvas_translate(canvas, -cx, -cy);
     }
 
-    /* Apply opacity */
-    /* Note: For proper opacity, we'd need to render to a layer.
-     * For now, we modulate paint alpha directly. */
-
-    /* Clip children if requested */
     if (node->flags & SG_CLIP_CHILDREN) {
         SGRect b = node->bounds;
         if (sg_node_widget_type(node) == WIDGET_SCROLL_VIEW) {
@@ -765,39 +825,39 @@ static void sg_render_node(SGNode* node, SkiaCanvas canvas) {
         }
     }
 
-    /* Draw shadow (behind the node) */
-    sg_render_shadow(canvas, node);
+    if (!dirty_only || (node->flags & SG_DIRTY_PAINT)) {
+        if (dirty_only) g_sg_paint_node_count++;
+        sg_render_shadow(canvas, node);
+        sg_render_background(canvas, node);
+        sg_render_content(canvas, node);
+    }
 
-    /* Draw background/border */
-    sg_render_background(canvas, node);
-
-    /* Draw type-specific content */
-    sg_render_content(canvas, node);
-
-    /* Render children */
-    /* TODO: Sort by z_index for proper layering */
     SGNode* child = node->first_child;
     while (child) {
-        sg_render_node(child, canvas);
+        sg_render_node(child, canvas, dirty_only);
         child = child->next_sibling;
     }
 
-    /* Restore canvas state */
     skia_canvas_restore(canvas);
 
-    /* Clear paint dirty flag */
-    node->flags &= ~SG_DIRTY_PAINT;
+    if (!dirty_only)
+        node->flags &= ~SG_DIRTY_PAINT;
 }
 
 void sg_render(SGNode* root, SkiaCanvas canvas) {
     if (!root || !canvas) return;
-    sg_render_node(root, canvas);
+    sg_render_node(root, canvas, 0);
 }
 
 void sg_render_dirty(SGNode* root, SkiaCanvas canvas) {
-    /* For now, just do a full render.
-     * Dirty rectangle optimization is a Phase 10 task. */
-    sg_render(root, canvas);
+    sg_render_dirty_only(root, canvas);
+}
+
+void sg_render_dirty_only(SGNode* root, SkiaCanvas canvas) {
+    if (!root || !canvas) return;
+    g_sg_paint_node_count = 0;
+    sg_render_node(root, canvas, 1);
+    sg_clear_dirty_recursive(root);
 }
 
 /* ========================================================================

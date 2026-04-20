@@ -326,6 +326,17 @@ void mir_build_ret_void(MirBuilder* b) {
     emit_void(b, inst);
 }
 
+MirValueId mir_build_suspend(MirBuilder* b, MirBlock* resume_bb, MirValueId future) {
+    MirType* ret_type = mir_function_value_type(b->func, future);
+    // Result of suspend is the result of the future once resumed
+    MirInst* inst = alloc_inst(b, MIR_SUSPEND, ret_type);
+    inst->as.suspend.resume_bb = resume_bb;
+    inst->as.suspend.future = future;
+    emit(b, inst);
+    link_cfg(b->current_block, resume_bb);
+    return inst->result;
+}
+
 /* ================================================================
  * Function calls
  * ================================================================ */

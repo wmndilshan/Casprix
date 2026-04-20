@@ -201,6 +201,7 @@ typedef enum {
 
     /* Debug / metadata */
     MIR_NOP,                /* no operation (placeholder)          */
+    MIR_SUSPEND,            /* result = suspend(resume_point)      */
     MIR_DEBUGLOC,           /* source location annotation          */
 } MirOpcode;
 
@@ -279,6 +280,9 @@ struct MirInst {
         struct { MirValueId aggregate; int field_idx;
                  MirValueId insert_val; /* only for INSERT */ } field_op;
 
+        /* Suspend / Resume */
+        struct { MirBlock* resume_bb; MirValueId future; } suspend;
+
         /* Debug location */
         struct { int line; int column; const char* file; } debug;
     } as;
@@ -354,6 +358,7 @@ struct MirFunction {
     /* For const-eval: is this function constexpr? */
     bool            is_constexpr;
     bool            is_extern;
+    bool            is_async;
 
     MirModule*      parent;
     MirFunction*    next_func;      /* linked list within module */
@@ -519,6 +524,7 @@ void       mir_build_condbr(MirBuilder* b, MirValueId cond,
                              MirBlock* true_bb, MirBlock* false_bb);
 void       mir_build_ret(MirBuilder* b, MirValueId value);
 void       mir_build_ret_void(MirBuilder* b);
+MirValueId mir_build_suspend(MirBuilder* b, MirBlock* resume_bb, MirValueId future);
 
 /* Calls */
 MirValueId mir_build_call(MirBuilder* b, const char* func_name,

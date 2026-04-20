@@ -7,6 +7,11 @@
 #include <math.h>
 #include <assert.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#  include <malloc.h>   /* alloca on Windows */
+#else
+#  include <alloca.h>   /* alloca on Linux/macOS */
+#endif
 
 #if defined(__AVX2__) && defined(__FMA__)
 #  include <immintrin.h>
@@ -215,8 +220,9 @@ void CPX_HOT cpx_gemm_w4a32(const float* A,
     (void)sched;
     int groups_per_row = (K + group_size - 1) / group_size;
 
-    /* Temporary dequantized row. */
-    float* w_row = (float*)malloc((size_t)K * sizeof(float));
+    /* Stack-allocate scratch for one dequantized row — no heap in hot path.
+     * Typical K <= 8192 → 32 KiB on stack; callers must ensure K is bounded. */
+    float* w_row = (float*)alloca((size_t)K * sizeof(float));
 
     for (int n = 0; n < N; n++) {
         /* Dequantize W row n into w_row. */
@@ -243,7 +249,7 @@ void CPX_HOT cpx_gemm_w4a32(const float* A,
             C[b * N + n] = acc;
         }
     }
-    free(w_row);
+    /* No free needed — alloca is reclaimed on function return. */
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -305,4 +311,72 @@ void cpx_fake_quantize_bwd(const float* grad_out, const float* w,
     for (int i = 0; i < N * K; i++) {
         grad_in[i] = (w[i] >= lo && w[i] <= hi) ? grad_out[i] : 0.f;
     }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+ * 7. W4A32 GEMM — arena-based, with per-row zero-point support
+ *
+ * Computes C[M, N] = A[M, K] × dequant(W_int4[N, K/2])
+ * W_int4: packed nibbles, 2 weights per byte, row-major [N, K/2]
+ * scales: per-row scale [N]
+ * zeros:  per-row zero-point [N] (pass NULL for symmetric quant)
+ * All scratch allocated from arena — no malloc.
+ * ════════════════════════════════════════════════════════════════════ */
+
+void CPX_HOT cpx_gemm_w4a32_zp(const uint8_t* W_int4,
+                                   const float*   scales,
+                                   const float*   zeros,
+                                   const float*   A,
+                                   float*         C,
+                                   int M, int N, int K,
+                                   struct CpxArena* arena) {
+    assert(W_int4 != NULL);
+    assert(scales != NULL);
+    assert(A      != NULL);
+    assert(C      != NULL);
+    assert(K % 2  == 0);  /* nibble packing requires even K */
+
+    /* Allocate one dequantized row from the arena for reuse across rows. */
+    float* w_row = (float*)cpx_arena_alloc(arena, (size_t)K * sizeof(float), 64);
+    assert(w_row != NULL);
+
+    for (int n = 0; n < N; n++) {
+        /* Dequantize W row n from packed INT4. */
+        const uint8_t* src = W_int4 + n * (K / 2);
+        float s  = scales[n];
+        float z  = zeros ? zeros[n] : 0.0f;
+
+        for (int k = 0; k < K; k++) {
+            /* Two nibbles per byte: low nibble at even k, high nibble at odd k. */
+            int byte_idx = k / 2;
+            int shift    = (k % 2) * 4;
+            uint8_t nibble = (src[byte_idx] >> shift) & 0x0F;
+            int q = (int)nibble - 8;   /* restore symmetric range -8..7 */
+            w_row[k] = (float)q * s + z;
+        }
+
+        /* GEMV: for each batch row m, accumulate dot(A[m,:], w_row). */
+        for (int m = 0; m < M; m++) {
+            const float* a = A + m * K;
+            float acc = 0.f;
+            int k = 0;
+
+#if HAVE_AVX2
+            __m256 vsum = _mm256_setzero_ps();
+            for (; k <= K - 8; k += 8) {
+                vsum = _mm256_fmadd_ps(
+                    _mm256_loadu_ps(a + k),
+                    _mm256_loadu_ps(w_row + k),
+                    vsum);
+            }
+            /* Horizontal sum of 8 lanes. */
+            float tmp[8];
+            _mm256_storeu_ps(tmp, vsum);
+            for (int j = 0; j < 8; j++) acc += tmp[j];
+#endif
+            for (; k < K; k++) acc += a[k] * w_row[k];
+            C[m * N + n] = acc;
+        }
+    }
+    /* w_row lives in arena — caller resets arena between steps. */
 }

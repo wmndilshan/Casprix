@@ -1077,3 +1077,53 @@ void perf_print_json(PerfTracer* pt, FILE* out) {
     }
     fprintf(out, "]}\n");
 }
+void perf_print_compact(PerfTracer* pt, FILE* out, const char* filename, bool use_colors) {
+    if (pt->entry_count == 0) {
+        fprintf(out, "  [DEBUG] entry_count is 0\n");
+        return;
+    }
+    const char* bold  = use_colors ? "\x1b[1m" : "";
+    const char* dim   = use_colors ? "\x1b[2m" : "";
+    const char* cyan  = use_colors ? "\x1b[36m" : "";
+    const char* reset = use_colors ? "\x1b[0m" : "";
+
+    /* Header: casprix v1.0.0 · filename */
+    fprintf(out, "\n%scasprix v1.0.0%s  %s\xC2\xB7%s  %s%s%s\n\n", 
+            bold, reset, dim, reset, bold, filename, reset);
+
+    double total = 0.0;
+    for (int i = 0; i < pt->entry_count; i++) {
+        PerfEntry* e = &pt->entries[i];
+        if (e->depth > 0) continue; /* Only top-level stages */
+
+        const char* stage_name = diag_stage_name(e->stage);
+        fprintf(out, "  %s%-8s%s  %6.1fms  ", 
+                cyan, stage_name, reset, e->elapsed_ms);
+
+        /* Stage-specific info */
+        switch (e->stage) {
+            case STAGE_LEX:
+                fprintf(out, "tokenized %d tokens", e->items_processed);
+                break;
+            case STAGE_PARSE:
+                fprintf(out, "%d top-level declarations", e->items_processed);
+                break;
+            case STAGE_SEMA:
+                fprintf(out, "type check passed");
+                break;
+            case STAGE_CODEGEN:
+                fprintf(out, "generated assembly");
+                break;
+            case STAGE_LINK:
+                fprintf(out, "\xE2\x9E\x94 binary linked");
+                break;
+            default:
+                if (e->name) fprintf(out, "%s", e->name);
+                break;
+        }
+        fprintf(out, "\n");
+        total += e->elapsed_ms;
+    }
+
+    fprintf(out, "\n  %sdone in %.1fms%s\n\n", bold, total, reset);
+}

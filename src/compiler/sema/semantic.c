@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#include <string.h>
 #include "compiler/sema/semantic.h"
 #include "compiler/sema/escape_analysis.h"
 #include "compiler/sema/drop_planner.h"
@@ -9,6 +11,7 @@ static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_stmt(SemanticAnalyzer* analyzer, Stmt* stmt);
 static void analyze_static_access_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr);
+static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr);
 
 /* ─── Global memory-model analysis contexts ─── */
 static EscapeAnalyzer   g_escape_ctx;
@@ -22,6 +25,7 @@ void init_semantic_analyzer(SemanticAnalyzer* analyzer) {
     analyzer->scope_depth = 0;
     analyzer->current_function_return_type = TYPE_VOID;
     analyzer->in_function = false;
+    analyzer->in_async_function = false;
     analyzer->current_class = NULL;
     analyzer->current_method = NULL;
     analyzer->loop_depth = 0;  // Initialize loop depth tracking
@@ -72,6 +76,20 @@ static bool types_compatible(DataType t1, DataType t2) {
     // string and strbuf are compatible (string -> strbuf conversion)
     if ((t1 == TYPE_STRING && t2 == TYPE_STRBUF) ||
         (t1 == TYPE_STRBUF && t2 == TYPE_STRING)) {
+        return true;
+    }
+
+    // class/struct and ref are compatible (implicit reference taking)
+    if ((t1 == TYPE_CLASS || t1 == TYPE_STRUCT) && t2 == TYPE_REF) {
+        return true;
+    }
+
+    // Allow integer literal 0 (null) to be assigned to pointer types (C-FFI interop)
+    // This enables: let p: rawptr = 0
+    if (type_is_integer(t1) && (t2 == TYPE_RAWPTR || t2 == TYPE_PTR || t2 == TYPE_REF)) {
+        return true;
+    }
+    if (type_is_integer(t2) && (t1 == TYPE_RAWPTR || t1 == TYPE_PTR || t1 == TYPE_REF)) {
         return true;
     }
 
@@ -414,6 +432,13 @@ static void analyze_variable_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         char msg[256];
         snprintf(msg, sizeof(msg), "Undefined variable '%s'", var->name);
         report_semantic_error(expr->line, expr->column, msg);
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    /* Verify ownership/borrowing validity */
+    if (!check_ownership_valid(&g_ownership_ctx, var->name, expr->line)) {
+        // Error reported by check_ownership_valid
         expr->data_type = TYPE_ERROR;
         return;
     }
@@ -843,6 +868,16 @@ static void analyze_index_expr(SemanticAnalyzer* analyzer, Expr* expr) {
 
 static void analyze_member_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     MemberAccessExpr* member = &expr->as.member;
+    ClassSymbol* class_sym = NULL;
+    
+    if (!member->object) {
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    /* Analyze the base object first. This will trigger ownership checks
+       if the object is a variable access. */
+    analyze_expr(analyzer, member->object);
 
     // Check for static access BEFORE analyzing the object
     // This prevents error messages about undefined variables when the "variable" is actually a class name
@@ -885,7 +920,6 @@ static void analyze_member_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
 
     // Get the class symbol - for 'this', use current class
-    ClassSymbol* class_sym = NULL;
     if (member->object->type == EXPR_THIS) {
         class_sym = analyzer->current_class;
     } else if (member->object->type == EXPR_MEMBER_ACCESS) {
@@ -1348,6 +1382,9 @@ static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             // Generic instantiation is handled during parsing/monomorphization
             // Expression type is already set
             break;
+        case EXPR_AWAIT:
+            analyze_await_expr(analyzer, expr);
+            break;
     }
 }
 
@@ -1375,6 +1412,35 @@ static void register_error_declaration(SemanticAnalyzer* analyzer,
     }
 }
 
+static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr) {
+    if (!analyzer->in_async_function) {
+        report_semantic_error(expr->line, expr->column, "'await' expression outside of async function");
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    analyze_expr(analyzer, expr->as.await_expr.expression);
+    
+    // Check if the expression returns a Future
+    // For now, we'll be lenient and allow awaiting anything, 
+    // but ideally we check if expression->data_type == TYPE_FUTURE.
+    
+    // If it's a future, the result of await is the element type of the future.
+    if (expr->as.await_expr.expression->data_type == TYPE_FUTURE) {
+        if (expr->as.await_expr.expression->type_info && expr->as.await_expr.expression->type_info->element_type) {
+            expr->data_type = expr->as.await_expr.expression->type_info->element_type->base;
+            expr->type_info = expr->as.await_expr.expression->type_info->element_type; // Copy type info for nested types
+        } else {
+            expr->data_type = TYPE_VOID; // Default for Future<Void>
+        }
+    } else {
+        // If not a future, just pass through (auto-wrap synchronous values?)
+        // Many languages allow 'await 5' -> 5.
+        expr->data_type = expr->as.await_expr.expression->data_type;
+        expr->type_info = expr->as.await_expr.expression->type_info;
+    }
+}
+
 static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     DeclarationStmt* decl = &stmt->as.declaration;
 
@@ -1387,6 +1453,11 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     // Analyze initializer first
     if (decl->initializer) {
         analyze_expr(analyzer, decl->initializer);
+
+        // If this is a move expression, mark the source variable as moved
+        if (is_move_expr(decl->initializer)) {
+            mark_moved(&g_ownership_ctx, decl->initializer->as.variable.name, stmt->line);
+        }
 
         if (decl->initializer->type == EXPR_LAMBDA) {
             LambdaExpr* lambda = &decl->initializer->as.lambda;
@@ -1540,6 +1611,11 @@ static void analyze_assignment_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
 
     // Analyze the value expression (r-value)
     analyze_expr(analyzer, assign->value);
+
+    // If this is a move expression, mark the source variable as moved
+    if (is_move_expr(assign->value)) {
+        mark_moved(&g_ownership_ctx, assign->value->as.variable.name, stmt->line);
+    }
 
     // Type checking
     if (assign->target->data_type != TYPE_ERROR &&
@@ -1879,8 +1955,11 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     // Set function context
     DataType prev_return_type = analyzer->current_function_return_type;
     bool prev_in_function = analyzer->in_function;
+    bool prev_in_async = analyzer->in_async_function;
+
     analyzer->current_function_return_type = func->return_type;
     analyzer->in_function = true;
+    analyzer->in_async_function = func->is_async;
 
     /* ── Memory model: enter function scope ── */
     escape_analyzer_reset(&g_escape_ctx);
@@ -1910,11 +1989,13 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     escape_analyze_function(&g_escape_ctx, stmt);
 
     /* ── Memory model: exit function scope (drop planner) ── */
+    validate_scope_end(&g_ownership_ctx, analyzer->scope_depth);
     drop_planner_exit_scope(&g_drop_ctx);
     
     // Restore context
     analyzer->current_function_return_type = prev_return_type;
     analyzer->in_function = prev_in_function;
+    analyzer->in_async_function = prev_in_async;
     
     exit_scope(analyzer->symbols, &analyzer->scope_depth);
 }
@@ -1935,6 +2016,28 @@ static void analyze_return_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             report_semantic_error(stmt->line, stmt->column,
                 "Returning capturing closure values is not implemented yet");
             return;
+        }
+
+        /* ── Memory model safety: prevent returning references to local stack-allocated variables ── */
+        if (ret->value->type == EXPR_VARIABLE) {
+            const char* var_name = ret->value->as.variable.name;
+            Symbol* sym = lookup_symbol(analyzer->symbols, var_name);
+            DataType ret_type = analyzer->current_function_return_type;
+            
+            if (sym && (ret_type == TYPE_REF || ret_type == TYPE_PTR || ret_type == TYPE_RAWPTR)) {
+                bool is_stack = false;
+                if (sym->type == TYPE_STRUCT || type_is_primitive(sym->type)) {
+                    is_stack = true;
+                } else if (escape_can_stack_alloc(&g_escape_ctx, var_name)) {
+                    is_stack = true;
+                }
+
+                if (is_stack) {
+                     char msg[256];
+                     snprintf(msg, sizeof(msg), "Cannot return reference to local stack-allocated variable '%s'", var_name);
+                     report_semantic_error(stmt->line, stmt->column, msg);
+                }
+            }
         }
         
         if (ret->value->data_type != TYPE_ERROR &&

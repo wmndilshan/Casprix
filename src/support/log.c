@@ -62,6 +62,13 @@ static double now_ms(void) {
 #define A_BBLUE   "\x1b[1;34m"
 #define A_BCYAN   "\x1b[1;36m"
 
+/* Professional indicators */
+#define INDICATOR_INFO   "i"
+#define INDICATOR_OK     "ok"
+#define INDICATOR_ERR    "!!"
+#define INDICATOR_STEP   "->"
+
+
 /* ============================================================
  * Static data tables
  * ============================================================ */
@@ -239,25 +246,18 @@ static void write_text(FILE *out, bool color,
     else
         fprintf(out, "%s", s_level_badge[level]);
 
-    /* Category */
+    /* Category badge */
     if (g_cpx_log.show_category && cat < CPX_CAT_COUNT) {
         if (color)
-            fprintf(out, "%s[%-8s]%s ", A_DIM, s_cat_name[cat], A_RESET);
+            fprintf(out, "%s%-8s%s %s ", A_DIM, s_cat_name[cat], A_RESET, INDICATOR_STEP);
         else
-            fprintf(out, "[%-8s] ", s_cat_name[cat]);
-    }
-
-    /* Source location (compiler internals, not user source) */
-    if (g_cpx_log.show_location && src_file) {
-        if (color)
-            fprintf(out, "%s%s:%d%s ", A_GRAY, basename_of(src_file), src_line, A_RESET);
-        else
-            fprintf(out, "%s:%d ", basename_of(src_file), src_line);
-        (void)src_func; /* available but omitted for brevity; add if needed */
+            fprintf(out, "%-8s > ", s_cat_name[cat]);
     }
 
     /* Message */
+    if (color && level >= CPX_LOG_ERROR) fprintf(out, A_BOLD);
     fputs(msg, out);
+    if (color) fprintf(out, A_RESET);
     fputc('\n', out);
     fflush(out);
 }

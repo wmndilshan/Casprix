@@ -55,6 +55,7 @@ typedef struct {
     int             max_errors;
     bool            diag_no_color;
     bool            perf_trace;
+    bool            compact_output;
     DiagSeverity    min_severity;
 } CompilerConfig;
 

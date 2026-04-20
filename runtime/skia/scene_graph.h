@@ -213,6 +213,10 @@ struct SGNode {
     float min_width, min_height;  /* Minimum size constraints */
     float max_width, max_height;  /* Maximum size constraints (-1 = none) */
 
+    uint32_t layout_version;      /* Bumped when this node is layout-dirtied */
+    int      dirty_rect_valid;
+    SGRect   dirty_rect;          /* Unioned invalid rect in local space */
+
     /* State */
     uint32_t flags;               /* SG_DIRTY_* | SG_VISIBLE | ... */
     int z_index;                  /* Rendering order (higher = on top) */
@@ -264,6 +268,17 @@ void sg_node_mark_paint_dirty(SGNode* node);
 void sg_node_clear_dirty(SGNode* node);
 int  sg_node_is_dirty(SGNode* node, uint32_t flags);
 
+/* Aliases / helpers for dirty-region workflow */
+void     sg_mark_dirty(SGNode* node);
+void     sg_mark_dirty_rect(SGNode* node, SGRect rect);
+int      sg_is_subtree_dirty(const SGNode* node);
+void     sg_clear_dirty(SGNode* node);
+void     sg_clear_dirty_recursive(SGNode* root);
+
+/* Debug: number of nodes that executed paint body in last sg_render_dirty_only */
+uint32_t sg_debug_paint_node_count(void);
+void     sg_debug_reset_paint_node_count(void);
+
 /* ========================================================================
  * Style Helpers
  * ======================================================================== */
@@ -288,6 +303,9 @@ void sg_render(SGNode* root, SkiaCanvas canvas);
 
 /* Render only dirty nodes (partial redraw) */
 void sg_render_dirty(SGNode* root, SkiaCanvas canvas);
+
+/* Selective repaint: counts painted nodes via sg_debug_paint_node_count */
+void sg_render_dirty_only(SGNode* root, SkiaCanvas canvas);
 
 /* ========================================================================
  * Hit Testing

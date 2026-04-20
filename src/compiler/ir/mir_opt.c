@@ -38,7 +38,7 @@ static MirInst* find_def(MirFunction* func, MirValueId val) {
  * Helper: count uses of a value
  * ================================================================ */
 
-static bool value_used_in_inst(MirInst* inst, MirValueId val) {
+bool value_used_in_inst(MirInst* inst, MirValueId val) {
     switch (inst->opcode) {
         case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
         case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
