@@ -78,6 +78,30 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/demo_http_server.c")
     )
 endif()
 
+# ── MIR regex compiler test ─────────────────────────────────────────────────
+# Links only the MIR subsystem (no lexer/parser/sema) to keep the test focused
+# on the regex-to-MIR pipeline. See tests/compiler/test_mir_regex.c.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_mir_regex.c")
+    add_executable(test_mir_regex
+        compiler/test_mir_regex.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_regex.c
+    )
+    target_include_directories(test_mir_regex PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(NAME test_mir_regex COMMAND test_mir_regex)
+endif()
+
 # ── Compiler integration tests ───────────────────────────────────────────────
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_lang_abi.c")
     add_executable(test_lang_abi test_lang_abi.c)

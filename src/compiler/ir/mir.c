@@ -386,6 +386,15 @@ MirFunction* mir_module_add_function(MirModule* module, const char* name,
     func->is_constexpr = false;
     func->is_extern = false;
 
+    /* Value type table — initial capacity.  Must be initialised BEFORE
+     * `mir_function_new_value` is ever called for this function (e.g.
+     * for parameter value IDs below); otherwise those entries get
+     * written into a zero-sized table and then silently clobbered when
+     * the table is replaced here. */
+    func->value_type_capacity = 64;
+    func->value_types = (MirType**)mir_arena_alloc(module->arena,
+                         func->value_type_capacity * sizeof(MirType*));
+
     /* Copy params */
     if (n_params > 0) {
         func->params = (MirParam*)mir_arena_alloc(module->arena,
@@ -398,11 +407,6 @@ MirFunction* mir_module_add_function(MirModule* module, const char* name,
     } else {
         func->params = NULL;
     }
-
-    /* Value type table — initial capacity */
-    func->value_type_capacity = 64;
-    func->value_types = (MirType**)mir_arena_alloc(module->arena,
-                         func->value_type_capacity * sizeof(MirType*));
 
     /* Link into module's function list */
     func->next_func = module->func_list;
