@@ -8,6 +8,7 @@
 #include "frame_loop.h"
 #include "layout.h"
 #include "style.h"
+#include "widgets.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -218,6 +219,11 @@ void sg_app_run(SGApp* app) {
             app->on_frame(app->user_data, (float)app->dt);
         }
 
+        /* 3.5. Tick widget-local state such as caret blinking. */
+        if (app->root && widget_tick_tree(app->root, (float)app->dt)) {
+            app->needs_repaint = 1;
+        }
+
         /* 4. Layout if needed */
         if (app->root && (app->needs_layout || sg_layout_needs_update(app->root))) {
             sg_layout_compute(app->root, (float)app->width, (float)app->height);
@@ -235,7 +241,7 @@ void sg_app_run(SGApp* app) {
             SkiaCanvas canvas = skia_window_get_canvas(app->window);
             if (canvas) {
                 /* Clear background */
-                skia_canvas_clear(canvas, 0xFFF5F5F5); /* Light gray */
+                skia_canvas_clear(canvas, SG_COLOR_BACKGROUND);
 
                 /* Render scene graph */
                 if (app->root) {

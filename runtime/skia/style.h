@@ -21,22 +21,32 @@ extern "C" {
  * Predefined Color Palette
  * ======================================================================== */
 
-/* Material Design colors */
-#define SG_COLOR_PRIMARY      0xFF4285F4   /* Google Blue */
-#define SG_COLOR_PRIMARY_DARK 0xFF3367D6
-#define SG_COLOR_ACCENT       0xFFFBBC05   /* Google Yellow */
-#define SG_COLOR_SUCCESS      0xFF34A853   /* Google Green */
-#define SG_COLOR_ERROR        0xFFEA4335   /* Google Red */
-#define SG_COLOR_WARNING      0xFFFF9800
-#define SG_COLOR_INFO         0xFF2196F3
+/* Modern default palette */
+#define SG_COLOR_PRIMARY         0xFF3B82F6
+#define SG_COLOR_PRIMARY_DARK    0xFF2563EB
+#define SG_COLOR_PRIMARY_SOFT    0xFFEFF6FF
+#define SG_COLOR_ACCENT          0xFF14B8A6
+#define SG_COLOR_SUCCESS         0xFF10B981
+#define SG_COLOR_ERROR           0xFFEF4444
+#define SG_COLOR_WARNING         0xFFF59E0B
+#define SG_COLOR_INFO            0xFF0EA5E9
 
 /* Neutral colors */
-#define SG_COLOR_BACKGROUND   0xFFF5F5F5
-#define SG_COLOR_SURFACE      0xFFFFFFFF
-#define SG_COLOR_TEXT         0xFF212121
-#define SG_COLOR_TEXT_SECONDARY 0xFF757575
-#define SG_COLOR_DIVIDER      0xFFBDBDBD
-#define SG_COLOR_DISABLED     0xFF9E9E9E
+#define SG_COLOR_BACKGROUND      0xFFF3F6FA
+#define SG_COLOR_SURFACE         0xFFFFFFFF
+#define SG_COLOR_SURFACE_ALT     0xFFF8FBFE
+#define SG_COLOR_TEXT            0xFF1F2937
+#define SG_COLOR_TEXT_SECONDARY  0xFF6B7280
+#define SG_COLOR_TEXT_SOFT       0xFF94A3B8
+#define SG_COLOR_TEXT_ON_DARK    0xFFF8FAFC
+#define SG_COLOR_DIVIDER         0xFFD6DEE8
+#define SG_COLOR_BORDER          0xFFD6DEE8
+#define SG_COLOR_BORDER_STRONG   0xFFB8C5D6
+#define SG_COLOR_DISABLED        0xFF94A3B8
+#define SG_COLOR_DISABLED_SURFACE 0xFFE2E8F0
+#define SG_COLOR_FOCUS           0xFF60A5FA
+#define SG_COLOR_SIDEBAR         0xFF1F2937
+#define SG_COLOR_SIDEBAR_ALT     0xFF111827
 
 /* ========================================================================
  * Color Utilities
@@ -88,6 +98,21 @@ SkiaShader sg_gradient_two_color(SGRect bounds, float angle,
 /* ========================================================================
  * Themed Styles (apply to nodes)
  * ======================================================================== */
+
+/* Application root shell */
+void sg_style_app_root(SGNode* node);
+
+/* Panel surface: bright card-like container */
+void sg_style_panel(SGNode* node);
+
+/* Alternate panel surface for subtle contrast */
+void sg_style_panel_alt(SGNode* node);
+
+/* Toolbar surface */
+void sg_style_toolbar(SGNode* node);
+
+/* Dark navigation/sidebar surface */
+void sg_style_sidebar(SGNode* node);
 
 /* Card: white background, rounded corners, shadow */
 void sg_style_card(SGNode* node);

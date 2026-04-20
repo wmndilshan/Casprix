@@ -296,6 +296,10 @@ void sg_render_dirty(SGNode* root, SkiaCanvas canvas);
 /* Find deepest interactive node at (x,y) in window coordinates */
 SGNode* sg_hit_test(SGNode* root, float x, float y);
 
+/* Convert a window-space point into coordinates relative to node bounds. */
+int sg_node_world_to_local(SGNode* node, float world_x, float world_y,
+                           float* local_x, float* local_y);
+
 /* Check if a point is inside a node's bounds */
 int sg_point_in_node(SGNode* node, float x, float y);
 

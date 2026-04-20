@@ -1,0 +1,7 @@
+import "lib/skia/ui"
+
+func main() -> int {
+    let app = new App("Smoke", 320, 240)
+    app.destroy()
+    return 0
+}

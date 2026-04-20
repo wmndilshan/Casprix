@@ -133,6 +133,11 @@ extern func sg_style_set_opacity(node: i64, opacity: float) -> void
 // Scene Graph — Themed Styles
 // ========================================================================
 
+extern func sg_style_app_root(node: i64) -> void
+extern func sg_style_panel(node: i64) -> void
+extern func sg_style_panel_alt(node: i64) -> void
+extern func sg_style_toolbar(node: i64) -> void
+extern func sg_style_sidebar(node: i64) -> void
 extern func sg_style_card(node: i64) -> void
 extern func sg_style_outlined(node: i64, border_color: i64, width: float) -> void
 extern func sg_style_elevated(node: i64, elevation: i64) -> void

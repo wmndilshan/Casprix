@@ -331,6 +331,14 @@ void widget_tabpanel_set_active(SGNode* root, int index);
 /* Free widget state attached to a node. Called automatically by sg_node_destroy. */
 void widget_cleanup(SGNode* node);
 
+/* Optional per-widget custom rendering hook.
+ * Returns non-zero if the widget fully rendered its own content. */
+int widget_render_override(SkiaCanvas canvas, SGNode* node);
+
+/* Tick widget-local animation/state such as caret blinking.
+ * Returns non-zero when a repaint is needed. */
+int widget_tick_tree(SGNode* node, float dt);
+
 #ifdef __cplusplus
 }
 #endif

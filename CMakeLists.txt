@@ -40,6 +40,16 @@ option(ENABLE_DEBUG_LOGGING  "Compile with DEBUG_LOGGING defined"    OFF)
 option(ENABLE_SKIA_GUI       "Enable Skia-based GUI framework"       OFF)
 option(SKIA_GUI_ENABLE_ASAN  "Enable AddressSanitizer for skia_gui consumers" OFF)
 option(SKIA_GUI_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for skia_gui consumers" OFF)
+option(CASPRIX_ENABLE_NINJA_AUTOREGEN
+       "Allow Ninja to rerun CMake automatically during builds"
+       OFF)
+
+# CMake regeneration has been flaky on the Windows/Ninja build tree,
+# leaving behind .tmp build files and stalling otherwise simple target builds.
+# Prefer explicit reconfigure steps over auto-regeneration there.
+if(WIN32 AND CMAKE_GENERATOR MATCHES "Ninja" AND NOT CASPRIX_ENABLE_NINJA_AUTOREGEN)
+    set(CMAKE_SUPPRESS_REGENERATION ON)
+endif()
 
 # NASM — optional, needed for SIMD assembly kernels
 include(CheckLanguage)

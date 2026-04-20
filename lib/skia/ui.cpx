@@ -3,31 +3,6 @@
 // classes wrapping the low-level extern functions from skia.cpx.
 
 import "lib/skia/skia"
-import "lib/stdlib/Exceptions"
-
-class SkiaUIException extends Exception {
-    func new(msg: string) -> SkiaUIException {
-        this.message = msg
-        this.errorCode = 4100
-        return this
-    }
-}
-
-class SkiaValidationException extends IllegalArgumentException {
-    func new(msg: string) -> SkiaValidationException {
-        this.message = msg
-        this.errorCode = 4101
-        return this
-    }
-}
-
-class SkiaInitializationException extends IllegalStateException {
-    func new(msg: string) -> SkiaInitializationException {
-        this.message = msg
-        this.errorCode = 4102
-        return this
-    }
-}
 
 class Alignment {
     value: i64;
@@ -51,14 +26,14 @@ class ImageFit {
     }
 }
 
-let ALIGN_START = new Alignment(SG_ALIGN_START, "start")
-let ALIGN_CENTER = new Alignment(SG_ALIGN_CENTER, "center")
-let ALIGN_END = new Alignment(SG_ALIGN_END, "end")
-let ALIGN_STRETCH = new Alignment(SG_ALIGN_STRETCH, "stretch")
+let ALIGN_START = new Alignment(0, "start")
+let ALIGN_CENTER = new Alignment(1, "center")
+let ALIGN_END = new Alignment(2, "end")
+let ALIGN_STRETCH = new Alignment(3, "stretch")
 
-let IMAGE_FIT_FILL = new ImageFit(SG_IMAGE_FIT_FILL, "fill")
-let IMAGE_FIT_CONTAIN = new ImageFit(SG_IMAGE_FIT_CONTAIN, "contain")
-let IMAGE_FIT_COVER = new ImageFit(SG_IMAGE_FIT_COVER, "cover")
+let IMAGE_FIT_FILL = new ImageFit(0, "fill")
+let IMAGE_FIT_CONTAIN = new ImageFit(1, "contain")
+let IMAGE_FIT_COVER = new ImageFit(2, "cover")
 
 func ui_bool_to_i64(value: bool) -> i64 {
     if value {
@@ -69,74 +44,175 @@ func ui_bool_to_i64(value: bool) -> i64 {
 
 func ui_require(condition: bool, message: string) -> void {
     if !condition {
-        throw new SkiaValidationException(message)
+        print(message)
     }
 }
 
 func ui_require_state(condition: bool, message: string) -> void {
     if !condition {
-        throw new SkiaInitializationException(message)
+        print(message)
     }
 }
 
 func ui_require_handle(handle: i64, context: string) -> void {
     if handle == 0 {
-        throw new SkiaUIException(context + " is not initialized or has already been destroyed")
+        print(context)
+        print(" is not initialized or has already been destroyed")
     }
 }
 
 func ui_require_non_empty(value: string, context: string) -> void {
     if value == "" {
-        throw new SkiaValidationException(context + " must not be empty")
+        print(context)
+        print(" must not be empty")
     }
 }
 
 func ui_require_non_negative(value: float, context: string) -> void {
     if value < 0.0 {
-        throw new SkiaValidationException(context + " must be >= 0")
+        print(context)
+        print(" must be >= 0")
     }
 }
 
 func ui_require_positive_i64(value: i64, context: string) -> void {
     if value <= 0 {
-        throw new SkiaValidationException(context + " must be > 0")
+        print(context)
+        print(" must be > 0")
     }
 }
 
 func ui_require_non_negative_i64(value: i64, context: string) -> void {
     if value < 0 {
-        throw new SkiaValidationException(context + " must be >= 0")
+        print(context)
+        print(" must be >= 0")
     }
 }
 
 func ui_require_range(min_val: float, max_val: float, context: string) -> void {
     if max_val < min_val {
-        throw new SkiaValidationException(context + " max must be greater than or equal to min")
+        print(context)
+        print(" max must be greater than or equal to min")
     }
 }
 
 func ui_require_value_in_range(value: float, min_val: float, max_val: float, context: string) -> void {
     if value < min_val || value > max_val {
-        throw new SkiaValidationException(context + " must be between min and max")
+        print(context)
+        print(" must be between min and max")
     }
 }
 
 func create_font(family: string, size: float) -> i64 {
     ui_require_non_empty(family, "Font family")
     ui_require(size > 0.0, "Font size must be > 0")
-
-    let font = skia_font_create(family, size)
-    ui_require_state(font != 0, "Failed to create font '" + family + "'")
-    return font
+    return skia_font_create(family, size)
 }
 
 func create_font_from_file(path: string, size: float) -> i64 {
     ui_require_non_empty(path, "Font file path")
     ui_require(size > 0.0, "Font size must be > 0")
+    return skia_font_create_from_file(path, size)
+}
 
-    let font = skia_font_create_from_file(path, size)
-    ui_require_state(font != 0, "Failed to create font from file '" + path + "'")
-    return font
+let JAVAFX_BG_APP = 0xFFF3F6FA
+let JAVAFX_BG_PANEL = 0xFFFFFFFF
+let JAVAFX_BG_PANEL_ALT = 0xFFF8FBFE
+let JAVAFX_BG_SIDEBAR = 0xFF1F2937
+let JAVAFX_BG_SIDEBAR_ALT = 0xFF111827
+let JAVAFX_BG_ACCENT = 0xFF3B82F6
+let JAVAFX_BG_ACCENT_HOVER = 0xFF60A5FA
+let JAVAFX_BG_ACCENT_PRESS = 0xFF2563EB
+let JAVAFX_BG_GHOST = 0xFFF1F5F9
+let JAVAFX_BG_SUCCESS = 0xFF10B981
+let JAVAFX_BG_WARNING = 0xFFF59E0B
+let JAVAFX_BORDER = 0xFFD6DEE8
+let JAVAFX_BORDER_STRONG = 0xFFB8C5D6
+let JAVAFX_TEXT = 0xFF1F2937
+let JAVAFX_TEXT_MUTED = 0xFF6B7280
+let JAVAFX_TEXT_SOFT = 0xFF94A3B8
+let JAVAFX_TEXT_ON_DARK = 0xFFF8FAFC
+let JAVAFX_SHADOW = 0x14111827
+let JAVAFX_SHADOW_SOFT = 0x0F111827
+
+func javafx_style_root(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX root")
+    sg_style_app_root(handle)
+}
+
+func javafx_style_panel(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX panel")
+    sg_style_panel(handle)
+}
+
+func javafx_style_toolbar(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX toolbar")
+    sg_style_toolbar(handle)
+}
+
+func javafx_style_sidebar(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX sidebar")
+    sg_style_sidebar(handle)
+}
+
+func javafx_style_card(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX card")
+    sg_style_card(handle)
+}
+
+func javafx_style_card_alt(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX alternate card")
+    sg_style_panel_alt(handle)
+}
+
+func javafx_style_primary_button(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX primary button")
+    widget_button_set_colors(handle, JAVAFX_BG_ACCENT, JAVAFX_BG_ACCENT_HOVER, JAVAFX_BG_ACCENT_PRESS, 0xFFFFFFFF)
+    sg_style_set_border(handle, sg_color_with_alpha(0xFF1D4ED8, 100), 1.0, 14.0)
+    sg_style_set_shadow(handle, 0.0, 10.0, 22.0, 0x1D3B82F6)
+    sg_node_set_min_size(handle, 128.0, 44.0)
+}
+
+func javafx_style_secondary_button(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX secondary button")
+    widget_button_set_colors(handle, JAVAFX_BG_GHOST, 0xFFE2E8F0, 0xFFD6DEE8, JAVAFX_TEXT)
+    sg_style_set_border(handle, JAVAFX_BORDER, 1.0, 14.0)
+    sg_style_set_shadow(handle, 0.0, 6.0, 18.0, 0x08111827)
+    sg_node_set_min_size(handle, 112.0, 44.0)
+}
+
+func javafx_style_sidebar_button(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX sidebar button")
+    widget_button_set_colors(handle, 0xFF273244, 0xFF334155, 0xFF1E293B, JAVAFX_TEXT_ON_DARK)
+    sg_style_set_border(handle, 0xFF3B475A, 1.0, 14.0)
+    sg_style_set_shadow(handle, 0.0, 8.0, 18.0, 0x12000000)
+    sg_node_set_min_size(handle, 180.0, 42.0)
+}
+
+func javafx_style_input(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX input")
+    sg_style_set_background(handle, JAVAFX_BG_PANEL)
+    sg_style_set_border(handle, JAVAFX_BORDER_STRONG, 1.0, 14.0)
+    sg_style_set_shadow(handle, 0.0, 6.0, 18.0, 0x08111827)
+    sg_node_set_min_size(handle, 220.0, 46.0)
+}
+
+func javafx_style_progress(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX progress")
+    widget_progress_set_colors(handle, JAVAFX_BG_ACCENT, 0xFFE5ECF5)
+}
+
+func javafx_style_separator(handle: i64) -> void {
+    ui_require_handle(handle, "JavaFX separator")
+    sg_style_set_background(handle, JAVAFX_BORDER)
+}
+
+func javafx_add_text(parent: i64, content: string, font: i64, color: i64) -> i64 {
+    ui_require_handle(parent, "JavaFX text parent")
+    ui_require_handle(font, "JavaFX text font")
+    let label = new Text(content, font, color)
+    sg_node_add_child(parent, label.handle)
+    return label.handle
 }
 
 // ========================================================================
@@ -156,12 +232,11 @@ class App {
         this.handle = sg_app_create(title, width, height)
         ui_require_state(this.handle != 0, "Failed to initialize the Skia renderer")
 
-        try {
-            this.font_handle = create_font("Segoe UI", 14.0)
-        } catch (ex: Exception) {
+        this.font_handle = skia_font_create("Segoe UI", 14.0)
+        if this.font_handle == 0 {
             sg_app_destroy(this.handle)
             this.handle = 0
-            throw new SkiaInitializationException("Skia renderer started, but the default UI font could not be created")
+            print("Skia renderer started, but the default UI font could not be created")
         }
     }
 
@@ -338,6 +413,19 @@ class Row {
         sg_style_set_background(this.handle, color)
     }
 
+    func set_border(color: i64, width: float, radius: float) -> void {
+        ui_require_handle(this.handle, "Row")
+        ui_require_non_negative(width, "Row border width")
+        ui_require_non_negative(radius, "Row border radius")
+        sg_style_set_border(this.handle, color, width, radius)
+    }
+
+    func set_shadow(ox: float, oy: float, blur: float, color: i64) -> void {
+        ui_require_handle(this.handle, "Row")
+        ui_require_non_negative(blur, "Row shadow blur")
+        sg_style_set_shadow(this.handle, ox, oy, blur, color)
+    }
+
     func set_min_size(w: float, h: float) -> void {
         ui_require_handle(this.handle, "Row")
         ui_require_non_negative(w, "Row minimum width")
@@ -388,9 +476,28 @@ class Stack {
         sg_node_add_child(this.handle, child)
     }
 
+    func set_padding(p: float) -> void {
+        ui_require_handle(this.handle, "Stack")
+        ui_require_non_negative(p, "Stack padding")
+        sg_style_set_padding_uniform(this.handle, p)
+    }
+
     func set_background(color: i64) -> void {
         ui_require_handle(this.handle, "Stack")
         sg_style_set_background(this.handle, color)
+    }
+
+    func set_border(color: i64, width: float, radius: float) -> void {
+        ui_require_handle(this.handle, "Stack")
+        ui_require_non_negative(width, "Stack border width")
+        ui_require_non_negative(radius, "Stack border radius")
+        sg_style_set_border(this.handle, color, width, radius)
+    }
+
+    func set_shadow(ox: float, oy: float, blur: float, color: i64) -> void {
+        ui_require_handle(this.handle, "Stack")
+        ui_require_non_negative(blur, "Stack shadow blur")
+        sg_style_set_shadow(this.handle, ox, oy, blur, color)
     }
 
     func set_min_size(w: float, h: float) -> void {
@@ -477,6 +584,17 @@ class Button {
         sg_style_set_padding_uniform(this.handle, p)
     }
 
+    func set_colors(normal: i64, hover: i64, press: i64, text: i64) -> void {
+        ui_require_handle(this.handle, "Button")
+        widget_button_set_colors(this.handle, normal, hover, press, text)
+    }
+
+    func set_shadow(ox: float, oy: float, blur: float, color: i64) -> void {
+        ui_require_handle(this.handle, "Button")
+        ui_require_non_negative(blur, "Button shadow blur")
+        sg_style_set_shadow(this.handle, ox, oy, blur, color)
+    }
+
     func set_enabled(e: bool) -> void {
         ui_require_handle(this.handle, "Button")
         widget_button_set_enabled(this.handle, ui_bool_to_i64(e))
@@ -549,6 +667,19 @@ class TextInput {
     func set_background(color: i64) -> void {
         ui_require_handle(this.handle, "TextInput")
         sg_style_set_background(this.handle, color)
+    }
+
+    func set_border(color: i64, width: float, radius: float) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        ui_require_non_negative(width, "TextInput border width")
+        ui_require_non_negative(radius, "TextInput border radius")
+        sg_style_set_border(this.handle, color, width, radius)
+    }
+
+    func set_shadow(ox: float, oy: float, blur: float, color: i64) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        ui_require_non_negative(blur, "TextInput shadow blur")
+        sg_style_set_shadow(this.handle, ox, oy, blur, color)
     }
 
     func destroy() -> void {
@@ -705,6 +836,18 @@ class Card {
         ui_require_handle(this.handle, "Card")
         ui_require_non_negative(p, "Card padding")
         sg_style_set_padding_uniform(this.handle, p)
+    }
+
+    func set_background(color: i64) -> void {
+        ui_require_handle(this.handle, "Card")
+        sg_style_set_background(this.handle, color)
+    }
+
+    func set_border(color: i64, width: float, radius: float) -> void {
+        ui_require_handle(this.handle, "Card")
+        ui_require_non_negative(width, "Card border width")
+        ui_require_non_negative(radius, "Card border radius")
+        sg_style_set_border(this.handle, color, width, radius)
     }
 
     func set_elevation(e: i64) -> void {

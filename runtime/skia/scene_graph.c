@@ -6,6 +6,7 @@
 
 #include "scene_graph.h"
 #include "widgets.h"
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -516,6 +517,7 @@ static void sg_render_content(SkiaCanvas canvas, SGNode* node) {
 
     switch (node->type) {
         case SG_NODE_TEXT: {
+            if (widget_render_override(canvas, node)) break;
             if (!node->data.text.text || !node->data.text.font) break;
             skia_paint_set_color(g_text_paint, node->data.text.color);
 
@@ -623,6 +625,95 @@ static WidgetType sg_node_widget_type(const SGNode* node) {
     return *(const WidgetType*)node->user_data;
 }
 
+static int sg_build_path_to_node(const SGNode* node, const SGNode** path, int max_depth) {
+    int depth = 0;
+    const SGNode* current = node;
+
+    while (current && depth < max_depth) {
+        path[depth++] = current;
+        current = current->parent;
+    }
+
+    for (int i = 0; i < depth / 2; i++) {
+        const SGNode* tmp = path[i];
+        path[i] = path[depth - 1 - i];
+        path[depth - 1 - i] = tmp;
+    }
+
+    return depth;
+}
+
+static int sg_world_to_node_space(const SGNode* node, float world_x, float world_y,
+                                  float* node_x, float* node_y) {
+    const SGNode* path[64];
+    int depth;
+    float x = world_x;
+    float y = world_y;
+    const float epsilon = 1e-6f;
+
+    if (!node || !node_x || !node_y) return 0;
+
+    depth = sg_build_path_to_node(node, path, 64);
+    if (depth <= 0) return 0;
+
+    for (int i = 0; i < depth; i++) {
+        const SGNode* current = path[i];
+        const SGTransform* t = &current->transform;
+
+        if (fabsf(t->tx) > epsilon || fabsf(t->ty) > epsilon) {
+            x -= t->tx;
+            y -= t->ty;
+        }
+
+        if (fabsf(t->sx - 1.0f) > epsilon || fabsf(t->sy - 1.0f) > epsilon) {
+            if (fabsf(t->sx) <= epsilon || fabsf(t->sy) <= epsilon) {
+                return 0;
+            }
+            x /= t->sx;
+            y /= t->sy;
+        }
+
+        if (fabsf(t->rotation) > epsilon) {
+            const float radians = -t->rotation * (3.14159265358979323846f / 180.0f);
+            const float cx = current->bounds.x + current->bounds.w * 0.5f;
+            const float cy = current->bounds.y + current->bounds.h * 0.5f;
+            const float dx = x - cx;
+            const float dy = y - cy;
+            const float cosine = cosf(radians);
+            const float sine = sinf(radians);
+            x = cx + dx * cosine - dy * sine;
+            y = cy + dx * sine + dy * cosine;
+        }
+    }
+
+    *node_x = x;
+    *node_y = y;
+    return 1;
+}
+
+static SGRect sg_node_child_clip_rect(const SGNode* node) {
+    SGRect clip = { 0, 0, 0, 0 };
+
+    if (!node) return clip;
+
+    clip = node->bounds;
+    if (sg_node_widget_type(node) == WIDGET_SCROLL_VIEW) {
+        clip.x += node->style.padding[3];
+        clip.y += node->style.padding[0];
+        clip.w -= node->style.padding[1] + node->style.padding[3];
+        clip.h -= node->style.padding[0] + node->style.padding[2];
+        if (clip.w < 0.0f) clip.w = 0.0f;
+        if (clip.h < 0.0f) clip.h = 0.0f;
+    }
+
+    return clip;
+}
+
+static int sg_point_in_rect(float x, float y, SGRect rect) {
+    return x >= rect.x && x < rect.x + rect.w &&
+           y >= rect.y && y < rect.y + rect.h;
+}
+
 /* ========================================================================
  * Rendering — Public API
  * ======================================================================== */
@@ -714,23 +805,49 @@ void sg_render_dirty(SGNode* root, SkiaCanvas canvas) {
  * ======================================================================== */
 
 int sg_point_in_node(SGNode* node, float x, float y) {
-    if (!node) return 0;
-    SGRect b = node->bounds;
+    float local_x = 0.0f;
+    float local_y = 0.0f;
 
-    /* Apply parent transforms to get world-space bounds.
-     * For now, use local bounds (assumes no transforms). */
-    return (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+    if (!node) return 0;
+    if (!sg_node_world_to_local(node, x, y, &local_x, &local_y)) return 0;
+
+    return local_x >= 0.0f && local_x < node->bounds.w &&
+           local_y >= 0.0f && local_y < node->bounds.h;
+}
+
+int sg_node_world_to_local(SGNode* node, float world_x, float world_y,
+                           float* local_x, float* local_y) {
+    float node_x = 0.0f;
+    float node_y = 0.0f;
+
+    if (!node || !local_x || !local_y) return 0;
+    if (!sg_world_to_node_space(node, world_x, world_y, &node_x, &node_y)) return 0;
+
+    *local_x = node_x - node->bounds.x;
+    *local_y = node_y - node->bounds.y;
+    return 1;
 }
 
 static SGNode* sg_hit_test_node(SGNode* node, float x, float y) {
+    float node_x = 0.0f;
+    float node_y = 0.0f;
+    int inside_child_clip = 1;
+
     if (!node || !(node->flags & SG_VISIBLE)) return NULL;
+    if (!sg_world_to_node_space(node, x, y, &node_x, &node_y)) return NULL;
+
+    if (node->flags & SG_CLIP_CHILDREN) {
+        inside_child_clip = sg_point_in_rect(node_x, node_y, sg_node_child_clip_rect(node));
+    }
 
     /* Test children in reverse order (last child = top of z-stack) */
-    SGNode* child = node->last_child;
-    while (child) {
-        SGNode* hit = sg_hit_test_node(child, x, y);
-        if (hit) return hit;
-        child = child->prev_sibling;
+    if (inside_child_clip) {
+        SGNode* child = node->last_child;
+        while (child) {
+            SGNode* hit = sg_hit_test_node(child, x, y);
+            if (hit) return hit;
+            child = child->prev_sibling;
+        }
     }
 
     /* Test this node if interactive */
