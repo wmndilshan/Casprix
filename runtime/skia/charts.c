@@ -93,6 +93,14 @@ static void line_chart_custom_draw(SkiaCanvas c, float w, float h, void* data) {
     skia_paint_destroy(paint);
 }
 
+static void line_chart_destroy_state(void* data) {
+    LineChartState* state = (LineChartState*)data;
+
+    if (!state) return;
+    free(state->values);
+    free(state);
+}
+
 SGNode* widget_line_chart(float* data, int count, float min_val, float max_val) {
     LineChartState* state = (LineChartState*)calloc(1, sizeof(LineChartState));
     state->values = (float*)malloc(count * sizeof(float));
@@ -115,6 +123,7 @@ SGNode* widget_line_chart(float* data, int count, float min_val, float max_val) 
     canvas->style.padding[1] = 10;
     canvas->style.padding[2] = 10;
     canvas->style.padding[3] = 10;
+    widget_canvas_set_data_destructor(canvas, line_chart_destroy_state);
     
     return canvas;
 }
@@ -191,10 +200,25 @@ static void bar_chart_custom_draw(SkiaCanvas c, float w, float h, void* data) {
             SkiaFont font = skia_font_create("Arial", 10.0f);
             skia_paint_set_color(paint, state->text_color);
             skia_canvas_draw_text(c, state->labels[i], x + bar_width/2, h + 15, font, paint);
+            skia_font_destroy(font);
         }
     }
     
     skia_paint_destroy(paint);
+}
+
+static void bar_chart_destroy_state(void* data) {
+    BarChartState* state = (BarChartState*)data;
+
+    if (!state) return;
+    free(state->values);
+    if (state->labels) {
+        for (int i = 0; i < state->count; i++) {
+            free(state->labels[i]);
+        }
+        free(state->labels);
+    }
+    free(state);
 }
 
 SGNode* widget_bar_chart(float* values, const char** labels, int count) {
@@ -231,6 +255,7 @@ SGNode* widget_bar_chart(float* values, const char** labels, int count) {
     canvas->style.padding[1] = 10;
     canvas->style.padding[2] = 30;
     canvas->style.padding[3] = 10;
+    widget_canvas_set_data_destructor(canvas, bar_chart_destroy_state);
     
     return canvas;
 }
@@ -317,6 +342,21 @@ static void pie_chart_custom_draw(SkiaCanvas c, float w, float h, void* data) {
     skia_paint_destroy(paint);
 }
 
+static void pie_chart_destroy_state(void* data) {
+    PieChartState* state = (PieChartState*)data;
+
+    if (!state) return;
+    free(state->values);
+    if (state->labels) {
+        for (int i = 0; i < state->count; i++) {
+            free(state->labels[i]);
+        }
+        free(state->labels);
+    }
+    free(state->colors);
+    free(state);
+}
+
 SGNode* widget_pie_chart(float* values, const char** labels, int count) {
     PieChartState* state = (PieChartState*)calloc(1, sizeof(PieChartState));
     state->values = (float*)malloc(count * sizeof(float));
@@ -353,6 +393,7 @@ SGNode* widget_pie_chart(float* values, const char** labels, int count) {
     canvas->style.padding[1] = 10;
     canvas->style.padding[2] = 10;
     canvas->style.padding[3] = 10;
+    widget_canvas_set_data_destructor(canvas, pie_chart_destroy_state);
     
     return canvas;
 }

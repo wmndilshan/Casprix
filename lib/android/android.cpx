@@ -147,10 +147,10 @@ class AndroidApp {
         this.handle        = android_app_create(name, width, height)
         this.nav_handle    = android_app_get_nav(this.handle)
         this.sg_app_handle = android_app_get_sg_app(this.handle)
-        this.font          = skia_font_create("Segoe UI", 14.0)
-        this.font_bold     = skia_font_create("Segoe UI", 14.0)
-        this.font_small    = skia_font_create("Segoe UI", 12.0)
-        this.font_title    = skia_font_create("Segoe UI", 18.0)
+        this.font          = create_font("Segoe UI", 14.0)
+        this.font_bold     = create_font("Segoe UI", 14.0)
+        this.font_small    = create_font("Segoe UI", 12.0)
+        this.font_title    = create_font("Segoe UI", 18.0)
         skia_font_set_bold(this.font_bold, 1)
         skia_font_set_bold(this.font_title, 1)
     }
@@ -669,17 +669,17 @@ class Avatar {
 class Switch {
     handle: i64;
 
-    func new(label: string, font: i64, initial: i64) -> void {
+    func new(label: string, font: i64, initial: bool) -> void {
         let chk = new Checkbox(label, font, initial)
         this.handle = chk.handle
     }
 
-    func is_on() -> i64 {
-        return widget_checkbox_is_checked(this.handle)
+    func is_on() -> bool {
+        return widget_checkbox_is_checked(this.handle) != 0
     }
 
-    func set_on(val: i64) -> void {
-        widget_checkbox_set_checked(this.handle, val)
+    func set_on(val: bool) -> void {
+        widget_checkbox_set_checked(this.handle, ui_bool_to_i64(val))
     }
 
     func set_on_change(callback: i64, ctx: i64) -> void {
@@ -731,7 +731,7 @@ class Dialog {
         let col = new Column(8.0)
         let hdr = new Text(title, font_title, MD_ON_SURFACE)
         col.add(hdr.handle)
-        let sep = new Separator(1, MD_OUTLINE_VARIANT, 1.0)
+        let sep = new Separator(true, MD_OUTLINE_VARIANT, 1.0)
         col.add(sep.handle)
 
         card.add(col.handle)
@@ -773,7 +773,7 @@ class Screen {
              font_title: i64, font: i64) -> void {
         let root = new Column(0.0)
         root.set_background(MD_BACKGROUND)
-        root.set_align_items(3)
+        root.set_align_items(ALIGN_STRETCH)
 
         // AppBar
         let bar = new AppBar(title, font_title, font, show_back, nav)
@@ -784,7 +784,7 @@ class Screen {
         scroll.set_background(MD_BACKGROUND)
         sg_node_set_min_size(scroll.handle, 0.0, 0.0)
         scroll.set_flex_grow(1.0)
-        scroll.set_align_self(3)
+        scroll.set_align_self(ALIGN_STRETCH)
 
         let content_col = new Column(12.0)
         content_col.set_background(MD_BACKGROUND)

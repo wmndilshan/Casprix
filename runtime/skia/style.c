@@ -7,6 +7,11 @@
 #include <math.h>
 #include <stdlib.h>
 
+static void sg_style_mark_changed(SGNode* node, int affects_layout) {
+    if (!node) return;
+    sg_node_mark_dirty(node, SG_DIRTY_PAINT | (affects_layout ? SG_DIRTY_LAYOUT : 0));
+}
+
 /* ========================================================================
  * Color Utilities
  * ======================================================================== */
@@ -161,18 +166,94 @@ SkiaShader sg_gradient_two_color(SGRect bounds, float angle,
  * Themed Styles
  * ======================================================================== */
 
-void sg_style_card(SGNode* node) {
+void sg_style_app_root(SGNode* node) {
+    if (!node) return;
+    node->style.background = SG_COLOR_BACKGROUND;
+    node->style.padding[0] = 24.0f;
+    node->style.padding[1] = 24.0f;
+    node->style.padding[2] = 24.0f;
+    node->style.padding[3] = 24.0f;
+    node->style.border_width = 0.0f;
+    node->style.shadow_blur = 0.0f;
+    node->style.shadow_color = 0;
+    sg_style_mark_changed(node, 1);
+}
+
+void sg_style_panel(SGNode* node) {
     if (!node) return;
     node->style.background = SG_COLOR_SURFACE;
-    node->style.border_radius = 8.0f;
-    node->style.elevation = 2;
-    node->style.shadow_offset_y = 2.0f;
-    node->style.shadow_blur = 4.0f;
-    node->style.shadow_color = 0x33000000;
-    node->style.padding[0] = 16.0f;
-    node->style.padding[1] = 16.0f;
-    node->style.padding[2] = 16.0f;
-    node->style.padding[3] = 16.0f;
+    node->style.border_color = SG_COLOR_BORDER;
+    node->style.border_width = 1.0f;
+    node->style.border_radius = 18.0f;
+    node->style.elevation = 0;
+    node->style.shadow_offset_x = 0.0f;
+    node->style.shadow_offset_y = 14.0f;
+    node->style.shadow_blur = 36.0f;
+    node->style.shadow_color = 0x0F111827;
+    sg_style_mark_changed(node, 0);
+}
+
+void sg_style_panel_alt(SGNode* node) {
+    if (!node) return;
+    node->style.background = SG_COLOR_SURFACE_ALT;
+    node->style.border_color = SG_COLOR_BORDER;
+    node->style.border_width = 1.0f;
+    node->style.border_radius = 18.0f;
+    node->style.elevation = 0;
+    node->style.shadow_offset_x = 0.0f;
+    node->style.shadow_offset_y = 10.0f;
+    node->style.shadow_blur = 22.0f;
+    node->style.shadow_color = 0x0C111827;
+    sg_style_mark_changed(node, 0);
+}
+
+void sg_style_toolbar(SGNode* node) {
+    if (!node) return;
+    node->style.background = SG_COLOR_SURFACE;
+    node->style.border_color = SG_COLOR_BORDER;
+    node->style.border_width = 1.0f;
+    node->style.border_radius = 16.0f;
+    node->style.padding[0] = 18.0f;
+    node->style.padding[1] = 18.0f;
+    node->style.padding[2] = 18.0f;
+    node->style.padding[3] = 18.0f;
+    node->style.elevation = 0;
+    node->style.shadow_offset_x = 0.0f;
+    node->style.shadow_offset_y = 10.0f;
+    node->style.shadow_blur = 28.0f;
+    node->style.shadow_color = 0x0F111827;
+    sg_style_mark_changed(node, 1);
+}
+
+void sg_style_sidebar(SGNode* node) {
+    if (!node) return;
+    node->style.background = SG_COLOR_SIDEBAR;
+    node->style.border_color = SG_COLOR_SIDEBAR_ALT;
+    node->style.border_width = 1.0f;
+    node->style.border_radius = 24.0f;
+    node->style.padding[0] = 22.0f;
+    node->style.padding[1] = 22.0f;
+    node->style.padding[2] = 22.0f;
+    node->style.padding[3] = 22.0f;
+    node->style.elevation = 0;
+    node->style.shadow_offset_x = 0.0f;
+    node->style.shadow_offset_y = 18.0f;
+    node->style.shadow_blur = 44.0f;
+    node->style.shadow_color = 0x22111827;
+    sg_style_mark_changed(node, 1);
+}
+
+void sg_style_card(SGNode* node) {
+    sg_style_panel(node);
+    if (!node) return;
+    node->style.border_radius = 20.0f;
+    node->style.padding[0] = 20.0f;
+    node->style.padding[1] = 20.0f;
+    node->style.padding[2] = 20.0f;
+    node->style.padding[3] = 20.0f;
+    node->style.shadow_offset_y = 12.0f;
+    node->style.shadow_blur = 26.0f;
+    sg_style_mark_changed(node, 1);
 }
 
 void sg_style_outlined(SGNode* node, uint32_t border_color, double width) {
@@ -180,7 +261,8 @@ void sg_style_outlined(SGNode* node, uint32_t border_color, double width) {
     node->style.background = SKIA_COLOR_TRANSPARENT;
     node->style.border_color = border_color;
     node->style.border_width = width;
-    node->style.border_radius = 4.0f;
+    node->style.border_radius = 14.0f;
+    sg_style_mark_changed(node, 0);
 }
 
 void sg_style_elevated(SGNode* node, int elevation) {
@@ -188,11 +270,16 @@ void sg_style_elevated(SGNode* node, int elevation) {
     if (node->style.background == 0) {
         node->style.background = SG_COLOR_SURFACE;
     }
-    node->style.elevation = elevation;
-    node->style.shadow_offset_y = (float)elevation;
-    node->style.shadow_blur = (float)(elevation * 2);
-    node->style.shadow_color = 0x40000000;
-    node->style.border_radius = 4.0f;
+    node->style.border_color = SG_COLOR_BORDER;
+    node->style.border_width = 1.0f;
+    node->style.elevation = 0;
+    node->style.shadow_offset_y = 6.0f + (float)elevation * 2.0f;
+    node->style.shadow_blur = 18.0f + (float)elevation * 4.0f;
+    node->style.shadow_color = 0x140F172A;
+    if (node->style.border_radius < 16.0f) {
+        node->style.border_radius = 16.0f;
+    }
+    sg_style_mark_changed(node, 0);
 }
 
 void sg_style_pill(SGNode* node) {
@@ -201,6 +288,7 @@ void sg_style_pill(SGNode* node) {
      * Since height may not be known yet, use a large value
      * that gets clamped during rendering. */
     node->style.border_radius = 9999.0f;
+    sg_style_mark_changed(node, 0);
 }
 
 /* ========================================================================

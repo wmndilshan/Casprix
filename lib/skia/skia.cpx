@@ -4,6 +4,19 @@
 // passed as opaque i64 values.
 
 // ========================================================================
+// Scene Graph Constants
+// ========================================================================
+
+let SG_ALIGN_START   = 0
+let SG_ALIGN_CENTER  = 1
+let SG_ALIGN_END     = 2
+let SG_ALIGN_STRETCH = 3
+
+let SG_IMAGE_FIT_FILL    = 0
+let SG_IMAGE_FIT_CONTAIN = 1
+let SG_IMAGE_FIT_COVER   = 2
+
+// ========================================================================
 // Color Utilities
 // ========================================================================
 
@@ -120,6 +133,11 @@ extern func sg_style_set_opacity(node: i64, opacity: float) -> void
 // Scene Graph — Themed Styles
 // ========================================================================
 
+extern func sg_style_app_root(node: i64) -> void
+extern func sg_style_panel(node: i64) -> void
+extern func sg_style_panel_alt(node: i64) -> void
+extern func sg_style_toolbar(node: i64) -> void
+extern func sg_style_sidebar(node: i64) -> void
 extern func sg_style_card(node: i64) -> void
 extern func sg_style_outlined(node: i64, border_color: i64, width: float) -> void
 extern func sg_style_elevated(node: i64, elevation: i64) -> void

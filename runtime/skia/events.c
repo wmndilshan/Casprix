@@ -22,6 +22,38 @@
 #define DOUBLE_CLICK_TIME   0.4    /* seconds */
 #define DOUBLE_CLICK_DIST   4.0f   /* pixels */
 
+static SGEventManager* g_active_focus_manager = NULL;
+
+static int sg_node_is_focusable(const SGNode* node) {
+    if (!node) return 0;
+    if (!(node->flags & SG_VISIBLE)) return 0;
+    return (node->flags & SG_INTERACTIVE) != 0;
+}
+
+static void sg_set_mouse_local_coords(SGEvent* event, SGNode* target, float x, float y) {
+    float local_x = 0.0f;
+    float local_y = 0.0f;
+
+    if (!event) return;
+
+    event->data.mouse.x = x;
+    event->data.mouse.y = y;
+
+    if (target && sg_node_world_to_local(target, x, y, &local_x, &local_y)) {
+        event->data.mouse.local_x = local_x;
+        event->data.mouse.local_y = local_y;
+        return;
+    }
+
+    if (target) {
+        event->data.mouse.local_x = x - target->bounds.x;
+        event->data.mouse.local_y = y - target->bounds.y;
+    } else {
+        event->data.mouse.local_x = 0.0f;
+        event->data.mouse.local_y = 0.0f;
+    }
+}
+
 /* ========================================================================
  * Creation / Destruction
  * ======================================================================== */
@@ -32,17 +64,24 @@ SGEventManager* sg_event_manager_create(SGNode* root) {
     mgr->root = root;
     mgr->tab_capacity = 64;
     mgr->tab_order = (SGNode**)calloc(mgr->tab_capacity, sizeof(SGNode*));
+    if (!g_active_focus_manager) {
+        g_active_focus_manager = mgr;
+    }
     return mgr;
 }
 
 void sg_event_manager_destroy(SGEventManager* mgr) {
     if (!mgr) return;
+    if (g_active_focus_manager == mgr) {
+        g_active_focus_manager = NULL;
+    }
     free(mgr->tab_order);
     free(mgr);
 }
 
 void sg_event_manager_set_root(SGEventManager* mgr, SGNode* root) {
     if (!mgr) return;
+    g_active_focus_manager = mgr;
     mgr->root = root;
     mgr->hovered = NULL;
     mgr->focused = NULL;
@@ -148,10 +187,7 @@ void sg_dispatch_mouse_move(SGEventManager* mgr, float x, float y, int mods) {
     if (target) {
         SGEvent evt = { 0 };
         evt.type = SG_EVENT_MOUSE_MOVE;
-        evt.data.mouse.x = x;
-        evt.data.mouse.y = y;
-        evt.data.mouse.local_x = x - target->bounds.x;
-        evt.data.mouse.local_y = y - target->bounds.y;
+        sg_set_mouse_local_coords(&evt, target, x, y);
         evt.mods = mods;
         dispatch_through_path(target, &evt);
     }
@@ -167,9 +203,7 @@ void sg_dispatch_mouse_down(SGEventManager* mgr, float x, float y, int button, i
     SGNode* target = mgr->captured ? mgr->captured : sg_hit_test(mgr->root, x, y);
 
     /* Update focus */
-    if (target != mgr->focused) {
-        sg_focus_set(mgr, target);
-    }
+    sg_focus_set(mgr, target);
 
     mgr->pressed = target;
     mgr->mouse_buttons |= (1 << button);
@@ -177,10 +211,7 @@ void sg_dispatch_mouse_down(SGEventManager* mgr, float x, float y, int button, i
     if (target) {
         SGEvent evt = { 0 };
         evt.type = SG_EVENT_MOUSE_DOWN;
-        evt.data.mouse.x = x;
-        evt.data.mouse.y = y;
-        evt.data.mouse.local_x = x - target->bounds.x;
-        evt.data.mouse.local_y = y - target->bounds.y;
+        sg_set_mouse_local_coords(&evt, target, x, y);
         evt.data.mouse.button = button;
         evt.mods = mods;
         dispatch_through_path(target, &evt);
@@ -197,10 +228,7 @@ void sg_dispatch_mouse_up(SGEventManager* mgr, float x, float y, int button, int
     if (target) {
         SGEvent evt = { 0 };
         evt.type = SG_EVENT_MOUSE_UP;
-        evt.data.mouse.x = x;
-        evt.data.mouse.y = y;
-        evt.data.mouse.local_x = x - target->bounds.x;
-        evt.data.mouse.local_y = y - target->bounds.y;
+        sg_set_mouse_local_coords(&evt, target, x, y);
         evt.data.mouse.button = button;
         evt.mods = mods;
         dispatch_through_path(target, &evt);
@@ -225,10 +253,7 @@ void sg_dispatch_mouse_up(SGEventManager* mgr, float x, float y, int button, int
 
             SGEvent click = { 0 };
             click.type = (mgr->click_count >= 2) ? SG_EVENT_DOUBLE_CLICK : SG_EVENT_CLICK;
-            click.data.mouse.x = x;
-            click.data.mouse.y = y;
-            click.data.mouse.local_x = x - target->bounds.x;
-            click.data.mouse.local_y = y - target->bounds.y;
+            sg_set_mouse_local_coords(&click, target, x, y);
             click.data.mouse.button = button;
             click.data.mouse.clicks = mgr->click_count;
             click.mods = mods;
@@ -387,6 +412,10 @@ void sg_dispatch_event(SGEventManager* mgr, SGEvent* event) {
 
 void sg_focus_set(SGEventManager* mgr, SGNode* node) {
     if (!mgr) return;
+    g_active_focus_manager = mgr;
+    if (!sg_node_is_focusable(node)) {
+        node = NULL;
+    }
     if (mgr->focused == node) return;
 
     /* Send focus out to old node */
@@ -416,6 +445,14 @@ void sg_focus_clear(SGEventManager* mgr) {
 
 SGNode* sg_focus_get(SGEventManager* mgr) {
     return mgr ? mgr->focused : NULL;
+}
+
+SGEventManager* sg_focus_manager_get_active(void) {
+    return g_active_focus_manager;
+}
+
+SGNode* sg_focus_get_global(void) {
+    return g_active_focus_manager ? g_active_focus_manager->focused : NULL;
 }
 
 /* Recursive helper to collect focusable nodes in DFS order */

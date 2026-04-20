@@ -5,6 +5,8 @@
  */
 
 #include "scene_graph.h"
+#include "widgets.h"
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -14,6 +16,10 @@
  * ======================================================================== */
 
 static uint32_t g_next_node_id = 1;
+
+static void sg_node_release(SGNode* node);
+static void sg_node_finalize(SGNode* node);
+static void sg_node_release_children(SGNode* node);
 
 uint32_t sg_next_id(void) {
     return g_next_node_id++;
@@ -29,6 +35,8 @@ SGNode* sg_node_create(SGNodeType type) {
 
     node->type = type;
     node->id = sg_next_id();
+    node->ref_count = 1;
+    node->ownership_flags = SG_NODE_OWNER_RUNTIME;
 
     /* Default transform: identity */
     node->transform.sx = 1.0f;
@@ -52,42 +60,98 @@ SGNode* sg_node_create(SGNodeType type) {
 }
 
 void sg_node_destroy(SGNode* node) {
+    sg_node_release(node);
+}
+
+void sg_node_destroy_tree(SGNode* node) {
+    sg_node_release(node);
+}
+
+void sg_node_retain(SGNode* node) {
     if (!node) return;
+    node->ref_count++;
+}
 
-    /* Recursively destroy children */
-    SGNode* child = node->first_child;
-    while (child) {
-        SGNode* next = child->next_sibling;
-        sg_node_destroy(child);
-        child = next;
-    }
-
-    sg_node_destroy_single(node);
+void sg_node_set_cleanup(SGNode* node, SGNodeCleanupFn cleanup) {
+    if (!node) return;
+    node->cleanup = cleanup;
 }
 
 void sg_node_destroy_single(SGNode* node) {
     if (!node) return;
 
+    if (node->cleanup) {
+        node->cleanup(node);
+        node->cleanup = NULL;
+    } else {
+        widget_cleanup(node);
+    }
+
     /* Free type-specific data */
     switch (node->type) {
         case SG_NODE_TEXT:
             if (node->data.text.text) free(node->data.text.text);
-            if (node->data.text.font) skia_font_destroy(node->data.text.font);
+            if ((node->ownership_flags & SG_NODE_OWNS_FONT) && node->data.text.font) {
+                skia_font_destroy(node->data.text.font);
+            }
             break;
         case SG_NODE_IMAGE:
-            if (node->data.image.image) skia_image_destroy(node->data.image.image);
+            if ((node->ownership_flags & SG_NODE_OWNS_IMAGE) && node->data.image.image) {
+                skia_image_destroy(node->data.image.image);
+            }
             break;
         case SG_NODE_PATH:
-            if (node->data.path.path) skia_path_destroy(node->data.path.path);
+            if ((node->ownership_flags & SG_NODE_OWNS_PATH) && node->data.path.path) {
+                skia_path_destroy(node->data.path.path);
+            }
             break;
         default:
             break;
     }
 
     /* Free gradient shader if set */
-    if (node->style.gradient) skia_shader_destroy(node->style.gradient);
+    if ((node->ownership_flags & SG_NODE_OWNS_GRADIENT) && node->style.gradient) {
+        skia_shader_destroy(node->style.gradient);
+    }
 
     free(node);
+}
+
+static void sg_node_release_children(SGNode* node) {
+    SGNode* child;
+    SGNode* next;
+
+    if (!node) return;
+
+    child = node->first_child;
+    node->first_child = NULL;
+    node->last_child = NULL;
+    node->child_count = 0;
+
+    while (child) {
+        next = child->next_sibling;
+        child->parent = NULL;
+        child->prev_sibling = NULL;
+        child->next_sibling = NULL;
+        child->ownership_flags &= ~SG_NODE_OWNER_PARENT;
+        sg_node_release(child);
+        child = next;
+    }
+}
+
+static void sg_node_finalize(SGNode* node) {
+    if (!node) return;
+    sg_node_release_children(node);
+    sg_node_destroy_single(node);
+}
+
+static void sg_node_release(SGNode* node) {
+    if (!node) return;
+    if (node->ref_count == 0) return;
+    node->ref_count--;
+    if (node->ref_count == 0) {
+        sg_node_finalize(node);
+    }
 }
 
 /* ========================================================================
@@ -98,9 +162,11 @@ void sg_node_add_child(SGNode* parent, SGNode* child) {
     if (!parent || !child) return;
     if (child->parent) sg_node_remove_from_parent(child);
 
+    sg_node_retain(child);
     child->parent = parent;
     child->next_sibling = NULL;
     child->prev_sibling = parent->last_child;
+    child->ownership_flags |= SG_NODE_OWNER_PARENT;
 
     if (parent->last_child) {
         parent->last_child->next_sibling = child;
@@ -122,9 +188,11 @@ void sg_node_insert_before(SGNode* parent, SGNode* child, SGNode* before) {
 
     if (child->parent) sg_node_remove_from_parent(child);
 
+    sg_node_retain(child);
     child->parent = parent;
     child->next_sibling = before;
     child->prev_sibling = before->prev_sibling;
+    child->ownership_flags |= SG_NODE_OWNER_PARENT;
 
     if (before->prev_sibling) {
         before->prev_sibling->next_sibling = child;
@@ -147,9 +215,11 @@ void sg_node_insert_after(SGNode* parent, SGNode* child, SGNode* after) {
 
     if (child->parent) sg_node_remove_from_parent(child);
 
+    sg_node_retain(child);
     child->parent = parent;
     child->prev_sibling = after;
     child->next_sibling = after->next_sibling;
+    child->ownership_flags |= SG_NODE_OWNER_PARENT;
 
     if (after->next_sibling) {
         after->next_sibling->prev_sibling = child;
@@ -180,7 +250,9 @@ void sg_node_remove_child(SGNode* parent, SGNode* child) {
     child->parent = NULL;
     child->next_sibling = NULL;
     child->prev_sibling = NULL;
+    child->ownership_flags &= ~SG_NODE_OWNER_PARENT;
     parent->child_count--;
+    sg_node_release(child);
 
     sg_node_mark_layout_dirty(parent);
 }
@@ -363,8 +435,12 @@ void sg_style_set_opacity(SGNode* node, double opacity) {
 
 void sg_style_set_gradient(SGNode* node, SkiaShader gradient) {
     if (!node) return;
-    if (node->style.gradient) skia_shader_destroy(node->style.gradient);
+    if ((node->ownership_flags & SG_NODE_OWNS_GRADIENT) && node->style.gradient) {
+        skia_shader_destroy(node->style.gradient);
+    }
     node->style.gradient = gradient;
+    if (gradient) node->ownership_flags |= SG_NODE_OWNS_GRADIENT;
+    else node->ownership_flags &= ~SG_NODE_OWNS_GRADIENT;
     sg_node_mark_paint_dirty(node);
 }
 
@@ -507,6 +583,7 @@ static void sg_render_content(SkiaCanvas canvas, SGNode* node) {
 
     switch (node->type) {
         case SG_NODE_TEXT: {
+            if (widget_render_override(canvas, node)) break;
             if (!node->data.text.text || !node->data.text.font) break;
             skia_paint_set_color(g_text_paint, node->data.text.color);
 
@@ -609,6 +686,100 @@ static void sg_render_content(SkiaCanvas canvas, SGNode* node) {
     }
 }
 
+static WidgetType sg_node_widget_type(const SGNode* node) {
+    if (!node || !node->user_data) return WIDGET_NONE;
+    return *(const WidgetType*)node->user_data;
+}
+
+static int sg_build_path_to_node(const SGNode* node, const SGNode** path, int max_depth) {
+    int depth = 0;
+    const SGNode* current = node;
+
+    while (current && depth < max_depth) {
+        path[depth++] = current;
+        current = current->parent;
+    }
+
+    for (int i = 0; i < depth / 2; i++) {
+        const SGNode* tmp = path[i];
+        path[i] = path[depth - 1 - i];
+        path[depth - 1 - i] = tmp;
+    }
+
+    return depth;
+}
+
+static int sg_world_to_node_space(const SGNode* node, float world_x, float world_y,
+                                  float* node_x, float* node_y) {
+    const SGNode* path[64];
+    int depth;
+    float x = world_x;
+    float y = world_y;
+    const float epsilon = 1e-6f;
+
+    if (!node || !node_x || !node_y) return 0;
+
+    depth = sg_build_path_to_node(node, path, 64);
+    if (depth <= 0) return 0;
+
+    for (int i = 0; i < depth; i++) {
+        const SGNode* current = path[i];
+        const SGTransform* t = &current->transform;
+
+        if (fabsf(t->tx) > epsilon || fabsf(t->ty) > epsilon) {
+            x -= t->tx;
+            y -= t->ty;
+        }
+
+        if (fabsf(t->sx - 1.0f) > epsilon || fabsf(t->sy - 1.0f) > epsilon) {
+            if (fabsf(t->sx) <= epsilon || fabsf(t->sy) <= epsilon) {
+                return 0;
+            }
+            x /= t->sx;
+            y /= t->sy;
+        }
+
+        if (fabsf(t->rotation) > epsilon) {
+            const float radians = -t->rotation * (3.14159265358979323846f / 180.0f);
+            const float cx = current->bounds.x + current->bounds.w * 0.5f;
+            const float cy = current->bounds.y + current->bounds.h * 0.5f;
+            const float dx = x - cx;
+            const float dy = y - cy;
+            const float cosine = cosf(radians);
+            const float sine = sinf(radians);
+            x = cx + dx * cosine - dy * sine;
+            y = cy + dx * sine + dy * cosine;
+        }
+    }
+
+    *node_x = x;
+    *node_y = y;
+    return 1;
+}
+
+static SGRect sg_node_child_clip_rect(const SGNode* node) {
+    SGRect clip = { 0, 0, 0, 0 };
+
+    if (!node) return clip;
+
+    clip = node->bounds;
+    if (sg_node_widget_type(node) == WIDGET_SCROLL_VIEW) {
+        clip.x += node->style.padding[3];
+        clip.y += node->style.padding[0];
+        clip.w -= node->style.padding[1] + node->style.padding[3];
+        clip.h -= node->style.padding[0] + node->style.padding[2];
+        if (clip.w < 0.0f) clip.w = 0.0f;
+        if (clip.h < 0.0f) clip.h = 0.0f;
+    }
+
+    return clip;
+}
+
+static int sg_point_in_rect(float x, float y, SGRect rect) {
+    return x >= rect.x && x < rect.x + rect.w &&
+           y >= rect.y && y < rect.y + rect.h;
+}
+
 /* ========================================================================
  * Rendering — Public API
  * ======================================================================== */
@@ -638,6 +809,14 @@ static void sg_render_node(SGNode* node, SkiaCanvas canvas, int dirty_only) {
 
     if (node->flags & SG_CLIP_CHILDREN) {
         SGRect b = node->bounds;
+        if (sg_node_widget_type(node) == WIDGET_SCROLL_VIEW) {
+            b.x += node->style.padding[3];
+            b.y += node->style.padding[0];
+            b.w -= node->style.padding[1] + node->style.padding[3];
+            b.h -= node->style.padding[0] + node->style.padding[2];
+            if (b.w < 0) b.w = 0;
+            if (b.h < 0) b.h = 0;
+        }
         if (node->style.border_radius > 0) {
             skia_canvas_clip_rrect(canvas, b.x, b.y, b.w, b.h,
                 node->style.border_radius, node->style.border_radius);
@@ -686,23 +865,49 @@ void sg_render_dirty_only(SGNode* root, SkiaCanvas canvas) {
  * ======================================================================== */
 
 int sg_point_in_node(SGNode* node, float x, float y) {
-    if (!node) return 0;
-    SGRect b = node->bounds;
+    float local_x = 0.0f;
+    float local_y = 0.0f;
 
-    /* Apply parent transforms to get world-space bounds.
-     * For now, use local bounds (assumes no transforms). */
-    return (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+    if (!node) return 0;
+    if (!sg_node_world_to_local(node, x, y, &local_x, &local_y)) return 0;
+
+    return local_x >= 0.0f && local_x < node->bounds.w &&
+           local_y >= 0.0f && local_y < node->bounds.h;
+}
+
+int sg_node_world_to_local(SGNode* node, float world_x, float world_y,
+                           float* local_x, float* local_y) {
+    float node_x = 0.0f;
+    float node_y = 0.0f;
+
+    if (!node || !local_x || !local_y) return 0;
+    if (!sg_world_to_node_space(node, world_x, world_y, &node_x, &node_y)) return 0;
+
+    *local_x = node_x - node->bounds.x;
+    *local_y = node_y - node->bounds.y;
+    return 1;
 }
 
 static SGNode* sg_hit_test_node(SGNode* node, float x, float y) {
+    float node_x = 0.0f;
+    float node_y = 0.0f;
+    int inside_child_clip = 1;
+
     if (!node || !(node->flags & SG_VISIBLE)) return NULL;
+    if (!sg_world_to_node_space(node, x, y, &node_x, &node_y)) return NULL;
+
+    if (node->flags & SG_CLIP_CHILDREN) {
+        inside_child_clip = sg_point_in_rect(node_x, node_y, sg_node_child_clip_rect(node));
+    }
 
     /* Test children in reverse order (last child = top of z-stack) */
-    SGNode* child = node->last_child;
-    while (child) {
-        SGNode* hit = sg_hit_test_node(child, x, y);
-        if (hit) return hit;
-        child = child->prev_sibling;
+    if (inside_child_clip) {
+        SGNode* child = node->last_child;
+        while (child) {
+            SGNode* hit = sg_hit_test_node(child, x, y);
+            if (hit) return hit;
+            child = child->prev_sibling;
+        }
     }
 
     /* Test this node if interactive */
