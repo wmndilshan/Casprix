@@ -16,11 +16,12 @@ extern "C" {
 #endif
 
 /* ---- Opaque types (created on heap, managed by runtime) ---- */
-typedef struct NuwanList  NuwanList;
-typedef struct NuwanMap   NuwanMap;
-typedef struct NuwanQueue NuwanQueue;
-typedef struct NuwanPQ    NuwanPQ;
-typedef NuwanList         NuwanStack;
+typedef struct NuwanList      NuwanList;
+typedef struct NuwanMap       NuwanMap;
+typedef struct NuwanQueue     NuwanQueue;
+typedef struct NuwanPQ        NuwanPQ;
+typedef struct NuwanSwissMap  NuwanSwissMap;
+typedef NuwanList             NuwanStack;
 
 /* ---- List: dynamic int64 array, cache-aligned ---- */
 NuwanList* nuwan_list_new(void);
@@ -78,6 +79,48 @@ int64_t  nuwan_pq_peek_priority(const NuwanPQ* pq);
 size_t   nuwan_pq_size(const NuwanPQ* pq);
 bool     nuwan_pq_empty(const NuwanPQ* pq);
 void     nuwan_pq_free(NuwanPQ* pq);
+
+/* ----------------------------------------------------------------------------
+ * NuwanSwissMap -- Swiss-Table hash map (string key -> int64 value)
+ *
+ * A cache-friendly open-addressing hash map using a 1-byte metadata array
+ * ("ctrl bytes") independent of the slot array.  Lookups scan 16 ctrl bytes
+ * in parallel using SSE2 `_mm_cmpeq_epi8` on x86-64 or NEON `vceqq_u8` on
+ * ARM64, eliminating the per-probe branch tower of the legacy NuwanMap.
+ *
+ *   * Load factor               : 7/8 (0.875)
+ *   * Group size                : 16 slots           (matches SSE2/NEON width)
+ *   * Probing                   : triangular over power-of-two group counts
+ *   * Ctrl encoding             : EMPTY=0x80, DELETED=0xFE, FULL=0..0x7F (H2)
+ *   * Growth-aware              : `reserve` pre-sizes to hold N without rehash
+ *   * Tombstones                : reclaimed on rehash when > 50% of capacity
+ *
+ * This is a functionally richer peer of `NuwanMap`, kept side-by-side so
+ * existing callers are undisturbed.  Prefer this map for AI/LLM workloads
+ * where string keys dominate and lookup latency is on the hot path.
+ * -------------------------------------------------------------------------- */
+NuwanSwissMap* nuwan_swiss_new(void);
+NuwanSwissMap* nuwan_swiss_new_reserved(size_t expected_size);
+void           nuwan_swiss_reserve(NuwanSwissMap* m, size_t expected_size);
+
+bool     nuwan_swiss_put(NuwanSwissMap* m, const char* key, int64_t val);
+int64_t  nuwan_swiss_get(const NuwanSwissMap* m, const char* key);
+bool     nuwan_swiss_has(const NuwanSwissMap* m, const char* key);
+bool     nuwan_swiss_get_opt(const NuwanSwissMap* m, const char* key,
+                              int64_t* out_val);
+bool     nuwan_swiss_remove(NuwanSwissMap* m, const char* key);
+
+size_t   nuwan_swiss_size(const NuwanSwissMap* m);
+size_t   nuwan_swiss_capacity(const NuwanSwissMap* m);
+bool     nuwan_swiss_empty(const NuwanSwissMap* m);
+
+void     nuwan_swiss_clear(NuwanSwissMap* m);
+void     nuwan_swiss_free(NuwanSwissMap* m);
+
+/* Debug/observability: total probe length incurred by the last N operations.
+ * Useful for tuning the hash function and validating probing health.         */
+size_t   nuwan_swiss_last_probe_len(const NuwanSwissMap* m);
+size_t   nuwan_swiss_tombstones(const NuwanSwissMap* m);
 
 /* ---- ASM Kernel declarations (optional, for direct use) ---- */
 extern uint64_t nuwan_string_hash(const char* str);

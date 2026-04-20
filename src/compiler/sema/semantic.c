@@ -4,6 +4,7 @@
 #include "compiler/sema/escape_analysis.h"
 #include "compiler/sema/drop_planner.h"
 #include "compiler/sema/ownership_check.h"
+#include "compiler/sema/linear_view.h"
 #include "compiler/middle/closure.h"
 #include "support/error.h"
 
@@ -17,6 +18,10 @@ static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static EscapeAnalyzer   g_escape_ctx;
 static DropPlanner      g_drop_ctx;
 static OwnershipChecker g_ownership_ctx;
+/* Per-function log of StringView bindings; reset at every function entry
+ * so escape promotion (which runs after all local scopes have already been
+ * torn down) can still recover the view ↔ parent map. */
+static LinearViewLog    g_linear_view_log;
 static bool             g_memory_model_inited = false;
 
 void init_semantic_analyzer(SemanticAnalyzer* analyzer) {
@@ -1559,6 +1564,33 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
                 }
             }
 
+            /* ── Linear Type System: register String / StringView ────────
+             * This is the single point at which the AST→MIR boundary
+             * captures the parent ↔ view relationship.  We register:
+             *   - every owning String binding with the drop planner so the
+             *     surviving-view check has something to anchor against;
+             *   - every StringView binding with both the ownership checker
+             *     (linear-consume tracking) and the drop planner (parent
+             *     dependency edge).                                         */
+            if (linear_view_decl_is_string(decl)) {
+                drop_planner_register(&g_drop_ctx, decl->name,
+                                       /*stack_offset*/ 0, DROP_DTOR,
+                                       /*dtor_name*/ "string_release",
+                                       /*is_param*/ false);
+            } else if (linear_view_decl_is_view(decl)) {
+                const char* parent =
+                    linear_view_infer_parent(analyzer, decl->initializer);
+                register_linear_view(&g_ownership_ctx, decl->name,
+                                     parent, stmt->line);
+                drop_planner_register_linear_view(&g_drop_ctx, decl->name,
+                                                  parent, stmt->line);
+                /* Also copy into the function-level log so escape promotion
+                 * can still see this view after the declaring scope exits
+                 * and the Symbol (with its ownership_data) is freed. */
+                linear_view_log_add(&g_linear_view_log, decl->name,
+                                    parent, stmt->line);
+            }
+
             // If this is a class type, set class_info from various sources
             if (decl->type == TYPE_CLASS) {
                 ClassSymbol* class_sym = NULL;
@@ -1964,6 +1996,7 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     /* ── Memory model: enter function scope ── */
     escape_analyzer_reset(&g_escape_ctx);
     drop_planner_enter_scope(&g_drop_ctx);
+    linear_view_log_reset(&g_linear_view_log);
 
     /* Register parameters for escape analysis and drop planning */
     for (int i = 0; i < func->param_count; i++) {
@@ -1987,6 +2020,21 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
 
     /* ── Memory model: run escape analysis on function body ── */
     escape_analyze_function(&g_escape_ctx, stmt);
+
+    /* Linear Type System: promote `StringView` entries in the escape table
+     * from the function-scoped view log (the ownership-checker state is
+     * already gone by now — per-scope Symbol entries were freed on scope
+     * exit), then run the parent ↔ view fixpoint.  Any view that escapes
+     * farther than its parent is reported here, at the function-declaration
+     * line — the last sema hook before MIR lowering kicks in. */
+    linear_view_promote_from_log(&g_escape_ctx, &g_linear_view_log);
+    escape_propagate_view_links(&g_escape_ctx, stmt->line);
+
+    /* Enforce parent-survives-view at the function boundary too: any owning
+     * String declared in the function body that is about to be dropped must
+     * not have a live outer-scope view.  (Block-scope exits already run
+     * this check from `analyze_block_stmt`.) */
+    drop_planner_check_string_drop_invariants(&g_drop_ctx, stmt->line);
 
     /* ── Memory model: exit function scope (drop planner) ── */
     validate_scope_end(&g_ownership_ctx, analyzer->scope_depth);
@@ -2081,6 +2129,13 @@ static void analyze_block_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     if (is_alloc_scope) {
         analyzer->alloc_scope_depth--;
     }
+
+    /* AST → MIR boundary: enforce the linear-view invariant before the
+     * planner discards the entries of this scope.  Any owning String about
+     * to be dropped that still has a live StringView in an outer scope is
+     * reported here, with the diagnostic pinned at the closing brace. */
+    drop_planner_check_string_drop_invariants(&g_drop_ctx, stmt->line);
+
     drop_planner_exit_scope(&g_drop_ctx);
     exit_scope(analyzer->symbols, &analyzer->scope_depth);
 }

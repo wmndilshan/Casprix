@@ -139,6 +139,7 @@ set(SEMA_SOURCES
     src/compiler/sema/ownership_check.c
     src/compiler/sema/escape_analysis.c
     src/compiler/sema/drop_planner.c
+    src/compiler/sema/linear_view.c
 )
 
 set(LAYOUT_SOURCES
@@ -164,6 +165,7 @@ set(MIR_SOURCES
     src/compiler/ir/mir_c_backend.c
     src/compiler/ir/mir_mem2reg.c
     src/compiler/ir/mir_inline.c
+    src/compiler/ir/mir_async.c
 )
 
 set(CODEGEN_SOURCES

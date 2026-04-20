@@ -36,7 +36,9 @@ typedef enum {
     DROP_RC,           /* Call rc_release(ptr)                             */
     DROP_DTOR,         /* Call custom destructor then free                 */
     DROP_REGION,       /* Managed by enclosing region — skip              */
-    DROP_SCOPE_GUARD   /* Call scope_guard_drop()                         */
+    DROP_SCOPE_GUARD,  /* Call scope_guard_drop()                         */
+    DROP_LINEAR_VIEW   /* Linear StringView — no codegen drop, but the    */
+                       /* planner enforces it does not outlive its parent.*/
 } DropKind;
 
 /* Per-variable drop entry */
@@ -49,6 +51,12 @@ typedef struct {
     bool        is_moved;       /* True if ownership was transferred out  */
     bool        is_borrowed;    /* True if this is a borrow, not owner    */
     bool        is_param;       /* True if function parameter             */
+
+    /* ── Linear Type System (StringView) ───────────────────────────────────
+     * `parent_name`     — for DROP_LINEAR_VIEW entries: the borrowed name
+     *                     of the owning String the view depends on.       */
+    const char* parent_name;
+    int         decl_line;      /* Line of the original declaration       */
 } DropEntry;
 
 /* ─── Drop planner context ─── */
@@ -81,6 +89,15 @@ void drop_planner_register(DropPlanner* dp, const char* var_name,
                             const char* dtor_name,
                             bool is_param);
 
+/* Register a linear `StringView` view-binding with its parent String.
+ * The entry is dropped via DROP_LINEAR_VIEW (a no-op at codegen) but is
+ * tracked by `drop_planner_check_string_drop_invariants` so any surviving
+ * view at the moment its parent is dropped is reported as a hard error. */
+void drop_planner_register_linear_view(DropPlanner* dp,
+                                       const char* view_name,
+                                       const char* parent_string_name,
+                                       int decl_line);
+
 /* Mark a variable as moved (skip its drop) */
 void drop_planner_mark_moved(DropPlanner* dp, const char* var_name);
 
@@ -97,6 +114,22 @@ const DropEntry* drop_planner_get_scope_drops(DropPlanner* dp, int* count);
 const DropEntry* drop_planner_get_drops_to_scope(DropPlanner* dp,
                                                    int target_scope,
                                                    int* count);
+
+/* ─── Linear-view safety check (AST→MIR boundary) ─────────────────────────
+ *
+ * Walks the entries belonging to the *currently exiting* scope and, for
+ * every owning String about to be dropped, scans the entire planner for
+ * any DROP_LINEAR_VIEW entry whose `parent_name` matches and whose
+ * `scope_level` is strictly less than the dropping scope (i.e. the view
+ * outlives its parent).  Each such surviving view is reported as a
+ * compile-time error at the parent's drop site (`drop_line`).
+ *
+ * Returns the number of diagnostics emitted (0 == proven safe).
+ *
+ * This MUST be called before `drop_planner_exit_scope` discards the entries
+ * of the exiting scope.                                                    */
+int drop_planner_check_string_drop_invariants(DropPlanner* dp,
+                                              int drop_line);
 
 /* Debug */
 void drop_planner_print(DropPlanner* dp);

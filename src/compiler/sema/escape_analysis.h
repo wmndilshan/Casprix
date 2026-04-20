@@ -48,6 +48,17 @@ typedef struct {
     EscapeFlags flags;         /* Bitwise OR of all observed escape paths   */
     bool        is_parameter;  /* True if function parameter                */
     bool        analyzed;      /* True if analysis has run for this var     */
+
+    /* ── Linear Type System (StringView) ───────────────────────────────────
+     * `is_string_view`  — entry models a StringView binding.
+     * `parent_name`     — borrowed name of the owning String (AST-lived).
+     *
+     * The propagation pass (`escape_propagate_view_links`) intersects each
+     * view's escape-set with its parent's: a view that escapes via RETURN /
+     * CLOSURE / GLOBAL / FIELD where the parent does NOT also escape that
+     * way is rejected — the borrowed pointer would outlive the storage.   */
+    bool        is_string_view;
+    const char* parent_name;
 } EscapeInfo;
 
 /* ─── Analysis context ─── */
@@ -74,6 +85,20 @@ void escape_exit_scope(EscapeAnalyzer* ea);
 /* Registration */
 EscapeInfo* escape_register_var(EscapeAnalyzer* ea, const char* name,
                                  bool is_parameter);
+
+/* Register a StringView and its parent String name (parent may be NULL).
+ * The view participates in the regular escape walk like any other variable
+ * AND is linked to its parent for the post-walk propagation pass.          */
+EscapeInfo* escape_register_string_view(EscapeAnalyzer* ea,
+                                         const char* name,
+                                         const char* parent_name);
+
+/* Propagate escape flags between linked parent ↔ view pairs and emit a
+ * diagnostic when the view escapes farther than the parent allows.  Run at
+ * the end of `escape_analyze_function` (or any time the analyser has a
+ * complete view of a function body).  Returns the number of diagnostics
+ * emitted (0 == no escape violations found).                                */
+int escape_propagate_view_links(EscapeAnalyzer* ea, int line_for_diag);
 
 /* Mark escape paths (called during AST walk) */
 void escape_mark_return(EscapeAnalyzer* ea, const char* var_name);

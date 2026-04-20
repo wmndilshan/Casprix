@@ -274,6 +274,34 @@ nuwan_simd_vector_scale:
     ret
 
 ; ===========================================================================
+; uint32_t casprix_swiss_match_h2_x16(const uint8_t* ctrl16, uint8_t h2)
+;
+; Swiss-Table parallel control-byte match.  Compares sixteen 1-byte ctrl
+; entries at [rcx] with the broadcast byte in DL and returns a 16-bit mask
+; of equal lanes in EAX (upper bits of EAX are zeroed).
+;
+; Windows x64 calling convention:
+;   RCX = ctrl16   (unaligned load is fine, 16 bytes must be readable)
+;   DL  = h2       (low byte of RDX)
+; Return: EAX
+;
+; This is the hot path of every NuwanSwissMap lookup.  Exactly five
+; instructions, no branches -- a single SIMD probe replaces 16 scalar
+; compare-and-branch sequences on the legacy open-addressing path.
+;
+; Uses AVX (VEX-encoded) so the whole routine is fused domain and does not
+; incur the SSE/AVX transition penalty on subsequent AVX-heavy kernels.
+; ===========================================================================
+global casprix_swiss_match_h2_x16
+casprix_swiss_match_h2_x16:
+    vmovdqu     xmm0, [rcx]             ; 16 control bytes
+    vmovd       xmm1, edx               ; h2 in lane 0 (upper lanes garbage)
+    vpbroadcastb xmm1, xmm1             ; replicate h2 across all 16 lanes
+    vpcmpeqb    xmm0, xmm0, xmm1        ; lane-wise compare
+    vpmovmskb   eax, xmm0               ; 16-bit mask -> EAX (upper bits zero)
+    ret
+
+; ===========================================================================
 ; double nuwan_simd_euclidean_dist_sq(const double* a, const double* b, int n)
 ; 
 ; Computes: sum((a[i] - b[i])^2)
