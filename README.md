@@ -11,9 +11,9 @@
 
 **Fast. Modern. Powerful. 👻**
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg?style=for-the-badge)](https://github.com/user/casprix)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg?style=for-the-badge)](https://github.com/wmndilshan/casprix)
 [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Author](https://img.shields.io/badge/author-Nuwan-purple.svg?style=for-the-badge)](https://github.com/user)
+[![Author](https://img.shields.io/badge/author-Nuwam-purple.svg?style=for-the-badge)](https://github.com/wmndilshan/casprix)
 [![Language](https://img.shields.io/badge/language-C%20%2B%20x86--64-orange.svg?style=for-the-badge)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg?style=for-the-badge)]()
 
@@ -43,11 +43,12 @@ Casprix combines:
 | Category | Features |
 |----------|----------|
 | **Performance** | Register allocation, SIMD/AVX2 vectorization, loop unrolling (4x), arena allocator |
-| **Safety** | Ownership model, borrow analysis, escape analysis, lifetime tracking |
+| **Safety** | Ownership model, borrow analysis, escape analysis, linear `StringView` borrows, lifetime tracking |
 | **Language** | Closures, generics (monomorphized), async/await, traits, pattern matching |
 | **Memory** | Hybrid model: GC + ownership + memory regions |
-| **Tooling** | Built-in package manager, semantic versioning, dependency resolution |
-| **Targets** | x86-64 (primary), ARM64 (planned), VM bytecode, JIT (roadmap) |
+| **Tooling** | Built-in package manager (`casprix-pkg`), semantic versioning, dependency resolution |
+| **Library** | [`lib/`](lib/) Casprix modules, C runtime [`string_ops`](include/casprix/string_ops.h), linear `StringView`, MIR regex subsystem — see [Stdlib / strings / regex](docs/STDLIB_STRINGS_AND_REGEX.md) |
+| **Targets** | x86-64 (primary), ARM64 (planned), MIR VM + experimental JIT bridge, tiered JIT (roadmap) |
 
 ---
 
@@ -67,7 +68,7 @@ The pipeline flows through five distinct stages:
 
 **Backend Abstraction Layer** — target-independent interface handling ABI, calling conventions, and register abstraction. Decouples the optimizer from the code generator and enables multiple backends.
 
-**Backends** — AOT native (x86-64 NASM today, ARM64 planned), VM bytecode (beta), and tiered JIT (roadmap).
+**Backends** — AOT native (x86-64 NASM today, ARM64 planned), register-based MIR VM with a CVM interpreter and experimental JIT bridge under `runtime/vm/`, and a fuller tiered JIT (roadmap).
 
 ---
 
@@ -90,9 +91,9 @@ All allocation decisions are static — no runtime type checks, no boxing overhe
 
 ![VM and JIT](diagrams/vm-jit.svg)
 
-**VM Bytecode** uses a register-based instruction format (not stack-based), reducing instruction count and dispatch overhead. The VM enforces memory safety and sandboxing at the bytecode level, with a typed FFI bridge for native interop.
+**VM Bytecode** uses a register-based instruction format (not stack-based), reducing instruction count and dispatch overhead. The tree ships a **CVM** interpreter and **JIT bridge** in `runtime/vm/` (used by tests such as `test_vm_jit`); the full productized VM + security story is still evolving.
 
-**Tiered JIT** operates in four levels:
+**Tiered JIT** (target design) operates in four levels:
 1. **Tier 0 (Baseline)** — fast emission, minimal optimization, gets code running immediately
 2. **Profiling** — call counters and branch frequency tracking identify hot paths
 3. **Tier 2 (Optimizing)** — speculative optimization with inline caches and type feedback
@@ -129,15 +130,17 @@ All allocation decisions are static — no runtime type checks, no boxing overhe
 
 ```bash
 # Clone repository
-git clone https://github.com/user/casprix.git
+git clone https://github.com/wmndilshan/casprix.git
 cd casprix
 
 # Build (Linux / macOS)
-./build.sh
+scripts/build.sh
 
-# Build (Windows)
-.\build.ps1
+# Build (Windows — cmd from repo root)
+scripts\build.bat
 ```
+
+On Windows with a multi-config generator (Visual Studio), the compiler is often `build\Release\casprix.exe`. With Ninja or single-config CMake, it is usually `build\casprix.exe`.
 
 ### Hello, World!
 
@@ -147,16 +150,18 @@ print("Hello, Casprix! 👻")
 ```
 
 ```bash
-./run.sh hello.cpx
+build/casprix hello.cpx -o build/hello
+./build/hello
 # → Hello, Casprix! 👻
 ```
+
+On Windows, run `build\hello.exe` or `build\Release\hello.exe` depending on your CMake generator.
 
 ### Compile with Optimizations
 
 ```bash
-casprixc program.cpx -o output          # standard
-casprixc program.cpx -o output -O2      # optimized
-casprixc program.cpx -o output -O2 -mavx2  # + SIMD
+casprix program.cpx -o output --opt-level=2
+casprix --help            # -O0, --mir, --native, --vm, --jit, …
 ```
 
 ---
@@ -188,7 +193,7 @@ let result = add(5, 3)  // result = 8
 let increment = |x: int| => x + 1
 ```
 
-Pipe-lambda syntax is available, but captured closures and first-class closure calls are still being finished in the current front end. See [examples/basic/closures.cpx](/d:/Projects/ND/examples/basic/closures.cpx) as a planned-surface reference rather than a guaranteed compiling sample.
+Pipe-lambda syntax is available, but captured closures and first-class closure calls are still being finished in the current front end. See [examples/basic/closures.cpx](examples/basic/closures.cpx) as a planned-surface reference rather than a guaranteed compiling sample.
 
 ### Generic Types
 
@@ -279,10 +284,12 @@ Backend applies **linear scan register allocation** (85–90% utilization) and *
 
 ## 📦 Package Manager
 
+The CMake target installs as **`casprix-pkg`** (CLI help text uses the `cpkg` command name). Example:
+
 ```bash
-casprix pkg init              # initialize project
-casprix pkg install http      # install package
-casprix pkg install json@^1.5 # with version constraint
+casprix-pkg init              # initialize project
+casprix-pkg install http      # install package
+casprix-pkg install json@^1.5 # with version constraint
 ```
 
 ### Version Constraints
@@ -294,7 +301,7 @@ casprix pkg install json@^1.5 # with version constraint
 | `>=1.5.0` | At least version 1.5.0 |
 | `2.0.0` | Exact pin |
 
-### `package.json`
+### `casper.json` (package manifest)
 
 ```json
 {
@@ -315,29 +322,33 @@ casprix pkg install json@^1.5 # with version constraint
 casprix/
 ├── src/compiler/
 │   ├── frontend/        # Lexer, parser, AST
-│   ├── semantic/        # Type checking, escape analysis, ownership
-│   ├── middle/          # IR, optimization passes, monomorphization
-│   ├── backend/         # x86-64 NASM code generation
-│   └── opt/             # Peephole, SIMD, inlining
+│   ├── sema/            # Type checking, escape analysis, ownership
+│   ├── middle/          # Closures, generics, traits, async lowering
+│   ├── ir/              # MIR (SSA), borrow checker, optimizations
+│   ├── codegen/         # x86-64 NASM generation, regalloc
+│   └── opt/             # Loop opt, SIMD, inlining, peephole
 ├── runtime/             # Runtime library (C)
 │   ├── memory/          # GC, regions, refcount, ownership
+│   ├── vm/              # CVM interpreter + JIT bridge (MIR VM)
 │   ├── async/           # Async/await coroutine scheduler
 │   ├── net/             # Networking stack
-│   └── llm/             # LLM training runtime (AVX2)
+│   ├── ai/llm/          # Transformer / training runtime (AVX2)
+│   ├── ai/nn/           # Neural-network layers (C API)
+│   └── skia/            # Optional Skia/GDI GUI (ENABLE_SKIA_GUI)
 ├── include/             # Public C headers
 ├── lib/                 # Casprix standard modules (.cpx)
-├── stdlib/              # Core standard library
-├── pkg/                 # Package manager source
-├── tools/               # Build and development tools
-│   └── build-tools/     # Internal build scripts (consolidated)
-├── tests/               # Test suite
+├── stdlib/              # Bootstrap stdlib package index
+├── pkg/                 # Package manager (builds as casprix-pkg)
+├── tools/               # apk-builder, training helpers, …
+├── scripts/             # build.sh / build.bat, test runners
+├── tests/               # CTest: runtime, compiler, MIR, Android helpers
 └── examples/
     ├── basic/           # Hello world, variables, functions
-    ├── advanced/        # Async, closures, generics, threads
-    ├── gui/             # GUI applications
-    ├── ml/              # Machine learning
+    ├── advanced/        # Closures, generics, pattern matching
+    ├── gui/             # Skia UI samples (.cpx)
+    ├── llm_training/    # TinyStories-style training sketch
     ├── network/         # Networking
-    └── tinystories/     # LLM training pipeline
+    └── tinystories/     # End-to-end TinyStories pipeline (.cpx)
 ```
 
 ---
@@ -358,19 +369,15 @@ casprix/
 ## 🗺️ Roadmap
 
 - [x] x86-64 AOT native code generation
-- [x] Arena allocator + 8-pass optimization pipeline
+- [x] Arena allocator + MIR optimization pipeline
 - [x] Generics with monomorphization
-- [x] Closures with variable capture
+- [x] Closures with variable capture (surface still evolving)
 - [x] Async/await runtime
-- [x] Built-in package manager
-- [ ] VM bytecode backend (beta)
+- [x] Built-in package manager (`casprix-pkg` / `cpkg` CLI)
+- [x] MIR VM + CVM interpreter + experimental JIT bridge (`runtime/vm/`)
+- [ ] Tiered JIT compiler (full pipeline)
 - [ ] ARM64 native target
----
-
-## Roadmap
-
-- [ ] Tiered JIT compiler
-- [ ] Full borrow checker (IR-based)
+- [ ] Full borrow checker (end-to-end)
 - [ ] LSP language server
 - [ ] Self-hosted compiler
 
@@ -380,8 +387,9 @@ casprix/
 
 - [Feature Summary](docs/FEATURES.md)
 - [Project Structure](docs/PROJECT_STRUCTURE.md)
+- [Stdlib, strings, StringView, and regex](docs/STDLIB_STRINGS_AND_REGEX.md)
 - [Package Manager Guide](docs/pkg/README.md)
-- [Standard Library Reference](docs/stdlib/README.md)
+- Standard library sources live under [`lib/`](lib/) (Casprix modules) and [`stdlib/`](stdlib/) (bootstrap index)
 
 ---
 

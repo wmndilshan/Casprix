@@ -8,7 +8,7 @@ project(Casprix
     VERSION 1.0.0
     LANGUAGES C
     DESCRIPTION "Casprix: Modern high-performance compiled programming language"
-    HOMEPAGE_URL "https://github.com/casprix/casprix"
+    HOMEPAGE_URL "https://github.com/wmndilshan/casprix"
 )
 
 # ============================================================================

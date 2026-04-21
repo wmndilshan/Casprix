@@ -4,8 +4,8 @@ This directory provides the stable C ABI surface intended for binding the async 
 
 ## Files
 
-- `lang_abi.c`: versioned function-table ABI shim implementation
-- `include/casprix/lang_abi.h`: public ABI contract
+- `lang_abi.c` — versioned function-table ABI shim implementation
+- [`include/casprix/lang_abi.h`](../../include/casprix/lang_abi.h) — public ABI contract
 
 ## Notes
 

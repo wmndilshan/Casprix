@@ -1,109 +1,78 @@
-# Casprix LLM Training — TinyStories
-## Directory layout
+# Casprix LLM training — TinyStories-style example
+
+Casprix sources plus a small **C FFI shim** (`llm_backend.c`) for heavy numeric work. Layout:
 
 ```
 examples/llm_training/
-├── tokenizer.cpx      # BPE tokenizer (train, encode, decode)
-├── transformer.cpx    # GPT-2 style transformer + AdamW optimizer
-├── dataloader.cpx     # Binary shard DataLoader
-├── train_llm.cpx      # Main entry point — orchestrates all phases
-├── llm_backend.c      # C backend (all FFI implementations)
-└── llm_backend.so     # Compiled shared library (generated)
+├── tokenizer.cpx      # BPE-oriented tokenizer logic
+├── transformer.cpx    # GPT-style transformer + optimizer hooks
+├── dataloader.cpx     # Binary shard loading
+├── train_llm.cpx      # Orchestrates training
+├── llm_backend.c      # C implementations called via extern
+└── (generated)        # Shared library / DLL built manually — see below
 ```
 
-## Casprix Syntax Reference (correct modern syntax used)
+## Syntax reference (illustrative)
 
-| Construct | Correct syntax |
-|---|---|
-| Immutable binding | `let name: type = value` |
-| Mutable binding | `mut name: type = value` |
-| Type-inferred binding | `name := expr` |
-| C-style for loop | `for (i: i32 = 0; i < n; i = i + 1) { }` |
-| For-in loop | `for item in collection { }` |
-| Increment | `i = i + 1` (no `++`) |
-| Class field (immutable) | `public let field: type` |
-| Class field (mutable) | `public mut field: type` |
-| Function | `func name(p: type) -> returntype { }` |
-| Extern C function | `extern func name(p: type) -> type` |
-| Null pointer | `let p: rawptr = 0` |
-| Object creation | `let obj: Class = new Class()` |
-| Method call | `obj.method(args)` |
-| Import module | `import "path/to/module"` |
+The training `.cpx` files aim to follow modern surface rules used elsewhere in the repo. Prefer `let` / `mut`, `func`, `extern func` for C entry points, and `import "…"` for modules — see [CASPRIX_SYNTAX_EBNF.md](../../docs/CASPRIX_SYNTAX_EBNF.md) for the authoritative grammar.
 
-## Training Pipeline
+## Training phases (conceptual)
 
-### Phase 1 — BPE Tokenizer Training
-Trains a 32K-vocab BPE tokenizer on raw TinyStories text:
-```
-BpeTokenizer.train("data/tinystories_train.txt", 32000)
-```
-- Starts from 256 byte-level tokens
-- Iteratively merges the most frequent adjacent pair
-- Saves vocab + merge rules to `data/tok32k.bin`
+1. **Tokenizer** — build or load a BPE table; output paths like `data/tok32k.bin` depending on the script.
+2. **Dataset** — encode text into binary shards (`data/train_shard_*.bin`, etc.).
+3. **Model** — construct a small transformer (hyperparameters are in the `.cpx` sources).
+4. **Loop** — AdamW, LR schedule, checkpoints (filenames depend on `train_llm.cpx`).
 
-### Phase 2 — Dataset Preparation
-Encodes the raw corpus into binary shards:
-```
-data/train_shard_0000.bin   ← flat i32 token arrays
-data/val_shard_0000.bin
-```
+## Build the C backend
 
-### Phase 3 — Model Initialization
-Creates a small GPT-2 style transformer (Tiny config: ~15M params):
+Linux / macOS (shared object):
 
-| Hyperparameter | Value |
-|---|---|
-| Vocabulary | 32,000 |
-| Hidden dim | 288 |
-| Layers | 6 |
-| Attention heads | 6 |
-| FFN dim | 768 |
-| Max seq len | 256 |
-
-### Phase 4 — Pre-Training Loop
-Full cosine LR schedule with linear warmup:
-- `max_lr = 3e-4`, `min_lr = 3e-5`, warmup = 700 steps
-- AdamW: β₁=0.9, β₂=0.95, ε=1e-8, weight_decay=0.1
-- Batch: 64 × 256 = 16,384 tokens/step
-- Total: ~19,073 steps (≈1 epoch over TinyStories at 300M tokens)
-- Checkpoints saved every 1,000 steps
-
-## Build and Run
-
-### 1. Build the C backend
 ```bash
-cd /path/to/Casprix
+cd /path/to/casprix
 gcc -O2 -mavx2 -mfma -shared -fPIC \
     -o examples/llm_training/llm_backend.so \
     examples/llm_training/llm_backend.c \
     -lm -lpthread
 ```
 
-### 2. Download TinyStories data
+Windows (DLL, from a VS or MinGW environment that matches your toolchain):
+
+```bat
+gcc -O2 -mavx2 -mfma -shared -o examples/llm_training/llm_backend.dll examples/llm_training/llm_backend.c -lm
+```
+
+## Fetch TinyStories (example)
+
 ```bash
 mkdir -p data
-# Training split (~300M tokens)
 wget -O data/tinystories_train.txt \
   "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-train.txt"
-# Validation split
 wget -O data/tinystories_val.txt \
   "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-valid.txt"
 ```
 
-### 3. Run (once Casprix codegen supports full FFI linking)
+## Run (once your toolchain can link the backend)
+
+Invoke the compiler you built from the repo root, for example:
+
 ```bash
-cpx run examples/llm_training/train_llm.cpx
+build/casprix examples/llm_training/train_llm.cpx -o build/train_llm
 ```
 
-### 4. Quick smoke test (10 steps, synthetic data)
-Edit `train_llm.cpx` and uncomment:
-```cpx
-cfg.make_tiny_run()
+FFI loading details vary by platform; use `casprix --help` for backend flags (`--emit-c`, `--mir`, etc.) as your checkout supports them.
+
+### Quick smoke run
+
+If `train_llm.cpx` exposes a tiny debug configuration (e.g. `make_tiny_run()`), enable it for a short CPU-friendly test.
+
+## Static checks
+
+Use semantic-only mode while iterating:
+
+```bash
+build/casprix examples/llm_training/train_llm.cpx --check-only
 ```
 
-## Memory Safety
-All `.cpx` files are verified by `bin/casprix --check-only`:
-- No use-after-move errors
-- No dangling reference returns  
-- Ownership checker active on all class instances
-- ARC reference counting on all heap objects
+## Memory and ownership
+
+Sources are expected to pass the MIR borrow checker when `--safe-mode` / related flags are enabled; exact coverage depends on compiler revision.
