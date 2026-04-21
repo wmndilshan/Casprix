@@ -102,6 +102,34 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_mir_regex.c")
     add_test(NAME test_mir_regex COMMAND test_mir_regex)
 endif()
 
+# ── MIR SIMD virtualization test ────────────────────────────────────────────
+# Exercises VEC_* opcode construction, the simd.c legalizer, and the
+# textual output of the x86-64 / AArch64 / scalar backends.  The test
+# links only the MIR subsystem (no lexer/parser/sema) plus the opt and
+# backend shim so it can run without the full compiler pipeline.
+# See tests/compiler/test_simd_virt.c.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_simd_virt.c")
+    add_executable(test_simd_virt
+        compiler/test_simd_virt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/opt/simd.c
+    )
+    target_include_directories(test_simd_virt PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(NAME test_simd_virt COMMAND test_simd_virt)
+endif()
+
 # ── Compiler integration tests ───────────────────────────────────────────────
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_lang_abi.c")
     add_executable(test_lang_abi test_lang_abi.c)

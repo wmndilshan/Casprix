@@ -199,11 +199,71 @@ typedef enum {
     MIR_EXTRACT,            /* result = aggregate.field[idx]       */
     MIR_INSERT,             /* result = aggregate with field[idx]=val */
 
+    /* ────────────────────────────────────────────────────────────
+     * Generic Vector Instructions (SIMD virtualization layer)
+     *
+     * These opcodes encode lane-wise SIMD operations independently of
+     * any target ISA. The `vec` operand variant carries an architecture-
+     * neutral `width` (logical lane count) plus a `lane_type`. The SIMD
+     * virtualization pass in `src/compiler/opt/simd.c` legalizes each
+     * instruction to the widest native width the chosen target supports
+     * (AVX-512/AVX2/SSE2/NEON/scalar) by splitting/merging groups of
+     * these instructions.  The backends then lower each legalized VEC_*
+     * directly to the appropriate ISA instruction.
+     *
+     *   VEC_LOAD                  r   = vec_load   aligned ptr
+     *   VEC_LOAD_UNALIGNED        r   = vec_load   unaligned ptr
+     *   VEC_STORE                 void  vec_store  aligned ptr, value
+     *   VEC_STORE_UNALIGNED       void  vec_store  unaligned ptr, value
+     *   VEC_BROADCAST             r   = vec_broadcast scalar  ; splat across lanes
+     *   VEC_ADD / VEC_SUB / VEC_MUL / VEC_DIV
+     *                             r   = lanewise a op b
+     *   VEC_MIN / VEC_MAX         r   = lanewise min/max(a, b)
+     *   VEC_AND / VEC_OR / VEC_XOR (integer lane type only)
+     *   VEC_FMA                   r   = a * b + c   (fused; higher precision)
+     *   VEC_REDUCE_SUM            r   = horizontal sum(lanes)   (scalar)
+     *   VEC_DOT                   r   = reduce_sum(a * b)        (scalar)
+     *   VEC_CMP_EQ / VEC_CMP_LT / VEC_CMP_GT
+     *                             mask = lanewise compare
+     *   VEC_SELECT                r   = select(mask, a, b)       ; blend
+     * ──────────────────────────────────────────────────────────── */
+    MIR_VEC_LOAD,
+    MIR_VEC_LOAD_UNALIGNED,
+    MIR_VEC_STORE,
+    MIR_VEC_STORE_UNALIGNED,
+    MIR_VEC_BROADCAST,
+    MIR_VEC_ADD,
+    MIR_VEC_SUB,
+    MIR_VEC_MUL,
+    MIR_VEC_DIV,
+    MIR_VEC_MIN,
+    MIR_VEC_MAX,
+    MIR_VEC_AND,
+    MIR_VEC_OR,
+    MIR_VEC_XOR,
+    MIR_VEC_FMA,
+    MIR_VEC_REDUCE_SUM,
+    MIR_VEC_DOT,
+    MIR_VEC_CMP_EQ,
+    MIR_VEC_CMP_LT,
+    MIR_VEC_CMP_GT,
+    MIR_VEC_SELECT,
+
     /* Debug / metadata */
     MIR_NOP,                /* no operation (placeholder)          */
     MIR_SUSPEND,            /* result = suspend(resume_point)      */
     MIR_DEBUGLOC,           /* source location annotation          */
 } MirOpcode;
+
+/* Number of logical lanes carried by a VEC_* instruction. A value of 0
+ * means "use the native lane count for the selected SIMD target". */
+typedef struct {
+    MirValueId   a;         /* first source (also ptr for load/store)   */
+    MirValueId   b;         /* second source (or stored value)          */
+    MirValueId   c;         /* third source (FMA); MIR_VALUE_NONE else  */
+    int          width;     /* logical lane count (e.g. 4,8,16,32)      */
+    MirType*     lane_type; /* element type (i8/i16/i32/i64/f32/f64)    */
+} MirVecOp;
 
 /* Phi node incoming edge */
 typedef struct {
@@ -285,6 +345,9 @@ struct MirInst {
 
         /* Debug location */
         struct { int line; int column; const char* file; } debug;
+
+        /* Generic vector operations (see MIR_VEC_* comment block above) */
+        MirVecOp        vec;
     } as;
 
     /* Linked list within basic block */
@@ -564,6 +627,40 @@ MirValueId mir_build_struct_init(MirBuilder* b, MirType* type,
 MirValueId mir_build_extract(MirBuilder* b, MirValueId agg, int field_idx);
 MirValueId mir_build_insert(MirBuilder* b, MirValueId agg,
                              int field_idx, MirValueId val);
+
+/* ────────────────────────────────────────────────────────────
+ * Generic vector builders (SIMD virtualization layer)
+ *
+ * `width` is the logical lane count; the SIMD legalization pass
+ * translates this to target-native groups of instructions.
+ * `lane_type` must be a primitive (i8/i16/i32/i64/f32/f64).
+ * ──────────────────────────────────────────────────────────── */
+MirValueId mir_build_vec_load(MirBuilder* b, MirValueId ptr,
+                               MirType* lane_type, int width, bool aligned);
+void       mir_build_vec_store(MirBuilder* b, MirValueId ptr, MirValueId value,
+                                MirType* lane_type, int width, bool aligned);
+MirValueId mir_build_vec_broadcast(MirBuilder* b, MirValueId scalar,
+                                    MirType* lane_type, int width);
+MirValueId mir_build_vec_binop(MirBuilder* b, MirOpcode op,
+                                MirValueId a, MirValueId b_src,
+                                MirType* lane_type, int width);
+MirValueId mir_build_vec_fma(MirBuilder* b,
+                              MirValueId a, MirValueId bsrc, MirValueId c,
+                              MirType* lane_type, int width);
+MirValueId mir_build_vec_reduce_sum(MirBuilder* b, MirValueId v,
+                                     MirType* lane_type, int width);
+MirValueId mir_build_vec_dot(MirBuilder* b, MirValueId a, MirValueId bsrc,
+                              MirType* lane_type, int width);
+MirValueId mir_build_vec_cmp(MirBuilder* b, MirOpcode op,
+                              MirValueId a, MirValueId bsrc,
+                              MirType* lane_type, int width);
+MirValueId mir_build_vec_select(MirBuilder* b, MirValueId mask,
+                                 MirValueId a, MirValueId bsrc,
+                                 MirType* lane_type, int width);
+
+/* Query helpers */
+bool       mir_opcode_is_vec(MirOpcode op);
+const char* mir_opcode_name(MirOpcode op);
 
 /* ────────────────────────────────────────────────────────────
  * MIR Printer — textual representation for debugging

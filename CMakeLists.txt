@@ -166,6 +166,7 @@ set(MIR_SOURCES
     src/compiler/ir/mir_mem2reg.c
     src/compiler/ir/mir_inline.c
     src/compiler/ir/mir_async.c
+    src/compiler/ir/mir_regex.c
 )
 
 set(CODEGEN_SOURCES

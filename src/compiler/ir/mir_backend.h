@@ -99,6 +99,15 @@ struct MirBackend {
 /* Create a native x86-64 backend (outputs NASM assembly) */
 MirBackend* mir_backend_create_x86_64(MirBackendConfig config);
 
+/* Create an AArch64 backend (outputs GAS assembly + NEON) */
+MirBackend* mir_backend_create_aarch64(MirBackendConfig config);
+
+/* Create a pure-scalar backend -- no SIMD instructions at all.
+ * Useful for targets with no vector registers (tiny MCUs, WASM MVP,
+ * portable C transpile target).  Relies on simd_legalize_* having
+ * scalarized every VEC_* op before emission. */
+MirBackend* mir_backend_create_scalar(MirBackendConfig config);
+
 /* Create a VM bytecode backend */
 MirBackend* mir_backend_create_vm(MirBackendConfig config);
 
@@ -118,6 +127,21 @@ bool mir_backend_emit_module(MirBackend* backend, MirModule* module);
 /* Query utilities */
 const char* mir_target_name(MirTargetArch target);
 const char* mir_output_format_name(MirOutputFormat fmt);
+
+/* Test / introspection helper: returns the internal text buffer for
+ * the SIMD-aware backends (x86-64, AArch64, scalar).  The buffer is
+ * owned by the backend; do NOT fclose it.  Rewind before reading. */
+FILE* mir_backend_get_text_buffer(MirBackend* self);
+
+/* Override the SIMD capability the backend emits for.  Must be called
+ * before begin_module() so the banner reports the right feature set.
+ * Only meaningful for the x86-64 and AArch64 backends -- other
+ * backends silently ignore it.
+ *
+ * The `cap` argument is opaque here (declared as int) to avoid the
+ * public header having to pull compiler/opt/simd.h; valid values are
+ * members of SimdCapability. */
+void mir_backend_set_simd_capability(MirBackend* self, int cap);
 
 /* ────────────────────────────────────────────────────────────
  * VM Bytecode Format (for VM and JIT backends)

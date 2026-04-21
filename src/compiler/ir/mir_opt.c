@@ -104,6 +104,20 @@ bool value_used_in_inst(MirInst* inst, MirValueId val) {
             return inst->as.field_op.aggregate == val ||
                    inst->as.field_op.insert_val == val;
 
+        /* Generic vector (all share the `vec` variant with up to 3
+         * SSA sources; MIR_VALUE_NONE indicates an unused slot). */
+        case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+        case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+        case MIR_VEC_BROADCAST: case MIR_VEC_REDUCE_SUM:
+        case MIR_VEC_ADD: case MIR_VEC_SUB: case MIR_VEC_MUL: case MIR_VEC_DIV:
+        case MIR_VEC_MIN: case MIR_VEC_MAX:
+        case MIR_VEC_AND: case MIR_VEC_OR:  case MIR_VEC_XOR:
+        case MIR_VEC_FMA: case MIR_VEC_DOT:
+        case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT: case MIR_VEC_CMP_GT:
+        case MIR_VEC_SELECT:
+            return inst->as.vec.a == val || inst->as.vec.b == val ||
+                   inst->as.vec.c == val;
+
         default:
             return false;
     }
@@ -180,6 +194,21 @@ static void replace_value_in_inst(MirInst* inst, MirValueId old_val, MirValueId 
 
         case MIR_ARC_RETAIN: case MIR_ARC_RELEASE: case MIR_DROP:
             if (inst->as.refop.ptr == old_val) inst->as.refop.ptr = new_val;
+            break;
+
+        /* Generic vector (up to 3 SSA sources). */
+        case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+        case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+        case MIR_VEC_BROADCAST: case MIR_VEC_REDUCE_SUM:
+        case MIR_VEC_ADD: case MIR_VEC_SUB: case MIR_VEC_MUL: case MIR_VEC_DIV:
+        case MIR_VEC_MIN: case MIR_VEC_MAX:
+        case MIR_VEC_AND: case MIR_VEC_OR:  case MIR_VEC_XOR:
+        case MIR_VEC_FMA: case MIR_VEC_DOT:
+        case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT: case MIR_VEC_CMP_GT:
+        case MIR_VEC_SELECT:
+            if (inst->as.vec.a == old_val) inst->as.vec.a = new_val;
+            if (inst->as.vec.b == old_val) inst->as.vec.b = new_val;
+            if (inst->as.vec.c == old_val) inst->as.vec.c = new_val;
             break;
 
         default:
