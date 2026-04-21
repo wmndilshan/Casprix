@@ -672,8 +672,16 @@ void mir_print_inst(MirInst* inst, FILE* out);
 void mir_print_type(MirType* type, FILE* out);
 
 /* ────────────────────────────────────────────────────────────
- * MIR Validation — structural integrity checks
+ * MIR Verification — structural + type + ownership + CFG contract
+ *
+ * `mir_verify_*` returns the number of diagnostics emitted (0 = success).
+ * When `diag` is NULL, errors are counted but not printed.
+ *
+ * `mir_validate_*` is a convenience wrapper: prints to stderr, returns true
+ * iff the verifier reports zero errors.
  * ──────────────────────────────────────────────────────────── */
+int  mir_verify_module(MirModule* module, FILE* diag);
+int  mir_verify_function(MirFunction* func, FILE* diag);
 bool mir_validate_module(MirModule* module);
 bool mir_validate_function(MirFunction* func);
 

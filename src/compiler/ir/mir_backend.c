@@ -718,3 +718,10 @@ MirBackend* mir_backend_create_jit(MirBackendConfig config) {
 
     return b;
 }
+
+bool mir_opcode_has_native_lower_mapping(MirOpcode op, MirTargetArch arch) {
+    (void)arch;
+    /* Keep in sync with `MirOpcode` — anything outside this contiguous
+     * range is a compiler bug or a stale opcode value. */
+    return (int)op >= (int)MIR_CONST_INT && (int)op <= (int)MIR_DEBUGLOC;
+}

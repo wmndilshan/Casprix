@@ -130,6 +130,21 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_simd_virt.c")
     add_test(NAME test_simd_virt COMMAND test_simd_virt)
 endif()
 
+# ── MIR corpus verification (golden .cpx + builder SIMD fixture) ─────────────
+if(BUILD_COMPILER AND BUILD_TESTS AND TARGET casprix_compiler)
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/ctest/mir_verify")
+    add_executable(test_mir_corpus_verify compiler/test_mir_corpus_verify.c)
+    target_link_libraries(test_mir_corpus_verify PRIVATE
+        casprix_compiler
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    add_test(NAME MIR_VERIFY_corpus COMMAND test_mir_corpus_verify)
+    set_tests_properties(MIR_VERIFY_corpus PROPERTIES
+        ENVIRONMENT "CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR};MIR_VERIFY_OUT=${CMAKE_BINARY_DIR}/ctest/mir_verify")
+endif()
+
 # ── Compiler integration tests ───────────────────────────────────────────────
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_lang_abi.c")
     add_executable(test_lang_abi test_lang_abi.c)

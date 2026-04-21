@@ -208,13 +208,27 @@ set(ALL_COMPILER_SOURCES
 )
 
 # ============================================================================
-# Compiler executable
+# Compiler library + driver executable
 # ============================================================================
+#
+# The bulk of the compiler is built as a static library so MIR verification
+# and other integration tests can link the same sources without compiling
+# a second monolithic executable.
 
 if(BUILD_COMPILER)
-    add_executable(casprix ${ALL_COMPILER_SOURCES})
+    set(CASPRIX_COMPILER_LIB_SOURCES ${ALL_COMPILER_SOURCES})
+    list(REMOVE_ITEM CASPRIX_COMPILER_LIB_SOURCES src/main.c)
 
+    add_library(casprix_compiler STATIC ${CASPRIX_COMPILER_LIB_SOURCES})
+    target_link_libraries(casprix_compiler PRIVATE
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+
+    add_executable(casprix src/main.c)
     target_link_libraries(casprix PRIVATE
+        casprix_compiler
         casprix_compile_options
         casprix_include_dirs
         $<$<NOT:$<BOOL:${MSVC}>>:m>

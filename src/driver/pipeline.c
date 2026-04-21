@@ -347,8 +347,6 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         printf("  Lowered %d function(s) — %d string(s)\n",
                ctx.mir_module->func_count, ctx.mir_module->string_count);
         perf_end(&g_diag.perf);
-        if (!mir_validate_module(ctx.mir_module))
-            printf("  [WARN] MIR validation found issues\n");
         if (g_config.dump_mir || g_config.dump_all) {
             printf("\n  === MIR (after lowering) ===\n");
             mir_print_module(ctx.mir_module, stdout);
@@ -426,6 +424,12 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
             debug_phase_end("MIR Optimization");
             debug_step_wait();
         }
+
+        if (mir_verify_module(ctx.mir_module, stderr) != 0) {
+            printf("\n  [ERROR] MIR verification failed (CFG, types, or ownership).\n");
+            result = 65; goto done;
+        }
+        if (!g_config.compact_output) CPX_INFO("MIR verification passed");
     }
 
     /* --- Phase 6: AST-level optimization (legacy path) --- */

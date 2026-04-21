@@ -143,6 +143,11 @@ FILE* mir_backend_get_text_buffer(MirBackend* self);
  * members of SimdCapability. */
 void mir_backend_set_simd_capability(MirBackend* self, int cap);
 
+/* True if `op` is part of the hybrid native lowering contract for `arch`:
+ * scalar MIR lowers through asmgen in the driver; MIR_VEC_* lowers through
+ * simd_emit_* (with scalar expansion when needed). */
+bool mir_opcode_has_native_lower_mapping(MirOpcode op, MirTargetArch arch);
+
 /* ────────────────────────────────────────────────────────────
  * VM Bytecode Format (for VM and JIT backends)
  * ──────────────────────────────────────────────────────────── */
