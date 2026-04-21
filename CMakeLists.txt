@@ -248,6 +248,13 @@ endif()
 if(BUILD_RUNTIME)
     set(RUNTIME_SOURCES runtime/runtime.c)
 
+    # CVM interpreter + JIT bridge (register-based MIR VM)
+    foreach(_f cvm_engine jit_bridge)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/vm/${_f}.c")
+            list(APPEND RUNTIME_SOURCES "runtime/vm/${_f}.c")
+        endif()
+    endforeach()
+
     # Memory subsystem
     foreach(_f arc ownership cycle_gc memory gc region refcount tlocal_heap)
         if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/memory/${_f}.c")

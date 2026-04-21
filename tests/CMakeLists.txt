@@ -145,6 +145,46 @@ if(BUILD_COMPILER AND BUILD_TESTS AND TARGET casprix_compiler)
         ENVIRONMENT "CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR};MIR_VERIFY_OUT=${CMAKE_BINARY_DIR}/ctest/mir_verify")
 endif()
 
+# ── CVM + JIT tier-up test ───────────────────────────────────────────────────
+# Tests the register-based MIR interpreter and the JIT bridge (mmap/VirtualAlloc).
+# Links the minimal MIR subsystem (builder + printer + module) plus the new
+# runtime/vm sources.  No lexer/parser/sema needed.
+if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_vm_jit.c")
+    add_executable(test_vm_jit
+        test_vm_jit.c
+        # CVM interpreter + JIT bridge
+        ${CMAKE_SOURCE_DIR}/runtime/vm/cvm_engine.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
+        # MIR subsystem (builder, printer, optimizer, borrow checker)
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/opt/simd.c
+    )
+    target_include_directories(test_vm_jit PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(test_vm_jit PRIVATE
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    # Win32 needs no extra libs for VirtualAlloc (already in kernel32)
+    add_test(NAME CVM_JIT_tierup COMMAND test_vm_jit)
+    set_tests_properties(CVM_JIT_tierup PROPERTIES
+        TIMEOUT 120
+        LABELS "vm;jit")
+endif()
+
 # ── Compiler integration tests ───────────────────────────────────────────────
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_lang_abi.c")
     add_executable(test_lang_abi test_lang_abi.c)
