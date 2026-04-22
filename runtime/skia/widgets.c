@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /*
  * Core Widgets — Factory functions that create configured SGNodes
  *

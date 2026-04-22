@@ -1053,6 +1053,9 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
         case EXPR_VARIABLE:
             generate_asm_variable(gen, expr, reg, symbols);
             break;
+        case EXPR_AWAIT:
+            /* Await is handled by async lowering; no-op in asm gen */
+            break;
         case EXPR_BINARY:
             generate_asm_binary(gen, expr, reg, symbols);
             break;

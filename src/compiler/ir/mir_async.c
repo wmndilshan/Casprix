@@ -1,43 +1,21 @@
-#include "mir_opt.h"
-#include <stdio.h>
+#include "mir.h"
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
+#include <stdio.h>
 
-// Forward declaration of helper from mir_opt.c
-// (Ideally these should be in a shared header)
-extern bool value_used_in_inst(MirInst* inst, MirValueId val);
-
-/*
+/**
  * MIR Async Transformation
  * 
- * Converts an async function into a state machine.
- * 
- * 1. Collect all SSA values live across MIR_SUSPEND points.
- * 2. Create a state struct to hold these values.
- * 3. Rewrite MIR to use the state struct.
+ * Lowers async functions into state machines.
  */
 
-typedef struct {
-    MirValueId val;
-    MirType* type;
-    int offset;
-} SavedValue;
-
-typedef struct {
-    MirFunction* func;
-    SavedValue* saved;
-    int saved_count;
-    MirType* state_struct;
-} AsyncCtx;
-
 int mir_transform_async(MirFunction* func) {
-    if (!func->is_async) return 0;
+    if (!func || !func->is_async) return 0;
 
-    // 1. Find all suspend points and resume blocks
-    MirBlock** resume_blocks = NULL;
-    MirInst** suspend_insts = NULL;
+    // 1. Identify suspend points
     int suspend_count = 0;
+    MirInst** suspend_insts = NULL;
+    MirBlock** resume_blocks = NULL;
 
     for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
         for (MirInst* inst = bb->first; inst; inst = inst->next) {
@@ -65,38 +43,21 @@ int mir_transform_async(MirFunction* func) {
         }
     }
 
-    if (suspend_count == 0) {
-        free(resume_blocks);
-        free(suspend_insts);
-        return 0;
-    }
+    if (suspend_count == 0) return 0;
 
-    // 2. Identify values to save (Liveness Analysis)
-    MirValueId* values_to_save = NULL;
+    // 2. Identify values that live across suspend points
     int values_count = 0;
+    MirValueId* values_to_save = NULL;
 
     for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
         for (MirInst* inst = bb->first; inst; inst = inst->next) {
-            if (inst->result == MIR_VALUE_NONE) continue;
-
             MirValueId val = inst->result;
-            bool needs_save = false;
+            if (val == MIR_VALUE_NONE) continue;
 
-            // Find all uses of this value
-            for (MirBlock* ubb = func->block_list; ubb; ubb = ubb->next_block) {
-                for (MirInst* uinst = ubb->first; uinst; uinst = uinst->next) {
-                    if (value_used_in_inst(uinst, val)) {
-                        // Value is used in uinst. Is there a suspend point between inst and uinst?
-                        // Simple heuristic: if ubb != bb and bb dominates a suspend point that reaches ubb.
-                        // For now, if ubb != bb, we conservatively save it.
-                        if (ubb != bb) {
-                            needs_save = true;
-                            break;
-                        }
-                    }
-                }
-                if (needs_save) break;
-            }
+            // Check if this value is used after any suspend point that it dominates
+            bool needs_save = false;
+            // TODO: Real liveness analysis. For now, assume all non-void values might need saving.
+            needs_save = true;
 
             if (needs_save) {
                 MirValueId* new_values = realloc(values_to_save, (values_count + 1) * sizeof(MirValueId));
@@ -112,11 +73,14 @@ int mir_transform_async(MirFunction* func) {
         }
     }
 
-    // 3. Generate compact state struct
+    // 3. Create state struct
+    // The state struct contains:
+    // - current state (i32)
+    // - saved values
     MirType** field_types = malloc((values_count + 1) * sizeof(MirType*));
     int field_count = 0;
-    
-    // Resume point is always field 0
+
+    // Field 0: state index
     field_types[field_count++] = mir_type_i32(func->parent);
 
     // 4. Transform original function to step function
@@ -125,28 +89,22 @@ int mir_transform_async(MirFunction* func) {
     snprintf(step_func_name, sizeof(step_func_name), "%s_step", func->name);
     
     // Create the step function signature: (state: Ptr) -> i32
-    MirType* state_type = mir_type_i32(func->parent); // Placeholder
-    MirType* state_ptr_type = mir_type_ptr(func->parent, state_type);
+    // MirType* state_type = mir_type_i32(func->parent); // Placeholder
+    // MirType* state_ptr_type = mir_type_ptr(func->parent, state_type);
+    
+    /*
     MirParam step_params[1];
     step_params[0].name = "state";
     step_params[0].type = state_ptr_type;
     step_params[0].value_id = mir_function_new_value(func, state_ptr_type);
     // MirValueId state_ptr = step_params[0].value_id;
+    */
 
     // 5. Inject Loads and Stores
     // Store on Define: For each value in values_to_save, insert an 'insert' (or store) after its definition
     for (int i = 0; i < values_count; i++) {
-        MirValueId val = values_to_save[i];
+        // MirValueId val = values_to_save[i];
         // Find definition
-        for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
-            for (MirInst* inst = bb->first; inst; inst = inst->next) {
-                if (inst->result == val) {
-                    // Insert store after inst
-                    // Since MIR is SSA, we use a conceptual store to the state struct
-                    // In real MIR, we'd use MIR_STORE with a GEP
-                }
-            }
-        }
     }
 
     // Load on Resume: At the start of each resume block, insert 'extract' (or load) for needed values
@@ -155,11 +113,11 @@ int mir_transform_async(MirFunction* func) {
         // Insert loads for all values defined before this suspend and used after
     }
 
-    printf("Successfully transformed %s into a high-performance state machine\n", func->name);
-
-    free(resume_blocks);
+    // Cleanup
     free(suspend_insts);
-    free(field_types);
+    free(resume_blocks);
     free(values_to_save);
+    free(field_types);
+
     return 1;
 }

@@ -501,7 +501,7 @@ done:
  * ========================================================================== */
 
 int pipeline_assemble(const char* asm_file_path, const char* obj_file_path) {
-    char command[4096];
+    char command[8192];
 #ifdef _WIN32
     snprintf(command, sizeof(command),
              "nasm -f win64 \"%s\" -o \"%s\"", asm_file_path, obj_file_path);
@@ -541,24 +541,22 @@ static bool file_exists_readable(const char* path) {
 static bool find_source_root_for_runtime(char* out, size_t outsz) {
     const char* env = getenv("CASPRIX_SOURCE_ROOT");
     if (env && *env) {
-        char probe[768];
+        char probe[2048];
         snprintf(probe, sizeof(probe), "%s/runtime/memory/arc.c", env);
         if (file_exists_readable(probe)) {
-            strncpy(out, env, outsz);
-            out[outsz - 1] = '\0';
+            snprintf(out, outsz, "%s", env);
             return true;
         }
     }
 
-    char cwd[512];
+    char cwd[1024];
     if (!casprix_getcwd(cwd, sizeof(cwd))) return false;
 
     for (int depth = 0; depth < 10; depth++) {
-        char probe[640];
+        char probe[2048];
         snprintf(probe, sizeof(probe), "%s/runtime/memory/arc.c", cwd);
         if (file_exists_readable(probe)) {
-            strncpy(out, cwd, outsz);
-            out[outsz - 1] = '\0';
+            snprintf(out, outsz, "%s", cwd);
             return true;
         }
         char* slash = strrchr(cwd, '/');
@@ -573,8 +571,7 @@ static bool find_source_root_for_runtime(char* out, size_t outsz) {
 }
 
 static void extract_parent_dir(const char* file_path, char* dir_out, size_t dir_sz) {
-    strncpy(dir_out, ".", dir_sz);
-    dir_out[dir_sz - 1] = '\0';
+    snprintf(dir_out, dir_sz, ".");
     const char* sep = strrchr(file_path, '/');
 #ifdef _WIN32
     const char* sep2 = strrchr(file_path, '\\');
@@ -599,8 +596,7 @@ static bool find_lib_next_to_path(const char* anchor_path, const char* name,
     snprintf(probe, sizeof(probe), "%s/%s", dir, name);
     if (!file_exists_readable(probe)) return false;
 
-    strncpy(out, probe, outsz - 1);
-    out[outsz - 1] = '\0';
+    snprintf(out, outsz, "%s", probe);
     return true;
 }
 
@@ -614,8 +610,7 @@ static bool find_prebuilt_lib_path(const char* name, char* out, size_t outsz) {
     const char* env = getenv("CASPRIX_RUNTIME_LIB");
     if (env && *env && strcmp(name, "libcasprix_runtime.a") == 0 &&
         file_exists_readable(env)) {
-        strncpy(out, env, outsz - 1);
-        out[outsz - 1] = '\0';
+        snprintf(out, outsz, "%s", env);
         return true;
     }
 
@@ -633,8 +628,7 @@ static bool find_prebuilt_lib_path(const char* name, char* out, size_t outsz) {
     for (int i = 0; dirs[i]; i++) {
         snprintf(path, sizeof(path), "%s/%s", dirs[i], name);
         if (file_exists_readable(path)) {
-            strncpy(out, path, outsz - 1);
-            out[outsz - 1] = '\0';
+            snprintf(out, outsz, "%s", path);
             return true;
         }
     }
@@ -653,10 +647,10 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
     const char* opt_flags = g_config.optimize ? "-O2" : "-g";
 
     /* Locate prebuilt runtime library */
-    char rt_path[512] = "";
-    char std_path[512] = "";
-    char skia_gui_path[512] = "";
-    char skia_c_path[512] = "";
+    char rt_path[1024] = "";
+    char std_path[1024] = "";
+    char skia_gui_path[1024] = "";
+    char skia_c_path[1024] = "";
     bool have_rt = find_lib_next_to_path(obj_file_path, "libcasprix_runtime.a", rt_path, sizeof(rt_path)) ||
                    find_lib_next_to_path(exe_path, "libcasprix_runtime.a", rt_path, sizeof(rt_path)) ||
                    find_prebuilt_lib_path("libcasprix_runtime.a", rt_path, sizeof(rt_path));
@@ -673,7 +667,7 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
     bool have_skia = have_skia_gui && have_skia_c;
 
     char runtime_flags[1536] = "";
-    char inline_sources[512] = "";
+    char inline_sources[4096] = "";
 
     if (need_skia && !have_skia) {
         printf("  [ERROR] Skia GUI program detected, but libskia_gui.a/libskia_c.a were not found.\n");
@@ -698,7 +692,7 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
         }
     } else {
         /* No prebuilt runtime: compile a minimal subset next to the repo root. */
-        char root[512];
+        char root[1024];
         if (find_source_root_for_runtime(root, sizeof(root))) {
             snprintf(inline_sources, sizeof(inline_sources),
                      "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "

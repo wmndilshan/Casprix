@@ -19,8 +19,9 @@ typedef struct {
     DataType type;
 } LocalVar;
 
-static void collect_locals_stmt(Stmt* stmt, LocalVar** locals, int* count);
+// static void collect_locals_stmt(Stmt* stmt, LocalVar** locals, int* count);
 
+/*
 // Collect all local variables (including parameters) that need to be in state struct
 static void collect_locals(FunctionStmt* func, LocalVar** locals, int* count) {
     // Add parameters first
@@ -36,43 +37,46 @@ static void collect_locals(FunctionStmt* func, LocalVar** locals, int* count) {
     // Add variables declared in body
     collect_locals_stmt(func->body, locals, count);
 }
+*/
 
+/*
 static void collect_locals_stmt(Stmt* stmt, LocalVar** locals, int* count) {
     if (!stmt) return;
-
+    
     switch (stmt->type) {
-        case STMT_DECLARATION: {
+        case STMT_DECL: {
             LocalVar* new_locals = realloc(*locals, (*count + 1) * sizeof(LocalVar));
-            if (!new_locals) break;
+            if (!new_locals) return;
             *locals = new_locals;
-            (*locals)[*count].name = stmt->as.declaration.name;
-            (*locals)[*count].type = stmt->as.declaration.type;
+            (*locals)[*count].name = stmt->as.decl.name;
+            (*locals)[*count].type = stmt->as.decl.type;
             (*count)++;
             break;
         }
         case STMT_BLOCK: {
-            for (int i = 0; i < stmt->as.block.stmt_count; i++) {
-                collect_locals_stmt(stmt->as.block.statements[i], locals, count);
+            Stmt* s = stmt->as.block.first;
+            while (s) {
+                collect_locals_stmt(s, locals, count);
+                s = s->next;
             }
             break;
         }
-        case STMT_IF: {
+        case STMT_IF:
             collect_locals_stmt(stmt->as.if_stmt.then_branch, locals, count);
-            collect_locals_stmt(stmt->as.if_stmt.else_branch, locals, count);
+            if (stmt->as.if_stmt.else_branch)
+                collect_locals_stmt(stmt->as.if_stmt.else_branch, locals, count);
             break;
-        }
-        case STMT_WHILE: {
+        case STMT_WHILE:
             collect_locals_stmt(stmt->as.while_stmt.body, locals, count);
             break;
-        }
-        case STMT_FOR: {
+        case STMT_FOR:
             collect_locals_stmt(stmt->as.for_stmt.body, locals, count);
             break;
-        }
         default:
             break;
     }
 }
+*/
 
 // Mark function as async
 

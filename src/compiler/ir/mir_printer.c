@@ -403,6 +403,10 @@ void mir_print_inst(MirInst* inst, FILE* out) {
         case MIR_NOP:
             fprintf(out, "nop");
             break;
+        case MIR_UNDEF:
+            fprintf(out, "undef ");
+            mir_print_type(inst->type, out);
+            break;
         case MIR_SUSPEND:
             fprintf(out, "suspend bb%u, ", inst->as.suspend.resume_bb->id);
             print_value(inst->as.suspend.future, out);
