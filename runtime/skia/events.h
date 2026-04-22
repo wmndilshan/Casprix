@@ -174,6 +174,9 @@ void sg_dispatch_key_up(SGEventManager* mgr, int keycode, int scancode, int mods
 void sg_dispatch_text_input(SGEventManager* mgr, const char* text);
 void sg_dispatch_resize(SGEventManager* mgr, int width, int height);
 
+/* Secure state mutation helpers for pointer interactions. */
+void sg_pointer_set_active(SGNode* node, int active);
+
 /* ========================================================================
  * Focus Management
  * ======================================================================== */

@@ -6,6 +6,7 @@
  */
 
 #include "events.h"
+#include "widgets.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -23,6 +24,21 @@
 #define DOUBLE_CLICK_DIST   4.0f   /* pixels */
 
 static SGEventManager* g_active_focus_manager = NULL;
+
+void sg_pointer_set_active(SGNode* node, int active) {
+    if (!node) return;
+    if (active) {
+        node->state_flags |= SG_STATE_ACTIVE;
+        node->state_flags &= ~SG_STATE_HOVER;
+    } else {
+        node->state_flags &= ~SG_STATE_ACTIVE;
+        node->state_flags |= SG_STATE_HOVER;
+    }
+    sg_mark_dirty_rect(node, node->bounds);
+    if (node->scene_owner) {
+        sg_scene_mark_dirty_rect(node->scene_owner, node->bounds);
+    }
+}
 
 static int sg_node_is_focusable(const SGNode* node) {
     if (!node) return 0;
@@ -209,6 +225,7 @@ void sg_dispatch_mouse_down(SGEventManager* mgr, float x, float y, int button, i
     mgr->mouse_buttons |= (1 << button);
 
     if (target) {
+        sg_pointer_set_active(target, 1);
         SGEvent evt = { 0 };
         evt.type = SG_EVENT_MOUSE_DOWN;
         sg_set_mouse_local_coords(&evt, target, x, y);
@@ -226,6 +243,9 @@ void sg_dispatch_mouse_up(SGEventManager* mgr, float x, float y, int button, int
     mgr->mouse_buttons &= ~(1 << button);
 
     if (target) {
+        if (mgr->pressed == target) {
+            sg_pointer_set_active(target, 0);
+        }
         SGEvent evt = { 0 };
         evt.type = SG_EVENT_MOUSE_UP;
         sg_set_mouse_local_coords(&evt, target, x, y);

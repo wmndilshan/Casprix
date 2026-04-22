@@ -15,6 +15,7 @@
 
 #include "skia_c.h"
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -132,6 +133,9 @@ typedef struct {
 #define SG_MAX_HANDLERS 8
 
 typedef struct SGNode SGNode;
+typedef struct SGScene SGScene;
+typedef struct SGArena SGArena;
+typedef struct SGStyleRef SGStyleRef;
 
 typedef void (*SGEventHandler)(SGNode* node, int event_type, void* event_data, void* user_data);
 
@@ -142,6 +146,51 @@ typedef struct {
 } SGHandlerSlot;
 
 typedef void (*SGNodeCleanupFn)(SGNode* node);
+
+/* ========================================================================
+ * Modern Lifecycle + Arena API
+ * ======================================================================== */
+
+typedef struct {
+    float min_w;
+    float max_w;
+    float min_h;
+    float max_h;
+} SGMeasureConstraints;
+
+struct SGArena {
+    uint8_t* base;
+    size_t   capacity;
+    size_t   offset;
+};
+
+typedef struct SGWidgetVTable {
+    void (*init)(SGScene* scene, SGNode* node);
+    void (*measure_layout)(SGScene* scene, SGNode* node,
+                           const SGMeasureConstraints* constraints,
+                           float* out_w, float* out_h);
+    void (*paint)(SGScene* scene, SGNode* node, SkiaCanvas canvas, SGRect clip);
+    void (*destroy)(SGScene* scene, SGNode* node);
+} SGWidgetVTable;
+
+typedef struct {
+    SGNode* root;
+    SGRect  dirty_rects[1024];
+    uint32_t dirty_count;
+    uint32_t frame_id;
+} SGFrameState;
+
+struct SGScene {
+    SGArena arena;
+    SGFrameState frame;
+    SGNode* root;
+
+    /* Reusable paints to avoid per-frame allocations. */
+    SkiaPaint fill_paint;
+    SkiaPaint stroke_paint;
+    SkiaPaint text_paint;
+    SkiaPaint shadow_paint;
+};
 
 /* ========================================================================
  * Scene Graph Node
@@ -228,6 +277,20 @@ struct SGNode {
     /* User data pointer (for widget state, etc.) */
     void* user_data;
     SGNodeCleanupFn cleanup;
+
+    /* Optional modern lifecycle hooks (kept additive for compatibility). */
+    const SGWidgetVTable* lifecycle;
+    uint32_t              state_flags;
+    SGStyleRef*           style_ref;
+    SGScene*              scene_owner;
+};
+
+enum {
+    SG_STATE_HOVER    = 1u << 0,
+    SG_STATE_ACTIVE   = 1u << 1,
+    SG_STATE_FOCUSED  = 1u << 2,
+    SG_STATE_DISABLED = 1u << 3,
+    SG_STATE_CHECKED  = 1u << 4
 };
 
 /* ========================================================================
@@ -235,6 +298,7 @@ struct SGNode {
  * ======================================================================== */
 
 SGNode* sg_node_create(SGNodeType type);
+SGNode* sg_node_create_in_scene(SGScene* scene, SGNodeType type);
 void    sg_node_destroy(SGNode* node);              /* Release one owner/reference */
 void    sg_node_destroy_tree(SGNode* node);         /* Release root of subtree */
 void    sg_node_destroy_single(SGNode* node);       /* Destroy only this node */
@@ -293,6 +357,27 @@ void sg_style_set_margin_uniform(SGNode* node, double margin);
 void sg_style_set_shadow(SGNode* node, double ox, double oy, double blur, uint32_t color);
 void sg_style_set_opacity(SGNode* node, double opacity);
 void sg_style_set_gradient(SGNode* node, SkiaShader gradient);
+
+/* ========================================================================
+ * Modern Scene Lifecycle Helpers
+ * ======================================================================== */
+
+SGScene* sg_scene_create(void* arena_memory, size_t arena_capacity);
+void     sg_scene_destroy(SGScene* scene);
+void     sg_scene_begin_frame(SGScene* scene);
+void     sg_scene_register_root(SGScene* scene, SGNode* root);
+
+void* sg_scene_alloc(SGScene* scene, size_t size, size_t align);
+int   sg_node_set_lifecycle(SGNode* node, const SGWidgetVTable* lifecycle);
+void  sg_node_set_style_ref(SGNode* node, SGStyleRef* style_ref);
+void  sg_node_run_init(SGNode* node);
+void  sg_node_run_destroy(SGNode* node);
+void  sg_node_run_measure(SGNode* node, const SGMeasureConstraints* constraints,
+                          float* out_w, float* out_h);
+void  sg_node_run_paint(SGNode* node, SkiaCanvas canvas, SGRect clip);
+
+void sg_scene_mark_dirty_rect(SGScene* scene, SGRect rect);
+void sg_scene_mark_node_dirty(SGNode* node);
 
 /* ========================================================================
  * Rendering

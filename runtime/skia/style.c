@@ -6,6 +6,162 @@
 #include "skia_c.h"
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
+
+static uint32_t sg_color_dim(uint32_t c, int delta) {
+    int a = (int)((c >> 24) & 0xFF);
+    int r = (int)((c >> 16) & 0xFF) + delta;
+    int g = (int)((c >> 8) & 0xFF) + delta;
+    int b = (int)(c & 0xFF) + delta;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+void sg_theme_material3_default(SGTheme* out_theme) {
+    if (!out_theme) return;
+    memset(out_theme, 0, sizeof(*out_theme));
+    out_theme->colors[SG_TOKEN_PRIMARY] = 0xFF6750A4;
+    out_theme->colors[SG_TOKEN_ON_PRIMARY] = 0xFFFFFFFF;
+    out_theme->colors[SG_TOKEN_SURFACE] = 0xFFFCFCFF;
+    out_theme->colors[SG_TOKEN_ON_SURFACE] = 0xFF1C1B1F;
+    out_theme->colors[SG_TOKEN_SURFACE_CONTAINER] = 0xFFF3EDF7;
+    out_theme->colors[SG_TOKEN_SURFACE_CONTAINER_HIGH] = 0xFFECE6F0;
+    out_theme->colors[SG_TOKEN_OUTLINE] = 0xFF79747E;
+    out_theme->colors[SG_TOKEN_OUTLINE_VARIANT] = 0xFFCAC4D0;
+    out_theme->colors[SG_TOKEN_ERROR] = 0xFFB3261E;
+
+    out_theme->spacing_scale[0] = 2;
+    out_theme->spacing_scale[1] = 4;
+    out_theme->spacing_scale[2] = 6;
+    out_theme->spacing_scale[3] = 8;
+    out_theme->spacing_scale[4] = 12;
+    out_theme->spacing_scale[5] = 16;
+    out_theme->spacing_scale[6] = 24;
+    out_theme->spacing_scale[7] = 32;
+}
+
+void sg_style_data_from_theme(SGStyleData* out, const SGTheme* theme) {
+    if (!out || !theme) return;
+    memset(out, 0, sizeof(*out));
+    out->bg_color = theme->colors[SG_TOKEN_SURFACE];
+    out->fg_color = theme->colors[SG_TOKEN_ON_SURFACE];
+    out->border_color = theme->colors[SG_TOKEN_OUTLINE_VARIANT];
+    out->border_width = 1.0f;
+    out->radius = 12.0f;
+    out->pad_top = 8.0f;
+    out->pad_right = 12.0f;
+    out->pad_bottom = 8.0f;
+    out->pad_left = 12.0f;
+    out->font = NULL;
+    out->shadow_offset_y = 0.0f;
+    out->shadow_blur = 0.0f;
+    out->shadow_color = 0x00000000;
+}
+
+void sg_style_ref_init(SGStyleRef* ref, const SGStyleRef* parent) {
+    if (!ref) return;
+    memset(ref, 0, sizeof(*ref));
+    ref->parent = parent;
+}
+
+void sg_style_ref_set_bg(SGStyleRef* ref, uint32_t color) {
+    if (!ref) return;
+    ref->data.bg_color = color;
+    ref->set_mask |= SG_STYLE_SET_BG;
+}
+
+void sg_style_ref_set_fg(SGStyleRef* ref, uint32_t color) {
+    if (!ref) return;
+    ref->data.fg_color = color;
+    ref->set_mask |= SG_STYLE_SET_FG;
+}
+
+void sg_style_ref_set_border(SGStyleRef* ref, uint32_t color, float width) {
+    if (!ref) return;
+    ref->data.border_color = color;
+    ref->data.border_width = width;
+    ref->set_mask |= SG_STYLE_SET_BORDER;
+}
+
+void sg_style_ref_set_radius(SGStyleRef* ref, float radius) {
+    if (!ref) return;
+    ref->data.radius = radius;
+    ref->set_mask |= SG_STYLE_SET_RADIUS;
+}
+
+void sg_style_ref_set_padding(SGStyleRef* ref, float top, float right, float bottom, float left) {
+    if (!ref) return;
+    ref->data.pad_top = top;
+    ref->data.pad_right = right;
+    ref->data.pad_bottom = bottom;
+    ref->data.pad_left = left;
+    ref->set_mask |= SG_STYLE_SET_PADDING;
+}
+
+void sg_style_ref_set_font(SGStyleRef* ref, SkiaFont font) {
+    if (!ref) return;
+    ref->data.font = font;
+    ref->set_mask |= SG_STYLE_SET_FONT;
+}
+
+void sg_style_ref_set_shadow(SGStyleRef* ref, float offset_y, float blur, uint32_t color) {
+    if (!ref) return;
+    ref->data.shadow_offset_y = offset_y;
+    ref->data.shadow_blur = blur;
+    ref->data.shadow_color = color;
+    ref->set_mask |= SG_STYLE_SET_SHADOW;
+}
+
+void sg_style_resolve(const SGStyleRef* ref, uint32_t state_flags, SGResolvedStyle* out) {
+    uint32_t needed;
+    const SGStyleRef* it;
+
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    needed = SG_STYLE_SET_BG | SG_STYLE_SET_FG | SG_STYLE_SET_BORDER |
+             SG_STYLE_SET_RADIUS | SG_STYLE_SET_PADDING |
+             SG_STYLE_SET_FONT | SG_STYLE_SET_SHADOW;
+
+    for (it = ref; it && needed != 0; it = it->parent) {
+        uint32_t take = it->set_mask & needed;
+        if (!take) continue;
+
+        if (take & SG_STYLE_SET_BG) out->data.bg_color = it->data.bg_color;
+        if (take & SG_STYLE_SET_FG) out->data.fg_color = it->data.fg_color;
+        if (take & SG_STYLE_SET_BORDER) {
+            out->data.border_color = it->data.border_color;
+            out->data.border_width = it->data.border_width;
+        }
+        if (take & SG_STYLE_SET_RADIUS) out->data.radius = it->data.radius;
+        if (take & SG_STYLE_SET_PADDING) {
+            out->data.pad_top = it->data.pad_top;
+            out->data.pad_right = it->data.pad_right;
+            out->data.pad_bottom = it->data.pad_bottom;
+            out->data.pad_left = it->data.pad_left;
+        }
+        if (take & SG_STYLE_SET_FONT) out->data.font = it->data.font;
+        if (take & SG_STYLE_SET_SHADOW) {
+            out->data.shadow_offset_y = it->data.shadow_offset_y;
+            out->data.shadow_blur = it->data.shadow_blur;
+            out->data.shadow_color = it->data.shadow_color;
+        }
+
+        needed &= ~take;
+    }
+
+    if (state_flags & SG_STATE_DISABLED) {
+        out->data.bg_color = 0xFFE6E8EB;
+        out->data.fg_color = 0xFF8A9099;
+    } else if (state_flags & SG_STATE_ACTIVE) {
+        out->data.bg_color = sg_color_dim(out->data.bg_color, -18);
+    } else if (state_flags & SG_STATE_HOVER) {
+        out->data.bg_color = sg_color_dim(out->data.bg_color, 10);
+    }
+
+    out->resolved_state_flags = state_flags;
+}
 
 static void sg_style_mark_changed(SGNode* node, int affects_layout) {
     if (!node) return;

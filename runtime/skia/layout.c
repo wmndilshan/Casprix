@@ -106,6 +106,21 @@ SGSize sg_layout_measure(SGNode* node, SGConstraints constraints) {
 
     /* If node has explicit flex_basis, use that as starting size on main axis */
     SGSize size = { 0, 0 };
+    if (node->lifecycle && node->lifecycle->measure_layout) {
+        SGMeasureConstraints c = {
+            constraints.min_width,
+            constraints.max_width,
+            constraints.min_height,
+            constraints.max_height
+        };
+        node->lifecycle->measure_layout(node->scene_owner, node, &c, &size.w, &size.h);
+        size.w += pad_h(node);
+        size.h += pad_v(node);
+        size = apply_size_constraints(node, size);
+        size.w = sg_clampf(size.w, constraints.min_width, constraints.max_width);
+        size.h = sg_clampf(size.h, constraints.min_height, constraints.max_height);
+        return size;
+    }
 
     /* Leaf nodes: use intrinsic size */
     if (!node->first_child) {

@@ -49,11 +49,18 @@ typedef enum {
     BUTTON_DISABLED,
 } ButtonState;
 
+typedef enum {
+    BUTTON_VARIANT_FLAT = 0,
+    BUTTON_VARIANT_OUTLINED = 1,
+    BUTTON_VARIANT_ELEVATED = 2
+} ButtonVariant;
+
 typedef void (*ButtonClickCallback)(SGNode* button, void* user_data);
 
 typedef struct {
     WidgetType type;              /* WIDGET_BUTTON */
     ButtonState state;
+    ButtonVariant variant;
     int focus_visible;
     uint32_t normal_color;        /* Default background */
     uint32_t hover_color;         /* Hovered background */
@@ -75,6 +82,8 @@ typedef struct {
  * Returns the root SGNode for the button. */
 SGNode* widget_button(const char* label, SkiaFont font,
                        ButtonClickCallback on_click, void* user_data);
+SGNode* widget_button_modern(const char* label, SkiaFont font, ButtonVariant variant,
+                              ButtonClickCallback on_click, void* user_data);
 
 /* Set button colors */
 void widget_button_set_colors(SGNode* btn, uint32_t normal, uint32_t hover,
@@ -88,6 +97,7 @@ void widget_button_set_callback(SGNode* btn, ButtonClickCallback on_click, void*
 
 /* Get button state */
 ButtonState widget_button_get_state(SGNode* btn);
+void        widget_button_set_variant(SGNode* btn, ButtonVariant variant);
 
 /* ========================================================================
  * Text Widget
@@ -156,6 +166,9 @@ SGNode* widget_checkbox(const char* label, SkiaFont font, int initial_checked);
 int     widget_checkbox_is_checked(SGNode* node);
 void    widget_checkbox_set_checked(SGNode* node, int checked);
 void    widget_checkbox_on_change(SGNode* node, CheckboxChangeCallback callback, void* user_data);
+
+/* Toggle switch (modern checkbox variant). */
+SGNode* widget_toggle(int initial_checked);
 
 /* ========================================================================
  * Slider Widget
@@ -229,6 +242,9 @@ SGNode* widget_separator(int horizontal, uint32_t color, double thickness);
  * ======================================================================== */
 
 SGNode* widget_spacer(double grow);
+
+/* Modern surface/card container. */
+SGNode* widget_surface_card(float radius, int elevated);
 
 /* ========================================================================
  * Progress Bar Widget

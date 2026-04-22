@@ -18,6 +18,62 @@ extern "C" {
 #endif
 
 /* ========================================================================
+ * Modern Token + Cascade Engine (allocation-free resolve path)
+ * ======================================================================== */
+
+typedef enum {
+    SG_TOKEN_PRIMARY = 0,
+    SG_TOKEN_ON_PRIMARY,
+    SG_TOKEN_SURFACE,
+    SG_TOKEN_ON_SURFACE,
+    SG_TOKEN_SURFACE_CONTAINER,
+    SG_TOKEN_SURFACE_CONTAINER_HIGH,
+    SG_TOKEN_OUTLINE,
+    SG_TOKEN_OUTLINE_VARIANT,
+    SG_TOKEN_ERROR,
+    SG_TOKEN_COUNT
+} SGStyleToken;
+
+typedef struct {
+    uint32_t colors[SG_TOKEN_COUNT];
+    uint8_t  spacing_scale[8]; /* 2,4,6,8,12,16,24,32 */
+} SGTheme;
+
+typedef struct {
+    uint32_t bg_color;
+    uint32_t fg_color;
+    uint32_t border_color;
+    float border_width;
+    float radius;
+    float pad_top, pad_right, pad_bottom, pad_left;
+    SkiaFont font;
+    float shadow_offset_y;
+    float shadow_blur;
+    uint32_t shadow_color;
+} SGStyleData;
+
+enum {
+    SG_STYLE_SET_BG      = 1u << 0,
+    SG_STYLE_SET_FG      = 1u << 1,
+    SG_STYLE_SET_BORDER  = 1u << 2,
+    SG_STYLE_SET_RADIUS  = 1u << 3,
+    SG_STYLE_SET_PADDING = 1u << 4,
+    SG_STYLE_SET_FONT    = 1u << 5,
+    SG_STYLE_SET_SHADOW  = 1u << 6
+};
+
+typedef struct SGStyleRef {
+    const struct SGStyleRef* parent;
+    SGStyleData              data;
+    uint32_t                 set_mask;
+} SGStyleRef;
+
+typedef struct {
+    SGStyleData data;
+    uint32_t    resolved_state_flags;
+} SGResolvedStyle;
+
+/* ========================================================================
  * Predefined Color Palette
  * ======================================================================== */
 
@@ -132,6 +188,19 @@ void sg_style_pill(SGNode* node);
 
 /* Render a rounded rect with background, gradient, and border */
 void sg_render_styled_rect(SkiaCanvas canvas, SGRect bounds, SGStyle* style);
+
+/* Theme + style cascade helpers. */
+void     sg_theme_material3_default(SGTheme* out_theme);
+void     sg_style_data_from_theme(SGStyleData* out, const SGTheme* theme);
+void     sg_style_ref_init(SGStyleRef* ref, const SGStyleRef* parent);
+void     sg_style_ref_set_bg(SGStyleRef* ref, uint32_t color);
+void     sg_style_ref_set_fg(SGStyleRef* ref, uint32_t color);
+void     sg_style_ref_set_border(SGStyleRef* ref, uint32_t color, float width);
+void     sg_style_ref_set_radius(SGStyleRef* ref, float radius);
+void     sg_style_ref_set_padding(SGStyleRef* ref, float top, float right, float bottom, float left);
+void     sg_style_ref_set_font(SGStyleRef* ref, SkiaFont font);
+void     sg_style_ref_set_shadow(SGStyleRef* ref, float offset_y, float blur, uint32_t color);
+void     sg_style_resolve(const SGStyleRef* ref, uint32_t state_flags, SGResolvedStyle* out);
 
 #ifdef __cplusplus
 }

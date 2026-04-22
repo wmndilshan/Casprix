@@ -227,6 +227,10 @@ static void button_on_mouse_enter(SGNode* node, int event_type, void* event_data
     if (!state || state->state == BUTTON_DISABLED) return;
     state->state = BUTTON_HOVERED;
     node->style.background = state->hover_color;
+    if (state->variant == BUTTON_VARIANT_ELEVATED) {
+        /* GDI-safe elevated fallback: lift by tweaking geometric shadow layers. */
+        widget_set_primary_shadow(node, 7.0f, 0.0f, 0x22000000);
+    }
     sg_node_mark_dirty(node, SG_DIRTY_PAINT);
 }
 
@@ -236,6 +240,9 @@ static void button_on_mouse_leave(SGNode* node, int event_type, void* event_data
     if (!state || state->state == BUTTON_DISABLED) return;
     state->state = BUTTON_NORMAL;
     node->style.background = state->normal_color;
+    if (state->variant == BUTTON_VARIANT_ELEVATED) {
+        widget_set_primary_shadow(node, 5.0f, 0.0f, 0x1A000000);
+    }
     sg_node_mark_dirty(node, SG_DIRTY_PAINT);
 }
 
@@ -245,6 +252,9 @@ static void button_on_mouse_down(SGNode* node, int event_type, void* event_data,
     if (!state || state->state == BUTTON_DISABLED) return;
     state->state = BUTTON_PRESSED;
     node->style.background = state->press_color;
+    if (state->variant == BUTTON_VARIANT_ELEVATED) {
+        widget_set_primary_shadow(node, 2.0f, 0.0f, 0x18000000);
+    }
     sg_node_mark_dirty(node, SG_DIRTY_PAINT);
 }
 
@@ -259,6 +269,34 @@ static void button_on_click(SGNode* node, int event_type, void* event_data, void
     if (state->on_click) {
         state->on_click(node, state->callback_data);
     }
+}
+
+static void button_apply_variant_style(SGNode* btn, ButtonWidgetState* state) {
+    if (!btn || !state) return;
+
+    switch (state->variant) {
+        case BUTTON_VARIANT_FLAT:
+            btn->style.background = state->normal_color;
+            btn->style.border_color = SKIA_COLOR_TRANSPARENT;
+            btn->style.border_width = 1.0f;
+            widget_set_primary_shadow(btn, 0.0f, 0.0f, SKIA_COLOR_TRANSPARENT);
+            break;
+        case BUTTON_VARIANT_OUTLINED:
+            btn->style.background = SKIA_COLOR_TRANSPARENT;
+            btn->style.border_color = sg_color_with_alpha(state->normal_color, 140);
+            btn->style.border_width = 1.5f;
+            widget_set_primary_shadow(btn, 0.0f, 0.0f, SKIA_COLOR_TRANSPARENT);
+            break;
+        case BUTTON_VARIANT_ELEVATED:
+        default:
+            btn->style.background = state->normal_color;
+            btn->style.border_color = sg_color_with_alpha(color_darken(state->normal_color, 24), 72);
+            btn->style.border_width = 1.0f;
+            /* blur=0 signals manual multi-pass shadow in render override */
+            widget_set_primary_shadow(btn, 5.0f, 0.0f, 0x1A000000);
+            break;
+    }
+    sg_node_mark_dirty(btn, SG_DIRTY_PAINT);
 }
 
 static void button_on_focus_in(SGNode* node, int event_type, void* event_data, void* udata) {
@@ -301,6 +339,11 @@ static void button_on_key_down(SGNode* node, int event_type, void* event_data, v
 
 SGNode* widget_button(const char* label, SkiaFont font,
                        ButtonClickCallback on_click, void* user_data) {
+    return widget_button_modern(label, font, BUTTON_VARIANT_ELEVATED, on_click, user_data);
+}
+
+SGNode* widget_button_modern(const char* label, SkiaFont font, ButtonVariant variant,
+                              ButtonClickCallback on_click, void* user_data) {
     /* Create button container */
     SGNode* btn = sg_node_create(SG_NODE_CONTAINER);
     btn->layout_type = SG_LAYOUT_ROW;
@@ -326,6 +369,7 @@ SGNode* widget_button(const char* label, SkiaFont font,
     ButtonWidgetState* state = (ButtonWidgetState*)calloc(1, sizeof(ButtonWidgetState));
     state->type = WIDGET_BUTTON;
     state->state = BUTTON_NORMAL;
+    state->variant = variant;
     state->normal_color = SG_COLOR_PRIMARY;
     state->hover_color = color_lighten(SG_COLOR_PRIMARY, 10);
     state->press_color = color_darken(SG_COLOR_PRIMARY, 12);
@@ -334,6 +378,7 @@ SGNode* widget_button(const char* label, SkiaFont font,
     state->on_click = on_click;
     state->callback_data = user_data;
     btn->user_data = state;
+    button_apply_variant_style(btn, state);
 
     /* Event handlers */
     sg_node_on(btn, SG_EVENT_MOUSE_ENTER, button_on_mouse_enter, NULL);
@@ -368,8 +413,7 @@ void widget_button_set_enabled(SGNode* btn, int enabled) {
     if (!state || state->type != WIDGET_BUTTON) return;
     if (enabled) {
         state->state = BUTTON_NORMAL;
-        btn->style.background = state->normal_color;
-        btn->style.border_color = sg_color_with_alpha(color_darken(state->normal_color, 24), 72);
+        button_apply_variant_style(btn, state);
         btn->flags |= SG_INTERACTIVE;
         widget_update_first_text_child(btn, state->text_color);
     } else {
@@ -393,6 +437,13 @@ ButtonState widget_button_get_state(SGNode* btn) {
     ButtonWidgetState* state = (ButtonWidgetState*)btn->user_data;
     if (!state || state->type != WIDGET_BUTTON) return BUTTON_NORMAL;
     return state->state;
+}
+
+void widget_button_set_variant(SGNode* btn, ButtonVariant variant) {
+    ButtonWidgetState* state = (ButtonWidgetState*)btn->user_data;
+    if (!state || state->type != WIDGET_BUTTON) return;
+    state->variant = variant;
+    button_apply_variant_style(btn, state);
 }
 
 /* ========================================================================
@@ -883,6 +934,28 @@ static void checkbox_update_visual(SGNode* node, CheckboxWidgetState* state) {
     }
 }
 
+static void toggle_update_visual(SGNode* node, CheckboxWidgetState* state) {
+    SGNode* track;
+    SGNode* thumb;
+
+    if (!node || !state) return;
+    track = node->first_child;
+    thumb = track ? track->next_sibling : NULL;
+    if (!track || !thumb) return;
+
+    track->style.background = state->checked ? SG_COLOR_PRIMARY : SG_COLOR_DISABLED_SURFACE;
+    track->style.border_color = SKIA_COLOR_TRANSPARENT;
+    track->style.border_width = 1.0f;
+    track->style.border_radius = 13.0f;
+
+    thumb->style.background = SKIA_COLOR_WHITE;
+    thumb->style.border_color = sg_color_with_alpha(SG_COLOR_TEXT_SECONDARY, 60);
+    thumb->style.border_width = 1.0f;
+    thumb->style.border_radius = 11.0f;
+    thumb->transform.tx = state->checked ? 20.0f : 2.0f;
+    thumb->transform.ty = 2.0f;
+}
+
 static void checkbox_on_click(SGNode* node, int event_type, void* event_data, void* udata) {
     (void)event_type; (void)event_data; (void)udata;
     CheckboxWidgetState* state = (CheckboxWidgetState*)node->user_data;
@@ -890,6 +963,18 @@ static void checkbox_on_click(SGNode* node, int event_type, void* event_data, vo
     state->checked = !state->checked;
     checkbox_update_visual(node, state);
     sg_node_mark_dirty(node, SG_DIRTY_PAINT);
+    if (state->on_change) {
+        state->on_change(node, state->checked, state->callback_data);
+    }
+}
+
+static void toggle_on_click(SGNode* node, int event_type, void* event_data, void* udata) {
+    CheckboxWidgetState* state = (CheckboxWidgetState*)node->user_data;
+    (void)event_type; (void)event_data; (void)udata;
+    if (!state) return;
+    state->checked = !state->checked;
+    toggle_update_visual(node, state);
+    sg_node_mark_dirty(node, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
     if (state->on_change) {
         state->on_change(node, state->checked, state->callback_data);
     }
@@ -962,6 +1047,45 @@ void widget_checkbox_on_change(SGNode* node, CheckboxChangeCallback callback, vo
     if (!state || state->type != WIDGET_CHECKBOX) return;
     state->on_change = callback;
     state->callback_data = user_data;
+}
+
+SGNode* widget_toggle(int initial_checked) {
+    SGNode* root = sg_node_create(SG_NODE_CONTAINER);
+    SGNode* track = sg_node_create(SG_NODE_RECT);
+    SGNode* thumb = sg_node_create(SG_NODE_RECT);
+    CheckboxWidgetState* state;
+
+    root->layout_type = SG_LAYOUT_NONE;
+    root->flags |= SG_INTERACTIVE;
+    root->min_width = 44.0f;
+    root->min_height = 26.0f;
+
+    track->style.border_radius = 13.0f;
+    track->style.background = initial_checked ? SG_COLOR_PRIMARY : SG_COLOR_DISABLED_SURFACE;
+    track->style.border_color = SKIA_COLOR_TRANSPARENT;
+    track->style.border_width = 1.0f;
+    track->min_width = 44.0f;
+    track->min_height = 26.0f;
+    sg_node_add_child(root, track);
+
+    thumb->style.border_radius = 11.0f;
+    thumb->style.background = SKIA_COLOR_WHITE;
+    thumb->style.border_color = sg_color_with_alpha(SG_COLOR_TEXT_SECONDARY, 60);
+    thumb->style.border_width = 1.0f;
+    thumb->min_width = 22.0f;
+    thumb->min_height = 22.0f;
+    thumb->transform.tx = initial_checked ? 20.0f : 2.0f;
+    thumb->transform.ty = 2.0f;
+    sg_node_add_child(root, thumb);
+
+    state = (CheckboxWidgetState*)calloc(1, sizeof(CheckboxWidgetState));
+    state->type = WIDGET_CHECKBOX;
+    state->checked = initial_checked ? 1 : 0;
+    root->user_data = state;
+
+    sg_node_on(root, SG_EVENT_CLICK, toggle_on_click, NULL);
+    toggle_update_visual(root, state);
+    return root;
 }
 
 /* ========================================================================
@@ -1262,6 +1386,29 @@ SGNode* widget_separator(int horizontal, uint32_t color, double thickness) {
 SGNode* widget_spacer(double grow) {
     SGNode* node = sg_node_create(SG_NODE_CONTAINER);
     node->flex_grow = grow;
+    return node;
+}
+
+SGNode* widget_surface_card(float radius, int elevated) {
+    SGNode* node = sg_node_create(SG_NODE_CONTAINER);
+    node->layout_type = SG_LAYOUT_COLUMN;
+    node->align_items = SG_ALIGN_STRETCH;
+    node->style.background = SG_COLOR_SURFACE;
+    node->style.border_color = SG_COLOR_BORDER;
+    node->style.border_width = 1.0f;
+    node->style.border_radius = radius > 0.0f ? radius : 16.0f;
+    node->style.padding[0] = 16.0f;
+    node->style.padding[1] = 16.0f;
+    node->style.padding[2] = 16.0f;
+    node->style.padding[3] = 16.0f;
+    if (elevated) {
+        /* Use shadow_blur=0 to trigger layered fallback in scene_graph renderer. */
+        node->style.elevation = 2;
+        node->style.shadow_offset_x = 0.0f;
+        node->style.shadow_offset_y = 2.0f;
+        node->style.shadow_blur = 0.0f;
+        node->style.shadow_color = 0x22000000;
+    }
     return node;
 }
 

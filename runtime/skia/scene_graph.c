@@ -6,10 +6,12 @@
 
 #include "scene_graph.h"
 #include "widgets.h"
+#include "style.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
 /* ========================================================================
  * Global State
@@ -20,6 +22,95 @@ static uint32_t g_next_node_id = 1;
 static void sg_node_release(SGNode* node);
 static void sg_node_finalize(SGNode* node);
 static void sg_node_release_children(SGNode* node);
+
+static void* sg_arena_alloc_internal(SGArena* arena, size_t size, size_t align) {
+    uintptr_t base_addr;
+    uintptr_t aligned;
+    size_t next;
+
+    if (!arena || !arena->base || size == 0) return NULL;
+    if (align == 0) align = 1;
+    if ((align & (align - 1)) != 0) return NULL;
+
+    base_addr = (uintptr_t)arena->base + arena->offset;
+    aligned = (base_addr + (align - 1)) & ~(uintptr_t)(align - 1);
+    next = (size_t)(aligned - (uintptr_t)arena->base) + size;
+    if (next > arena->capacity) return NULL;
+
+    arena->offset = next;
+    return (void*)aligned;
+}
+
+void* sg_scene_alloc(SGScene* scene, size_t size, size_t align) {
+    if (!scene) return NULL;
+    return sg_arena_alloc_internal(&scene->arena, size, align);
+}
+
+SGScene* sg_scene_create(void* arena_memory, size_t arena_capacity) {
+    SGScene* scene;
+    if (!arena_memory || arena_capacity == 0) return NULL;
+
+    scene = (SGScene*)calloc(1, sizeof(SGScene));
+    if (!scene) return NULL;
+
+    scene->arena.base = (uint8_t*)arena_memory;
+    scene->arena.capacity = arena_capacity;
+    scene->arena.offset = 0;
+    scene->frame.root = NULL;
+    scene->frame.dirty_count = 0;
+    scene->frame.frame_id = 0;
+
+    scene->fill_paint = skia_paint_create();
+    scene->stroke_paint = skia_paint_create();
+    scene->text_paint = skia_paint_create();
+    scene->shadow_paint = skia_paint_create();
+    if (scene->fill_paint) skia_paint_set_style(scene->fill_paint, 0);
+    if (scene->stroke_paint) skia_paint_set_style(scene->stroke_paint, 1);
+    if (scene->text_paint) skia_paint_set_style(scene->text_paint, 0);
+    if (scene->shadow_paint) skia_paint_set_style(scene->shadow_paint, 0);
+
+    return scene;
+}
+
+void sg_scene_register_root(SGScene* scene, SGNode* root) {
+    if (!scene) return;
+    scene->root = root;
+    scene->frame.root = root;
+}
+
+void sg_scene_begin_frame(SGScene* scene) {
+    if (!scene) return;
+    scene->frame.frame_id++;
+    scene->frame.dirty_count = 0;
+}
+
+void sg_scene_mark_dirty_rect(SGScene* scene, SGRect rect) {
+    if (!scene) return;
+    if (scene->frame.dirty_count < (uint32_t)(sizeof(scene->frame.dirty_rects) / sizeof(scene->frame.dirty_rects[0]))) {
+        scene->frame.dirty_rects[scene->frame.dirty_count++] = rect;
+    }
+}
+
+void sg_scene_mark_node_dirty(SGNode* node) {
+    if (!node) return;
+    sg_mark_dirty_rect(node, node->bounds);
+    if (node->scene_owner) {
+        sg_scene_mark_dirty_rect(node->scene_owner, node->bounds);
+    }
+}
+
+void sg_scene_destroy(SGScene* scene) {
+    if (!scene) return;
+    if (scene->root) {
+        sg_node_destroy_tree(scene->root);
+        scene->root = NULL;
+    }
+    if (scene->fill_paint) skia_paint_destroy(scene->fill_paint);
+    if (scene->stroke_paint) skia_paint_destroy(scene->stroke_paint);
+    if (scene->text_paint) skia_paint_destroy(scene->text_paint);
+    if (scene->shadow_paint) skia_paint_destroy(scene->shadow_paint);
+    free(scene);
+}
 
 uint32_t sg_next_id(void) {
     return g_next_node_id++;
@@ -59,6 +150,66 @@ SGNode* sg_node_create(SGNodeType type) {
     return node;
 }
 
+SGNode* sg_node_create_in_scene(SGScene* scene, SGNodeType type) {
+    SGNode* node;
+    if (!scene) return sg_node_create(type);
+
+    node = (SGNode*)sg_scene_alloc(scene, sizeof(SGNode), 64);
+    if (!node) return NULL;
+    memset(node, 0, sizeof(*node));
+
+    node->type = type;
+    node->id = sg_next_id();
+    node->ref_count = 1;
+    node->ownership_flags = SG_NODE_OWNER_RUNTIME;
+    node->transform.sx = 1.0f;
+    node->transform.sy = 1.0f;
+    sg_style_init(&node->style);
+    node->flags = SG_VISIBLE | SG_DIRTY_LAYOUT | SG_DIRTY_PAINT;
+    node->flex_basis = -1.0f;
+    node->max_width = -1.0f;
+    node->max_height = -1.0f;
+    node->dirty_rect = (SGRect){ 0, 0, 0, 0 };
+    node->scene_owner = scene;
+    return node;
+}
+
+int sg_node_set_lifecycle(SGNode* node, const SGWidgetVTable* lifecycle) {
+    if (!node) return -1;
+    node->lifecycle = lifecycle;
+    return 0;
+}
+
+void sg_node_set_style_ref(SGNode* node, SGStyleRef* style_ref) {
+    if (!node) return;
+    node->style_ref = style_ref;
+    sg_node_mark_paint_dirty(node);
+}
+
+void sg_node_run_init(SGNode* node) {
+    if (!node || !node->lifecycle || !node->lifecycle->init) return;
+    node->lifecycle->init(node->scene_owner, node);
+}
+
+void sg_node_run_destroy(SGNode* node) {
+    if (!node || !node->lifecycle || !node->lifecycle->destroy) return;
+    node->lifecycle->destroy(node->scene_owner, node);
+}
+
+void sg_node_run_measure(SGNode* node, const SGMeasureConstraints* constraints,
+                         float* out_w, float* out_h) {
+    if (!out_w || !out_h) return;
+    *out_w = 0.0f;
+    *out_h = 0.0f;
+    if (!node || !node->lifecycle || !node->lifecycle->measure_layout) return;
+    node->lifecycle->measure_layout(node->scene_owner, node, constraints, out_w, out_h);
+}
+
+void sg_node_run_paint(SGNode* node, SkiaCanvas canvas, SGRect clip) {
+    if (!node || !node->lifecycle || !node->lifecycle->paint) return;
+    node->lifecycle->paint(node->scene_owner, node, canvas, clip);
+}
+
 void sg_node_destroy(SGNode* node) {
     sg_node_release(node);
 }
@@ -80,17 +231,21 @@ void sg_node_set_cleanup(SGNode* node, SGNodeCleanupFn cleanup) {
 void sg_node_destroy_single(SGNode* node) {
     if (!node) return;
 
+    if (node->lifecycle && node->lifecycle->destroy) {
+        node->lifecycle->destroy(node->scene_owner, node);
+    }
+
     if (node->cleanup) {
         node->cleanup(node);
         node->cleanup = NULL;
-    } else {
+    } else if (!node->lifecycle) {
         widget_cleanup(node);
     }
 
     /* Free type-specific data */
     switch (node->type) {
         case SG_NODE_TEXT:
-            if (node->data.text.text) free(node->data.text.text);
+            if (node->data.text.text && !node->scene_owner) free(node->data.text.text);
             if ((node->ownership_flags & SG_NODE_OWNS_FONT) && node->data.text.font) {
                 skia_font_destroy(node->data.text.font);
             }
@@ -114,7 +269,9 @@ void sg_node_destroy_single(SGNode* node) {
         skia_shader_destroy(node->style.gradient);
     }
 
-    free(node);
+    if (!node->scene_owner) {
+        free(node);
+    }
 }
 
 static void sg_node_release_children(SGNode* node) {
@@ -513,36 +670,83 @@ static void sg_ensure_paints(void) {
 }
 
 /* Draw shadow for a node */
-static void sg_render_shadow(SkiaCanvas canvas, SGNode* node) {
-    SGStyle* s = &node->style;
+static void sg_render_node_shadow(SkiaCanvas canvas, SGNode* node) {
+    SGStyle style_copy = node->style;
+    SGStyle* s = &style_copy;
+    if (node->style_ref) {
+        SGResolvedStyle resolved;
+        sg_style_resolve(node->style_ref, node->state_flags, &resolved);
+        s->shadow_offset_y = resolved.data.shadow_offset_y;
+        s->shadow_blur = resolved.data.shadow_blur;
+        s->shadow_color = resolved.data.shadow_color;
+        s->border_radius = resolved.data.radius;
+    }
     if (s->elevation <= 0 && s->shadow_blur <= 0.0f) return;
 
     float blur = s->shadow_blur > 0 ? s->shadow_blur : (float)s->elevation * 2.0f;
     float ox = s->shadow_offset_x;
     float oy = s->shadow_offset_y > 0 ? s->shadow_offset_y : (float)s->elevation * 1.0f;
 
-    skia_paint_set_color(g_shadow_paint, s->shadow_color);
-    skia_paint_set_blur(g_shadow_paint, blur * 0.5f);
-
     SGRect b = node->bounds;
-    if (s->border_radius > 0) {
-        skia_canvas_draw_rrect(canvas,
-            b.x + ox, b.y + oy, b.w, b.h,
-            s->border_radius, s->border_radius,
-            g_shadow_paint);
+    if (s->shadow_blur <= 0.0f) {
+        /* GDI-safe fallback: fake elevation via layered translucent shapes. */
+        static const float kGrow[3] = { 0.0f, 1.0f, 2.0f };
+        static const float kYOffset[3] = { 1.0f, 2.0f, 4.0f };
+        static const uint8_t kAlpha[3] = { 40, 24, 12 };
+        int passes = (s->elevation >= 2) ? 3 : ((s->elevation > 0) ? 2 : 1);
+        for (int i = 0; i < passes; i++) {
+            uint32_t rgb = s->shadow_color & 0x00FFFFFFu;
+            uint32_t argb = ((uint32_t)kAlpha[i] << 24) | rgb;
+            float grow = kGrow[i];
+            float rx = s->border_radius > 0 ? s->border_radius + grow : 0.0f;
+            skia_paint_set_color(g_shadow_paint, argb);
+            if (s->border_radius > 0) {
+                skia_canvas_draw_rrect(canvas,
+                    b.x + ox - grow, b.y + oy + kYOffset[i], b.w + grow * 2.0f, b.h + grow * 2.0f,
+                    rx, rx, g_shadow_paint);
+            } else {
+                skia_canvas_draw_rect(canvas,
+                    b.x + ox - grow, b.y + oy + kYOffset[i], b.w + grow * 2.0f, b.h + grow * 2.0f,
+                    g_shadow_paint);
+            }
+        }
     } else {
-        skia_canvas_draw_rect(canvas,
-            b.x + ox, b.y + oy, b.w, b.h,
-            g_shadow_paint);
+        skia_paint_set_color(g_shadow_paint, s->shadow_color);
+        skia_paint_set_blur(g_shadow_paint, blur * 0.5f);
+        if (s->border_radius > 0) {
+            skia_canvas_draw_rrect(canvas,
+                b.x + ox, b.y + oy, b.w, b.h,
+                s->border_radius, s->border_radius,
+                g_shadow_paint);
+        } else {
+            skia_canvas_draw_rect(canvas,
+                b.x + ox, b.y + oy, b.w, b.h,
+                g_shadow_paint);
+        }
+        skia_paint_clear_blur(g_shadow_paint);
     }
-
-    skia_paint_clear_blur(g_shadow_paint);
 }
 
 /* Draw node background (fill + border) */
 static void sg_render_background(SkiaCanvas canvas, SGNode* node) {
-    SGStyle* s = &node->style;
+    SGStyle style_copy = node->style;
+    SGStyle* s = &style_copy;
     SGRect b = node->bounds;
+    if (node->style_ref) {
+        SGResolvedStyle resolved;
+        sg_style_resolve(node->style_ref, node->state_flags, &resolved);
+        s->background = resolved.data.bg_color;
+        s->border_color = resolved.data.border_color;
+        s->border_width = resolved.data.border_width;
+        s->border_radius = resolved.data.radius;
+        s->padding[0] = resolved.data.pad_top;
+        s->padding[1] = resolved.data.pad_right;
+        s->padding[2] = resolved.data.pad_bottom;
+        s->padding[3] = resolved.data.pad_left;
+        s->shadow_offset_y = resolved.data.shadow_offset_y;
+        s->shadow_blur = resolved.data.shadow_blur;
+        s->shadow_color = resolved.data.shadow_color;
+    }
 
     /* Background fill */
     if ((s->background & 0xFF000000) != 0 || s->gradient) {
@@ -580,6 +784,11 @@ static void sg_render_background(SkiaCanvas canvas, SGNode* node) {
 /* Render type-specific content */
 static void sg_render_content(SkiaCanvas canvas, SGNode* node) {
     SGRect b = node->bounds;
+
+    if (node->lifecycle && node->lifecycle->paint) {
+        node->lifecycle->paint(node->scene_owner, node, canvas, b);
+        return;
+    }
 
     switch (node->type) {
         case SG_NODE_TEXT: {
@@ -827,7 +1036,7 @@ static void sg_render_node(SGNode* node, SkiaCanvas canvas, int dirty_only) {
 
     if (!dirty_only || (node->flags & SG_DIRTY_PAINT)) {
         if (dirty_only) g_sg_paint_node_count++;
-        sg_render_shadow(canvas, node);
+        sg_render_node_shadow(canvas, node);
         sg_render_background(canvas, node);
         sg_render_content(canvas, node);
     }
