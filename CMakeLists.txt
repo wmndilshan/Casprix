@@ -317,7 +317,7 @@ if(BUILD_RUNTIME)
     endif()
 
     # Network (new clean API — legacy disabled due to type conflicts)
-    foreach(_f socket http http_server)
+    foreach(_f socket http http_server reactor threadpool mpsc_queue ringbuf iouring scheduler_bridge cx_arena)
         if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/net/${_f}.c")
             list(APPEND RUNTIME_SOURCES "runtime/net/${_f}.c")
         endif()

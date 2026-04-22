@@ -1,43 +1,56 @@
 #ifndef CASPRIX_REACTOR_H
 #define CASPRIX_REACTOR_H
 
+#include "cx_arena.h"
+
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
-#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define CPX_REACT_READ  1u
-#define CPX_REACT_WRITE 2u
+#define CX_REACTOR_MAX_FDS (1 << 20)
+#define CX_REACTOR_MAX_EVENTS 1024
 
-typedef struct {
-    int      fd;
+typedef struct CxReactor CxReactor;
+
+typedef struct CxEventSlot {
+    int    fd;
     uint32_t events;
-    void*    userdata;
-} CpxIOEvent;
+    void* userdata;
+    void (*on_read)(CxReactor*, int fd, void* userdata);
+    void (*on_write)(CxReactor*, int fd, void* userdata);
+    void (*on_close)(CxReactor*, int fd, void* userdata);
+} CxEventSlot;
 
-typedef struct {
-    int  (*init)(void* ctx, int max_events);
-    int  (*add)(void* ctx, int fd, uint32_t events, void* userdata);
-    int  (*mod)(void* ctx, int fd, uint32_t events);
-    int  (*del)(void* ctx, int fd);
-    int  (*wait)(void* ctx, CpxIOEvent* out_events, int max_out, int timeout_ms);
-    void (*destroy)(void* ctx);
-} CpxReactorVTable;
+typedef struct CxReactor {
+    int              epfd;
+    int              max_fds;
+    CxEventSlot*     slots;
+    CxArena*         arena;
+    pthread_rwlock_t slots_lock;
+    _Atomic uint32_t running;
+} CxReactor;
 
-typedef struct {
-    const CpxReactorVTable* vtable;
-    void*                   ctx;
-} CpxReactor;
+int        cx_set_nonblocking(int fd);
+CxReactor* cx_reactor_create(CxArena* arena);
+void       cx_reactor_destroy(CxReactor* r);
+int        cx_reactor_add(CxReactor* r, int fd, uint32_t events,
+                          void* userdata,
+                          void (*on_read)(CxReactor*, int, void*),
+                          void (*on_write)(CxReactor*, int, void*),
+                          void (*on_close)(CxReactor*, int, void*));
+int        cx_reactor_rearm(CxReactor* r, int fd, uint32_t events);
+int        cx_reactor_remove(CxReactor* r, int fd);
+void       cx_reactor_run(CxReactor* r);
+void       cx_reactor_stop(CxReactor* r);
 
-CpxReactor* cpx_reactor_create(void);
-void        cpx_reactor_destroy(CpxReactor* r);
-
-int cpx_reactor_add(CpxReactor* r, int fd, uint32_t events, void* userdata);
-int cpx_reactor_mod(CpxReactor* r, int fd, uint32_t events);
-int cpx_reactor_del(CpxReactor* r, int fd);
-int cpx_reactor_wait(CpxReactor* r, CpxIOEvent* out_events, int max_out, int timeout_ms);
+/* Backward-compatible aliases used by existing tests/helpers. */
+typedef CxReactor CpxReactor;
+#define cpx_reactor_create(arena) cx_reactor_create(arena)
+#define cpx_reactor_destroy(r) cx_reactor_destroy(r)
 
 #ifdef __cplusplus
 }

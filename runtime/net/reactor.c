@@ -1,165 +1,202 @@
-/**
- * Portable reactor: poll() (POSIX) / WSAPoll (Windows)
- */
-
 #include "reactor.h"
+
+#include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
+#ifdef __linux__
+#include <fcntl.h>
+#include <sys/epoll.h>
+#include <unistd.h>
+#elif defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
-typedef struct pollfd cpx_pollfd;
-#define cpx_poll WSAPoll
-#else
-#include <poll.h>
-typedef struct pollfd cpx_pollfd;
-#define cpx_poll poll
 #endif
 
-typedef struct {
-    cpx_pollfd* fds;
-    void**      userdata;
-    int         count;
-    int         capacity;
-} ReactorPollCtx;
+#define CX_ASSERT(cond, msg)                                              \
+    do {                                                                   \
+        if (!(cond)) {                                                     \
+            fprintf(stderr, "reactor assert failed: %s (%s:%d)\n",         \
+                    (msg), __FILE__, __LINE__);                            \
+            abort();                                                       \
+        }                                                                  \
+    } while (0)
 
-static int poll_init(void* ctx, int max_events) {
-    ReactorPollCtx* c = (ReactorPollCtx*)ctx;
-    if (!c || max_events <= 0) return -1;
-    c->capacity = max_events;
-    c->fds      = (cpx_pollfd*)calloc((size_t)max_events, sizeof(cpx_pollfd));
-    c->userdata = (void**)calloc((size_t)max_events, sizeof(void*));
-    return (c->fds && c->userdata) ? 0 : -1;
+#ifdef __linux__
+static int cx_reactor_validate_fd(const CxReactor* r, int fd) {
+    return (r && fd >= 0 && fd < r->max_fds) ? 0 : -1;
 }
+#endif
 
-static int find_fd(ReactorPollCtx* c, int fd) {
-    for (int i = 0; i < c->count; i++) {
-        if (c->fds[i].fd == fd) return i;
-    }
+int cx_set_nonblocking(int fd) {
+#ifdef __linux__
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return -1;
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return -1;
+    return 0;
+#elif defined(_WIN32)
+    u_long mode = 1;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &mode) == 0 ? 0 : -1;
+#else
+    (void)fd;
     return -1;
+#endif
 }
 
-static short events_to_poll(uint32_t ev) {
-    short o = 0;
-    if (ev & CPX_REACT_READ)  o |= (short)POLLIN;
-    if (ev & CPX_REACT_WRITE) o |= (short)POLLOUT;
-    return o;
-}
-
-static int poll_add(void* ctx, int fd, uint32_t events, void* userdata) {
-    ReactorPollCtx* c = (ReactorPollCtx*)ctx;
-    if (!c || fd < 0 || c->count >= c->capacity) return -1;
-    if (find_fd(c, fd) >= 0) return -1;
-    c->fds[c->count].fd      = fd;
-    c->fds[c->count].events  = events_to_poll(events);
-    c->fds[c->count].revents = 0;
-    c->userdata[c->count]    = userdata;
-    c->count++;
-    return 0;
-}
-
-static int poll_mod(void* ctx, int fd, uint32_t events) {
-    ReactorPollCtx* c = (ReactorPollCtx*)ctx;
-    int i = find_fd(c, fd);
-    if (i < 0) return -1;
-    c->fds[i].events  = events_to_poll(events);
-    c->fds[i].revents = 0;
-    return 0;
-}
-
-static int poll_del(void* ctx, int fd) {
-    ReactorPollCtx* c = (ReactorPollCtx*)ctx;
-    int i = find_fd(c, fd);
-    if (i < 0) return -1;
-    if (i < c->count - 1) {
-        c->fds[i]      = c->fds[c->count - 1];
-        c->userdata[i] = c->userdata[c->count - 1];
-    }
-    c->count--;
-    return 0;
-}
-
-static int poll_wait(void* ctx, CpxIOEvent* out, int max_out, int timeout_ms) {
-    ReactorPollCtx* c = (ReactorPollCtx*)ctx;
-    if (!c || !out || max_out <= 0 || c->count == 0) return 0;
-
-    int pr = cpx_poll(c->fds, (unsigned long)c->count, timeout_ms);
-    if (pr <= 0) return pr;
-
-    int nout = 0;
-    for (int i = 0; i < c->count && nout < max_out; i++) {
-        if (c->fds[i].revents == 0) continue;
-        out[nout].fd       = c->fds[i].fd;
-        out[nout].events   = 0;
-        if (c->fds[i].revents & POLLIN)  out[nout].events |= CPX_REACT_READ;
-        if (c->fds[i].revents & POLLOUT) out[nout].events |= CPX_REACT_WRITE;
-        out[nout].userdata = c->userdata[i];
-        nout++;
-    }
-    return nout;
-}
-
-static void poll_destroy(void* ctx) {
-    ReactorPollCtx* c = (ReactorPollCtx*)ctx;
-    if (!c) return;
-    free(c->fds);
-    free(c->userdata);
-    free(c);
-}
-
-static const CpxReactorVTable g_poll_vtable = {
-    .init    = poll_init,
-    .add     = poll_add,
-    .mod     = poll_mod,
-    .del     = poll_del,
-    .wait    = poll_wait,
-    .destroy = poll_destroy,
-};
-
-CpxReactor* cpx_reactor_create(void) {
-    CpxReactor* r = (CpxReactor*)calloc(1, sizeof(CpxReactor));
+CxReactor* cx_reactor_create(CxArena* arena) {
+    if (!arena) return NULL;
+#ifndef __linux__
+    (void)arena;
+    return NULL;
+#else
+    CxReactor* r = (CxReactor*)cx_arena_alloc_aligned(arena, sizeof(CxReactor), 64);
     if (!r) return NULL;
-    ReactorPollCtx* ctx = (ReactorPollCtx*)calloc(1, sizeof(ReactorPollCtx));
-    if (!ctx) {
-        free(r);
+    memset(r, 0, sizeof(*r));
+
+    r->arena = arena;
+    r->max_fds = CX_REACTOR_MAX_FDS;
+    r->slots = (CxEventSlot*)cx_arena_alloc_aligned(
+        arena, (size_t)r->max_fds * sizeof(CxEventSlot), 64);
+    if (!r->slots) return NULL;
+    memset(r->slots, 0, (size_t)r->max_fds * sizeof(CxEventSlot));
+
+    r->epfd = epoll_create1(EPOLL_CLOEXEC);
+    if (r->epfd < 0) return NULL;
+    if (pthread_rwlock_init(&r->slots_lock, NULL) != 0) {
+        close(r->epfd);
         return NULL;
     }
-    r->vtable = &g_poll_vtable;
-    r->ctx    = ctx;
-    if (r->vtable->init(r->ctx, 256) != 0) {
-        free(ctx);
-        free(r);
-        return NULL;
-    }
+    atomic_store_explicit(&r->running, 1u, memory_order_release);
     return r;
+#endif
 }
 
-void cpx_reactor_destroy(CpxReactor* r) {
-    if (!r || !r->vtable || !r->ctx) return;
-    r->vtable->destroy(r->ctx);
-    free(r);
+void cx_reactor_destroy(CxReactor* r) {
+    if (!r) return;
+#ifdef __linux__
+    atomic_store_explicit(&r->running, 0u, memory_order_release);
+    if (r->epfd >= 0) close(r->epfd);
+    pthread_rwlock_destroy(&r->slots_lock);
+#else
+    (void)r;
+#endif
 }
 
-int cpx_reactor_add(CpxReactor* r, int fd, uint32_t events, void* userdata) {
-    if (!r || !r->vtable) return -1;
-    return r->vtable->add(r->ctx, fd, events, userdata);
+int cx_reactor_add(CxReactor* r, int fd, uint32_t events,
+                   void* userdata,
+                   void (*on_read)(CxReactor*, int, void*),
+                   void (*on_write)(CxReactor*, int, void*),
+                   void (*on_close)(CxReactor*, int, void*)) {
+#ifndef __linux__
+    (void)r; (void)fd; (void)events; (void)userdata; (void)on_read; (void)on_write; (void)on_close;
+    return -1;
+#else
+    if (!r || cx_reactor_validate_fd(r, fd) != 0) return -1;
+    CX_ASSERT(fd >= 0 && fd < r->max_fds, "fd out of bounds");
+    if (cx_set_nonblocking(fd) != 0) return -1;
+
+    uint32_t ep_events = events | EPOLLET | EPOLLONESHOT;
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.events = ep_events;
+    ev.data.fd = fd;
+
+    pthread_rwlock_wrlock(&r->slots_lock);
+    CxEventSlot* slot = &r->slots[fd];
+    slot->fd = fd;
+    slot->events = ep_events;
+    slot->userdata = userdata;
+    slot->on_read = on_read;
+    slot->on_write = on_write;
+    slot->on_close = on_close;
+    int ctl = epoll_ctl(r->epfd, EPOLL_CTL_ADD, fd, &ev);
+    pthread_rwlock_unlock(&r->slots_lock);
+    return ctl;
+#endif
 }
 
-int cpx_reactor_mod(CpxReactor* r, int fd, uint32_t events) {
-    if (!r || !r->vtable) return -1;
-    return r->vtable->mod(r->ctx, fd, events);
+int cx_reactor_rearm(CxReactor* r, int fd, uint32_t events) {
+#ifndef __linux__
+    (void)r; (void)fd; (void)events;
+    return -1;
+#else
+    if (!r || cx_reactor_validate_fd(r, fd) != 0) return -1;
+    CX_ASSERT(fd >= 0 && fd < r->max_fds, "fd out of bounds");
+    uint32_t ep_events = events | EPOLLET | EPOLLONESHOT;
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.events = ep_events;
+    ev.data.fd = fd;
+
+    pthread_rwlock_wrlock(&r->slots_lock);
+    r->slots[fd].events = ep_events;
+    int ctl = epoll_ctl(r->epfd, EPOLL_CTL_MOD, fd, &ev);
+    pthread_rwlock_unlock(&r->slots_lock);
+    return ctl;
+#endif
 }
 
-int cpx_reactor_del(CpxReactor* r, int fd) {
-    if (!r || !r->vtable) return -1;
-    return r->vtable->del(r->ctx, fd);
+int cx_reactor_remove(CxReactor* r, int fd) {
+#ifndef __linux__
+    (void)r; (void)fd;
+    return -1;
+#else
+    if (!r || cx_reactor_validate_fd(r, fd) != 0) return -1;
+    CX_ASSERT(fd >= 0 && fd < r->max_fds, "fd out of bounds");
+
+    pthread_rwlock_wrlock(&r->slots_lock);
+    struct epoll_event ignored;
+    memset(&ignored, 0, sizeof(ignored));
+    int ctl = epoll_ctl(r->epfd, EPOLL_CTL_DEL, fd, &ignored);
+    memset(&r->slots[fd], 0, sizeof(CxEventSlot));
+    r->slots[fd].fd = -1;
+    pthread_rwlock_unlock(&r->slots_lock);
+    return ctl;
+#endif
 }
 
-int cpx_reactor_wait(CpxReactor* r, CpxIOEvent* out_events, int max_out, int timeout_ms) {
-    if (!r || !r->vtable) return -1;
-    return r->vtable->wait(r->ctx, out_events, max_out, timeout_ms);
+void cx_reactor_run(CxReactor* r) {
+    if (!r) return;
+#ifdef __linux__
+    struct epoll_event events[CX_REACTOR_MAX_EVENTS];
+    while (atomic_load_explicit(&r->running, memory_order_acquire) != 0u) {
+        int n = epoll_wait(r->epfd, events, CX_REACTOR_MAX_EVENTS, 1000);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        for (int i = 0; i < n; i++) {
+            int fd = events[i].data.fd;
+            if (cx_reactor_validate_fd(r, fd) != 0) continue;
+
+            CxEventSlot slot_copy;
+            memset(&slot_copy, 0, sizeof(slot_copy));
+            pthread_rwlock_rdlock(&r->slots_lock);
+            slot_copy = r->slots[fd];
+            pthread_rwlock_unlock(&r->slots_lock);
+
+            if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+                if (slot_copy.on_close) slot_copy.on_close(r, fd, slot_copy.userdata);
+                cx_reactor_remove(r, fd);
+                continue;
+            }
+            if ((events[i].events & EPOLLIN) && slot_copy.on_read) {
+                slot_copy.on_read(r, fd, slot_copy.userdata);
+            }
+            if ((events[i].events & EPOLLOUT) && slot_copy.on_write) {
+                slot_copy.on_write(r, fd, slot_copy.userdata);
+            }
+        }
+    }
+#else
+    (void)r;
+#endif
+}
+
+void cx_reactor_stop(CxReactor* r) {
+    if (!r) return;
+    atomic_store_explicit(&r->running, 0u, memory_order_release);
 }
