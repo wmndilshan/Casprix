@@ -106,8 +106,13 @@ bool implement_trait(TraitContext* ctx, Trait* trait, ClassStmt* class_stmt) {
     impl->impl_count = trait->method_count;
     
     // Add to context
-    ctx->implementations = realloc(ctx->implementations,
-                                   (ctx->impl_count + 1) * sizeof(TraitImpl*));
+    TraitImpl** new_impls = realloc(ctx->implementations,
+                                    (ctx->impl_count + 1) * sizeof(TraitImpl*));
+    if (!new_impls) {
+        free(impl);
+        return false;
+    }
+    ctx->implementations = new_impls;
     ctx->implementations[ctx->impl_count++] = impl;
     
     printf("Class %s implements trait %s\n", class_stmt->name, trait->name);

@@ -56,7 +56,11 @@ static void find_free_vars_expr(Expr* expr, SymbolTable* local_table, SymbolTabl
                 }
 
                 // Add to captures
-                *captures = realloc(*captures, (*capture_count + 1) * sizeof(CapturedVar));
+                size_t new_size = (*capture_count + 1) * sizeof(CapturedVar);
+                CapturedVar* new_caps = realloc(*captures, new_size);
+                if (!new_caps) return;
+                *captures = new_caps;
+
                 CapturedVar* cap = &(*captures)[*capture_count];
                 cap->var_name = strdup(var_name);
                 cap->type = parent_sym->type;
@@ -300,8 +304,10 @@ CapturedVar* get_captured_var(const char* var_name, ClosureEnv* env) {
 
 // Generate mangled name for lambda
 char* mangle_lambda_name(const char* context, int lambda_id) {
-    char* name = malloc(256);
-    snprintf(name, 256, "_lambda_%s_%d", context, lambda_id);
+    size_t len = strlen(context) + 32;
+    char* name = malloc(len);
+    if (!name) return NULL;
+    snprintf(name, len, "_lambda_%s_%d", context, lambda_id);
     return name;
 }
 

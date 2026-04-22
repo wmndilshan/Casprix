@@ -540,9 +540,12 @@ static void rename_block(MirFunction* func,
                           int n_allocas,
                           MirMem2RegStats* stats) {
     /* Remember stack depths so we can pop on backtrack */
-    int* saved_tops = (int*)malloc(n_allocas * sizeof(int));
-    for (int a = 0; a < n_allocas; a++) {
-        saved_tops[a] = alloca_ctxs[a].stack.top;
+    int* saved_tops = NULL;
+    if (n_allocas > 0) {
+        saved_tops = (int*)malloc(n_allocas * sizeof(int));
+        for (int a = 0; a < n_allocas; a++) {
+            saved_tops[a] = alloca_ctxs[a].stack.top;
+        }
     }
 
     /* Process phi nodes in this block — they define new values */

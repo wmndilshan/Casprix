@@ -181,21 +181,33 @@ static Stmt* copy_stmt_with_substitution(Stmt* stmt, TypeParam* params, int para
 
 // Mangle generic name
 char* mangle_generic_name(const char* base, DataType* type_args, int count) {
-    char* mangled = malloc(256);
-    strcpy(mangled, base);
-
+    size_t len = strlen(base) + 1;
     for (int i = 0; i < count; i++) {
-        strcat(mangled, "_");
-
-        switch (type_args[i]) {
-            case TYPE_INT:    strcat(mangled, "Int"); break;
-            case TYPE_FLOAT:  strcat(mangled, "Float"); break;
-            case TYPE_STRING: strcat(mangled, "String"); break;
-            case TYPE_BOOL:   strcat(mangled, "Bool"); break;
-            default:          strcat(mangled, "Unknown"); break;
-        }
+        len += 16; // conservative estimate per type
     }
 
+    char* mangled = malloc(len);
+    if (!mangled) return NULL;
+    
+    /* Use safe concatenation */
+    snprintf(mangled, len, "%s", base);
+    size_t current_len = strlen(mangled);
+
+    for (int i = 0; i < count; i++) {
+        snprintf(mangled + current_len, len - current_len, "_");
+        current_len++;
+        
+        const char* type_name = "Unknown";
+        switch (type_args[i]) {
+            case TYPE_INT:    type_name = "Int"; break;
+            case TYPE_FLOAT:  type_name = "Float"; break;
+            case TYPE_STRING: type_name = "String"; break;
+            case TYPE_BOOL:   type_name = "Bool"; break;
+            default:          break;
+        }
+        snprintf(mangled + current_len, len - current_len, "%s", type_name);
+        current_len = strlen(mangled);
+    }
     return mangled;
 }
 
@@ -240,8 +252,10 @@ GenericInstance* monomorphize_class(ClassStmt* generic_class, DataType* type_arg
     // Create new instance
     GenericInstance* instance = malloc(sizeof(GenericInstance));
     instance->base_name = strdup(generic_class->name);
-    instance->type_args = malloc(arg_count * sizeof(DataType));
-    memcpy(instance->type_args, type_args, arg_count * sizeof(DataType));
+    instance->type_args = arg_count > 0 ? malloc(arg_count * sizeof(DataType)) : NULL;
+    if (arg_count > 0 && type_args) {
+        memcpy(instance->type_args, type_args, arg_count * sizeof(DataType));
+    }
     instance->type_arg_count = arg_count;
 
     // Generate mangled name
@@ -352,7 +366,23 @@ void free_mono_context(MonoContext* ctx) {
         free(current->mangled_name);
         free(current->type_args);
         if (current->specialized_class) {
-            free(current->specialized_class);
+            ClassStmt* cls = current->specialized_class;
+            if (cls->name) free(cls->name);
+            if (cls->fields) {
+                for (int i = 0; i < cls->field_count; i++) {
+                    if (cls->fields[i].name) free(cls->fields[i].name);
+                }
+                free(cls->fields);
+            }
+            if (cls->methods) {
+                for (int i = 0; i < cls->method_count; i++) {
+                    if (cls->methods[i].name) free(cls->methods[i].name);
+                    /* Body is deep-copied; ideally we'd have free_stmt() but
+                     * for now we just free the array. */
+                }
+                free(cls->methods);
+            }
+            free(cls);
         }
         free(current);
 

@@ -17,6 +17,9 @@ void free_symbol_table(SymbolTable* table) {
         if (table->symbols[i]->closure_capture_types) {
             free(table->symbols[i]->closure_capture_types);
         }
+        if (table->symbols[i]->ownership_data) {
+            free(table->symbols[i]->ownership_data);
+        }
         if (table->symbols[i]->kind == SYMBOL_CLASS && table->symbols[i]->class_info) {
             ClassSymbol* cls = table->symbols[i]->class_info;
             free(cls->name);
@@ -139,6 +142,9 @@ void exit_scope(SymbolTable* table, int* scope_depth) {
         }
         if (symbol->closure_capture_types) {
             free(symbol->closure_capture_types);
+        }
+        if (symbol->ownership_data) {
+            free(symbol->ownership_data);
         }
         free(symbol);
     }

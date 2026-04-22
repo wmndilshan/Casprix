@@ -506,10 +506,9 @@ int escape_propagate_view_links(EscapeAnalyzer* ea, int line_for_diag) {
 
 /* ─── Debug ─── */
 
-static const char* flags_to_str(EscapeFlags f) {
-    static char buf[256];
+static const char* flags_to_str(EscapeFlags f, char* buf, size_t size) {
     buf[0] = '\0';
-    if (f == ESCAPE_NONE)       return "NONE (stack-eligible)";
+    if (f == ESCAPE_NONE) return "NONE (stack-eligible)";
     if (f & ESCAPE_RETURN)      strcat(buf, "RETURN ");
     if (f & ESCAPE_CLOSURE)     strcat(buf, "CLOSURE ");
     if (f & ESCAPE_GLOBAL)      strcat(buf, "GLOBAL ");
@@ -528,11 +527,12 @@ void escape_print_report(EscapeAnalyzer* ea) {
     int stack_eligible = 0;
     for (int i = 0; i < ea->count; i++) {
         EscapeInfo* info = &ea->entries[i];
+        char flag_buf[128];
         printf("%-20s %-6d %-8s %s\n",
                info->var_name ? info->var_name : "<anon>",
                info->scope_level,
                info->is_parameter ? "yes" : "no",
-               flags_to_str(info->flags));
+               flags_to_str(info->flags, flag_buf, sizeof(flag_buf)));
         if (info->flags == ESCAPE_NONE) stack_eligible++;
     }
 

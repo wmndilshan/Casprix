@@ -25,7 +25,9 @@ static void collect_locals_stmt(Stmt* stmt, LocalVar** locals, int* count);
 static void collect_locals(FunctionStmt* func, LocalVar** locals, int* count) {
     // Add parameters first
     for (int i = 0; i < func->param_count; i++) {
-        *locals = realloc(*locals, (*count + 1) * sizeof(LocalVar));
+        LocalVar* new_locals = realloc(*locals, (*count + 1) * sizeof(LocalVar));
+        if (!new_locals) return;
+        *locals = new_locals;
         (*locals)[*count].name = func->parameters[i].name;
         (*locals)[*count].type = func->parameters[i].type;
         (*count)++;
@@ -40,7 +42,9 @@ static void collect_locals_stmt(Stmt* stmt, LocalVar** locals, int* count) {
 
     switch (stmt->type) {
         case STMT_DECLARATION: {
-            *locals = realloc(*locals, (*count + 1) * sizeof(LocalVar));
+            LocalVar* new_locals = realloc(*locals, (*count + 1) * sizeof(LocalVar));
+            if (!new_locals) break;
+            *locals = new_locals;
             (*locals)[*count].name = stmt->as.declaration.name;
             (*locals)[*count].type = stmt->as.declaration.type;
             (*count)++;
@@ -79,21 +83,27 @@ static void find_await_points(Stmt* stmt, Expr*** awaits, int* count) {
     switch (stmt->type) {
         case STMT_EXPR:
             if (stmt->as.expr_stmt.expression && stmt->as.expr_stmt.expression->type == EXPR_AWAIT) {
-                *awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                Expr** new_awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                if (!new_awaits) break;
+                *awaits = new_awaits;
                 (*awaits)[(*count)++] = stmt->as.expr_stmt.expression;
             }
             break;
 
         case STMT_ASSIGNMENT:
             if (stmt->as.assignment.value && stmt->as.assignment.value->type == EXPR_AWAIT) {
-                *awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                Expr** new_awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                if (!new_awaits) break;
+                *awaits = new_awaits;
                 (*awaits)[(*count)++] = stmt->as.assignment.value;
             }
             break;
 
         case STMT_DECLARATION:
             if (stmt->as.declaration.initializer && stmt->as.declaration.initializer->type == EXPR_AWAIT) {
-                *awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                Expr** new_awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                if (!new_awaits) break;
+                *awaits = new_awaits;
                 (*awaits)[(*count)++] = stmt->as.declaration.initializer;
             }
             break;
@@ -119,7 +129,9 @@ static void find_await_points(Stmt* stmt, Expr*** awaits, int* count) {
 
         case STMT_RETURN:
             if (stmt->as.return_stmt.value && stmt->as.return_stmt.value->type == EXPR_AWAIT) {
-                *awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                Expr** new_awaits = realloc(*awaits, (*count + 1) * sizeof(Expr*));
+                if (!new_awaits) break;
+                *awaits = new_awaits;
                 (*awaits)[(*count)++] = stmt->as.return_stmt.value;
             }
             break;
@@ -176,8 +188,14 @@ FunctionStmt* transform_async_function(FunctionStmt* async_func, AsyncContext* c
     find_await_points(async_func->body, &meta->await_points, &meta->await_count);
 
     // Add to context
-    ctx->async_functions = realloc(ctx->async_functions,
-                                  (ctx->async_count + 1) * sizeof(AsyncMeta*));
+    AsyncMeta** new_funcs = realloc(ctx->async_functions,
+                                    (ctx->async_count + 1) * sizeof(AsyncMeta*));
+    if (!new_funcs) {
+        free(meta->state_machine_name);
+        free(meta);
+        return async_func;
+    }
+    ctx->async_functions = new_funcs;
     ctx->async_functions[ctx->async_count++] = meta;
     ctx->state_machines_generated++;
 

@@ -231,3 +231,18 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# -------------------------------------------------------------
+# Local scratch files (test sources and binaries)
+# -------------------------------------------------------------
+/first
+/hello.c
+/hello_c_output.c
+/hello_c_output_bin
+/hello_core
+/my_hello.c*
+/test_args.c
+/test_print*
+/test_wrapper.c
+/train_llm*
+/examples/llm_training/train_llm

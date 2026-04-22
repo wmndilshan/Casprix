@@ -26,7 +26,12 @@
  * Primitive helpers (ptr_*) — used for i32 out-parameters
  * ============================================================ */
 
-void* ptr_create_i32(void)           { return calloc(1, sizeof(int32_t)); }
+void __attribute__((constructor)) backend_init() {
+    printf("[BACKEND] LLM Backend initialized\n");
+    fflush(stdout);
+}
+
+void* ptr_create_i32(void)           { printf("[FFI] ptr_create_i32\n"); fflush(stdout); return calloc(1, sizeof(int32_t)); }
 int32_t ptr_read_i32(void* p)        { return *(int32_t*)p; }
 void ptr_free(void* p)               { free(p); }
 
@@ -40,12 +45,22 @@ int32_t get_time_ms(void) {
     return (int32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-void print_f32(float v)  { printf("%.6f\n", v); fflush(stdout); }
+void print_f32(int32_t v_bits) {
+    float v; memcpy(&v, &v_bits, 4);
+    printf("%.6f\n", v); fflush(stdout);
+}
 
-void print_loss_log(int32_t step, float loss, float lr, int32_t dt_ms) {
+void print_loss_log_impl(int32_t step, float loss, float lr, int32_t dt_ms) {
     printf("step %6d | loss %.4f | lr %.2e | dt %4d ms\n",
            step, loss, lr, dt_ms);
     fflush(stdout);
+}
+
+void print_loss_log(int32_t step, int32_t loss_bits, int32_t lr_bits, int32_t dt_ms) {
+    float loss, lr;
+    memcpy(&loss, &loss_bits, 4);
+    memcpy(&lr, &lr_bits, 4);
+    print_loss_log_impl(step, loss, lr, dt_ms);
 }
 
 /* ============================================================
@@ -58,6 +73,7 @@ typedef struct { char* key; int32_t id; } VocabEntry;
 typedef struct { VocabEntry* entries; int32_t cap; int32_t size; } VocabMap;
 
 void* bpe_vocab_create(void) {
+    printf("[FFI] bpe_vocab_create\n"); fflush(stdout);
     VocabMap* m = calloc(1, sizeof(VocabMap));
     m->cap = VOCAB_CAP;
     m->entries = calloc(m->cap, sizeof(VocabEntry));
@@ -279,6 +295,7 @@ static int32_t calc_num_params(int32_t V, int32_t H, int32_t L, int32_t F, int32
 
 void* transformer_create(int32_t V, int32_t H, int32_t L, int32_t nh,
                           int32_t F, int32_t S, int32_t rope, int32_t wt) {
+    printf("[FFI] transformer_create V=%d H=%d L=%d\n", V, H, L); fflush(stdout);
     Transformer* m = calloc(1, sizeof(Transformer));
     m->vocab_size=V; m->hidden_dim=H; m->num_layers=L; m->num_heads=nh;
     m->ffn_dim=F; m->max_seq_len=S; m->use_rotary=rope; m->weight_tying=wt;
@@ -301,7 +318,7 @@ int32_t transformer_vocab_size(void* p)   { return ((Transformer*)p)->vocab_size
 int32_t transformer_max_seq_len(void* p)  { return ((Transformer*)p)->max_seq_len; }
 int32_t transformer_num_layers(void* p)   { return ((Transformer*)p)->num_layers; }
 
-float transformer_forward(void* p, void* tokens, void* targets,
+float transformer_forward_impl(void* p, void* tokens, void* targets,
                            int32_t B, int32_t T, void* out_logits) {
     /* Stub: returns simulated cross-entropy loss that decays over time */
     static int32_t call_count = 0;
@@ -310,11 +327,21 @@ float transformer_forward(void* p, void* tokens, void* targets,
     return loss;
 }
 
-void transformer_backward(void* p, float loss_grad) {
+int32_t transformer_forward(void* p, void* tokens, void* targets, int32_t B, int32_t T, void* out_logits) {
+    float loss = transformer_forward_impl(p, tokens, targets, B, T, out_logits);
+    int32_t ret_bits; memcpy(&ret_bits, &loss, 4); return ret_bits;
+}
+
+void transformer_backward_impl(void* p, float loss_grad) {
     Transformer* m = p;
     /* Stub: simulate gradient computation */
     for (int i = 0; i < m->num_params; i++)
         m->grads[i] = ((float)rand() / RAND_MAX - 0.5f) * 0.01f;
+}
+
+void transformer_backward(void* p, int32_t loss_grad_bits) {
+    float loss_grad; memcpy(&loss_grad, &loss_grad_bits, 4);
+    transformer_backward_impl(p, loss_grad);
 }
 
 void transformer_zero_grad(void* p) {
@@ -360,7 +387,7 @@ typedef struct {
     float* m; float* v; int32_t t;
 } AdamW;
 
-void* adamw_create(int32_t n, float lr, float b1, float b2, float eps, float wd) {
+void* adamw_create_impl(int32_t n, float lr, float b1, float b2, float eps, float wd) {
     AdamW* opt = calloc(1, sizeof(AdamW));
     opt->n=n; opt->lr=lr; opt->beta1=b1; opt->beta2=b2; opt->eps=eps; opt->wd=wd;
     opt->m = calloc(n, sizeof(float));
@@ -370,8 +397,23 @@ void* adamw_create(int32_t n, float lr, float b1, float b2, float eps, float wd)
     return opt;
 }
 
+void* adamw_create(int32_t n, int32_t lr_bits, int32_t b1_bits, int32_t b2_bits, int32_t eps_bits, int32_t wd_bits) {
+    float lr, b1, b2, eps, wd;
+    memcpy(&lr, &lr_bits, 4);
+    memcpy(&b1, &b1_bits, 4);
+    memcpy(&b2, &b2_bits, 4);
+    memcpy(&eps, &eps_bits, 4);
+    memcpy(&wd, &wd_bits, 4);
+    return adamw_create_impl(n, lr, b1, b2, eps, wd);
+}
+
 void adamw_destroy(void* p) { AdamW* o=p; free(o->m); free(o->v); free(o); }
-void adamw_set_lr(void* p, float lr) { ((AdamW*)p)->lr = lr; }
+
+void adamw_set_lr_impl(void* p, float lr) { ((AdamW*)p)->lr = lr; }
+void adamw_set_lr(void* p, int32_t lr_bits) {
+    float lr; memcpy(&lr, &lr_bits, 4);
+    adamw_set_lr_impl(p, lr);
+}
 
 void adamw_step(void* p, void* model_ptr) {
     AdamW* opt = p; Transformer* m = model_ptr;
@@ -392,12 +434,20 @@ void adamw_step(void* p, void* model_ptr) {
  * Cosine LR schedule
  * ============================================================ */
 
-float compute_cosine_lr(int32_t step, int32_t warmup, int32_t total,
+float compute_cosine_lr_impl(int32_t step, int32_t warmup, int32_t total,
                          float max_lr, float min_lr) {
     if (step < warmup) return max_lr * (float)step / (float)warmup;
     if (step >= total) return min_lr;
     float ratio = (float)(step - warmup) / (float)(total - warmup);
     return min_lr + 0.5f * (max_lr - min_lr) * (1.0f + cosf((float)M_PI * ratio));
+}
+
+int32_t compute_cosine_lr(int32_t step, int32_t warmup, int32_t total, int32_t max_lr_bits, int32_t min_lr_bits) {
+    float max_lr, min_lr;
+    memcpy(&max_lr, &max_lr_bits, 4);
+    memcpy(&min_lr, &min_lr_bits, 4);
+    float ret = compute_cosine_lr_impl(step, warmup, total, max_lr, min_lr);
+    int32_t ret_bits; memcpy(&ret_bits, &ret, 4); return ret_bits;
 }
 
 /* ============================================================

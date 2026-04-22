@@ -118,7 +118,8 @@ SEMA_SOURCES = \
     $(SRC_DIR)/compiler/sema/symtable.c \
     $(SRC_DIR)/compiler/sema/ownership_check.c \
     $(SRC_DIR)/compiler/sema/escape_analysis.c \
-    $(SRC_DIR)/compiler/sema/drop_planner.c
+    $(SRC_DIR)/compiler/sema/drop_planner.c \
+    $(SRC_DIR)/compiler/sema/linear_view.c
 
 # Data layout
 LAYOUT_SOURCES = \

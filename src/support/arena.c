@@ -212,6 +212,7 @@ void arena_scope_end(ArenaScope scope) {
     }
     
     // Restore block usage
+    assert(block->used >= scope.saved_used);
     size_t freed = block->used - scope.saved_used;
     block->used = scope.saved_used;
     scope.arena->total_used -= freed;
