@@ -42,8 +42,22 @@ int mir_transform_async(MirFunction* func) {
     for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
         for (MirInst* inst = bb->first; inst; inst = inst->next) {
             if (inst->opcode == MIR_SUSPEND) {
-                resume_blocks = realloc(resume_blocks, (suspend_count + 1) * sizeof(MirBlock*));
-                suspend_insts = realloc(suspend_insts, (suspend_count + 1) * sizeof(MirInst*));
+                MirBlock** new_resume_blocks = realloc(resume_blocks, (suspend_count + 1) * sizeof(MirBlock*));
+                if (!new_resume_blocks) {
+                    free(resume_blocks);
+                    free(suspend_insts);
+                    return -1;
+                }
+                resume_blocks = new_resume_blocks;
+
+                MirInst** new_suspend_insts = realloc(suspend_insts, (suspend_count + 1) * sizeof(MirInst*));
+                if (!new_suspend_insts) {
+                    free(resume_blocks);
+                    free(suspend_insts);
+                    return -1;
+                }
+                suspend_insts = new_suspend_insts;
+
                 resume_blocks[suspend_count] = inst->as.suspend.resume_bb;
                 suspend_insts[suspend_count] = inst;
                 suspend_count++;
@@ -85,7 +99,14 @@ int mir_transform_async(MirFunction* func) {
             }
 
             if (needs_save) {
-                values_to_save = realloc(values_to_save, (values_count + 1) * sizeof(MirValueId));
+                MirValueId* new_values = realloc(values_to_save, (values_count + 1) * sizeof(MirValueId));
+                if (!new_values) {
+                    free(resume_blocks);
+                    free(suspend_insts);
+                    free(values_to_save);
+                    return -1;
+                }
+                values_to_save = new_values;
                 values_to_save[values_count++] = val;
             }
         }
@@ -110,7 +131,7 @@ int mir_transform_async(MirFunction* func) {
     step_params[0].name = "state";
     step_params[0].type = state_ptr_type;
     step_params[0].value_id = mir_function_new_value(func, state_ptr_type);
-    MirValueId state_ptr = step_params[0].value_id;
+    // MirValueId state_ptr = step_params[0].value_id;
 
     // 5. Inject Loads and Stores
     // Store on Define: For each value in values_to_save, insert an 'insert' (or store) after its definition
@@ -130,7 +151,7 @@ int mir_transform_async(MirFunction* func) {
 
     // Load on Resume: At the start of each resume block, insert 'extract' (or load) for needed values
     for (int s = 0; s < suspend_count; s++) {
-        MirBlock* rb = resume_blocks[s];
+        // MirBlock* rb = resume_blocks[s];
         // Insert loads for all values defined before this suspend and used after
     }
 
