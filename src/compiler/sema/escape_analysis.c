@@ -166,20 +166,26 @@ void escape_analyze_expr(EscapeAnalyzer* ea, Expr* expr,
     }
 
     case EXPR_NEW: {
-        /* `new Foo()` — the resulting object is allocated on the heap.
-           We don't mark anything here; the *assignment target* determines
-           whether the new object escapes. */
+        /* `new Foo(args)` — constructor may capture arguments in heap fields,
+           so treat every argument as a potential non-borrow call argument. */
         for (int i = 0; i < expr->as.new_expr.arg_count; i++) {
             escape_analyze_expr(ea, expr->as.new_expr.arguments[i],
-                                 enclosing_func, ESCAPE_NONE);
+                                 enclosing_func, ESCAPE_CALL_ARG);
         }
         break;
     }
 
     case EXPR_MEMBER_ACCESS: {
-        /* obj.field — reading a field does not cause escape by itself */
+        /* obj.field read — object itself does not escape */
         escape_analyze_expr(ea, expr->as.member.object,
                              enclosing_func, ESCAPE_NONE);
+        /* obj.method(args) — method may capture arguments */
+        if (expr->as.member.is_method_call) {
+            for (int i = 0; i < expr->as.member.arg_count; i++) {
+                escape_analyze_expr(ea, expr->as.member.arguments[i],
+                                     enclosing_func, ESCAPE_CALL_ARG);
+            }
+        }
         break;
     }
 

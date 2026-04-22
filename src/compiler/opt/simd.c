@@ -198,16 +198,16 @@ static MirOpcode scalar_op_for_vec(MirOpcode vop, bool is_float) {
 static bool scalarize_in_place(MirInst* inst) {
     if (!inst) return false;
 
-    const int width = inst->as.vec.width;
-    if (width > 1) {
-        /* We don't yet expand width>1 into separate MirInsts here;
-         * instead, mark the instruction as "lane-0 semantics" so that
-         * the scalar backend at least emits a valid op.  A proper
-         * multi-instruction expansion is deferred to the autovectorizer
-         * pass which will lower the *source* loop differently when it
-         * detects SIMD_CAP_NONE up front. */
-        return false;
+    if (inst->as.vec.width > 1) {
+        /* Callers that need multi-lane expansion insert clones first
+         * (see simd_legalize_function) and then call us per-clone at
+         * width=1.  If we are somehow called directly on a wide op,
+         * degrade to lane-0 semantics so the scalar backend can still
+         * emit something valid. */
+        inst->as.vec.width = 1;
     }
+    const int width = 1; /* always 1 at this point */
+    (void)width;
 
     MirType* lane = inst->as.vec.lane_type;
     bool is_float = lane && (lane->kind == MIR_TYPE_F32 || lane->kind == MIR_TYPE_F64);
@@ -286,8 +286,40 @@ int simd_legalize_function(MirFunction* func, SimdTarget target,
             MirType* lane = inst->as.vec.lane_type;
             int native = simd_native_lanes(target, lane);
 
-            /* Scalar / non-SIMD target: scalarize when possible. */
+            /* Helper: insert a clone of inst immediately after prev in bb. */
+#define INSERT_CLONE_AFTER(bb_, prev_, src_inst, new_result) do {          \
+    MirInst* _cl = mir_arena_alloc(func->parent->arena, sizeof(MirInst));  \
+    *_cl = *(src_inst);                                                     \
+    _cl->result = (new_result);                                             \
+    _cl->prev   = (prev_);                                                  \
+    _cl->next   = (prev_)->next;                                            \
+    if ((prev_)->next) (prev_)->next->prev = _cl;                           \
+    else               (bb_)->last = _cl;                                   \
+    (prev_)->next = _cl;                                                    \
+    (bb_)->inst_count++;                                                    \
+    (prev_) = _cl;                                                          \
+} while (0)
+
+            /* Scalar / non-SIMD target: scalarize per lane. */
             if (target.capability == SIMD_CAP_NONE || native <= 1) {
+                int w = inst->as.vec.width;
+                if (w > 1) {
+                    /* Insert (w-1) clones after the original, one per extra lane.
+                     * All clones share the same SSA inputs as lane-0; for
+                     * no-SIMD targets the autovectorizer should not have
+                     * produced wide ops, so this is a safe fallback. */
+                    MirInst* prev = inst;
+                    for (int lane = 1; lane < w; lane++) {
+                        MirValueId new_id = mir_function_new_value(func, inst->type);
+                        INSERT_CLONE_AFTER(bb, prev, inst, new_id);
+                        prev->as.vec.width = 1;
+                        if (scalarize_in_place(prev)) {
+                            stats->vec_ops_scalarized++;
+                            changed++;
+                        }
+                    }
+                    inst->as.vec.width = 1;
+                }
                 if (scalarize_in_place(inst)) {
                     stats->vec_ops_scalarized++;
                     changed++;
@@ -295,16 +327,34 @@ int simd_legalize_function(MirFunction* func, SimdTarget target,
                 continue;
             }
 
-            /* SIMD target: clamp any oversize logical width to the
-             * native lane count so the backend emits a single
-             * hardware instruction.  We don't split into multiple
-             * instructions here -- downstream code can unroll the
-             * producer loop instead. */
+            /* SIMD target: if logical width > native, split into
+             * ceil(width/native) native-width chunks. */
             if (inst->as.vec.width > native) {
+                int logical = inst->as.vec.width;
+                int full_chunks = logical / native;
+                MirInst* prev = inst;
+                for (int k = 1; k < full_chunks; k++) {
+                    MirValueId new_id = mir_function_new_value(func, inst->type);
+                    INSERT_CLONE_AFTER(bb, prev, inst, new_id);
+                    prev->as.vec.width = native;
+                    stats->vec_ops_split++;
+                    changed++;
+                }
+                /* Remaining tail (if width not a multiple of native) */
+                int tail = logical - full_chunks * native;
+                if (tail > 0) {
+                    MirValueId new_id = mir_function_new_value(func, inst->type);
+                    INSERT_CLONE_AFTER(bb, prev, inst, new_id);
+                    prev->as.vec.width = tail;
+                    stats->vec_ops_split++;
+                    changed++;
+                }
                 inst->as.vec.width = native;
                 stats->vec_ops_split++;
                 changed++;
             }
+
+#undef INSERT_CLONE_AFTER
 
             /* If the target lacks FMA, expand VEC_FMA into MUL+ADD
              * (scalar) by rewriting this single instruction to

@@ -17,6 +17,7 @@ typedef struct gc_object_header {
     size_t size;                    // Object size in bytes
     bool marked;                    // Mark bit for GC
     uint8_t generation;             // Generation (0=young, 1=old)
+    uint8_t survive_count;          // Number of collections survived (for promotion)
     struct gc_object_header* next;  // Next object in allocation list
     void* type_info;                // Type information for scanning
 } gc_object_header_t;
@@ -41,8 +42,20 @@ typedef struct {
     float growth_factor;            // Heap growth factor (1.5 = 150%)
 } gc_config_t;
 
-// GC context
+#define GC_MAX_TYPES 128
+
+/* Forward declaration so gc_type_descriptor_t can reference gc_context_t. */
+typedef struct gc_context gc_context_t;
+
+// Type descriptor for scanning objects
 typedef struct {
+    const char* name;
+    size_t size;
+    void (*scan_func)(void* obj, gc_context_t* gc);
+} gc_type_descriptor_t;
+
+// GC context
+struct gc_context {
     gc_object_header_t* objects;    // List of all allocated objects
     gc_object_header_t** roots;     // Root set (stack, globals)
     size_t root_count;
@@ -51,14 +64,10 @@ typedef struct {
     gc_config_t config;
     bool collecting;                // True if GC is running
     size_t bytes_since_gc;          // Bytes allocated since last GC
-} gc_context_t;
-
-// Type descriptor for scanning objects
-typedef struct {
-    const char* name;
-    size_t size;
-    void (*scan_func)(void* obj, gc_context_t* gc);  // Function to scan object fields
-} gc_type_descriptor_t;
+    // Per-context type registry (replaces the old process-global g_gc_types).
+    gc_type_descriptor_t* type_table;
+    int type_count;
+};
 
 // Initialize garbage collector
 gc_context_t* nuwan_gc_init(void);
@@ -96,9 +105,9 @@ void nuwan_gc_shutdown(gc_context_t* gc);
 #define GC_OBJECT_TO_HEADER(ptr) ((gc_object_header_t*)((char*)(ptr) - GC_HEADER_SIZE))
 #define GC_HEADER_TO_OBJECT(header) ((void*)((char*)(header) + GC_HEADER_SIZE))
 
-// Register type descriptor
-void nuwan_gc_register_type(const char* name, size_t size,
-                           void (*scan_func)(void*, gc_context_t*));
+// Register type descriptor with a specific GC context (no global state).
+void nuwan_gc_register_type(gc_context_t* gc, const char* name, size_t size,
+                            void (*scan_func)(void*, gc_context_t*));
 
 // Default scan functions for common types
 void nuwan_gc_scan_class(void* obj, gc_context_t* gc);

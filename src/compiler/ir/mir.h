@@ -251,6 +251,7 @@ typedef enum {
 
     /* Debug / metadata */
     MIR_NOP,                /* no operation (placeholder)          */
+    MIR_UNDEF,              /* explicit undefined value (use after promotion of uninit alloca) */
     MIR_SUSPEND,            /* result = suspend(resume_point)      */
     MIR_DEBUGLOC,           /* source location annotation          */
 } MirOpcode;
@@ -684,5 +685,46 @@ int  mir_verify_module(MirModule* module, FILE* diag);
 int  mir_verify_function(MirFunction* func, FILE* diag);
 bool mir_validate_module(MirModule* module);
 bool mir_validate_function(MirFunction* func);
+
+/* ────────────────────────────────────────────────────────────
+ * Debug-only invariant assertions
+ *
+ * `mir_assert_ssa_valid`        — runs the structural / SSA / CFG / type
+ *                                 verifier and aborts on any diagnostic.
+ * `mir_assert_ownership_valid`  — runs the borrow / ownership-linearity
+ *                                 checker and aborts on any diagnostic.
+ *
+ * Both expand to a no-op when CASPRIX_DEBUG_MIR is undefined, so release
+ * builds pay zero cost.  When defined, the optimiser pipeline calls them
+ * between every pass so a violated invariant fingers the offending pass
+ * deterministically.
+ * ──────────────────────────────────────────────────────────── */
+int  mir_check_ownership_function(MirFunction* func, FILE* diag);
+
+#ifdef CASPRIX_DEBUG_MIR
+    #include <stdio.h>
+    #include <stdlib.h>
+
+    #define mir_assert_ssa_valid(func, where) \
+        do { \
+            if (mir_verify_function((func), stderr) != 0) { \
+                fprintf(stderr, "MIR INVARIANT VIOLATION (SSA) after %s @ %s:%d\n", \
+                        (where), __FILE__, __LINE__); \
+                abort(); \
+            } \
+        } while (0)
+
+    #define mir_assert_ownership_valid(func, where) \
+        do { \
+            if (mir_check_ownership_function((func), stderr) != 0) { \
+                fprintf(stderr, "MIR INVARIANT VIOLATION (ownership) after %s @ %s:%d\n", \
+                        (where), __FILE__, __LINE__); \
+                abort(); \
+            } \
+        } while (0)
+#else
+    #define mir_assert_ssa_valid(func, where)        ((void)0)
+    #define mir_assert_ownership_valid(func, where)  ((void)0)
+#endif
 
 #endif /* MIR_H */

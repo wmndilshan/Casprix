@@ -958,6 +958,47 @@ bool mir_validate_function(MirFunction* func) {
     return mir_verify_function(func, stderr) == 0;
 }
 
+/* Statically detectable ownership-linearity violations: the same SSA value
+ * is consumed (RC_DEC, MOVE, FREE, DROP) more than once on a straight-line
+ * path within a single basic block. Cross-block flow requires the borrow
+ * checker; this catches the obvious in-block double-consume that any
+ * optimiser pass might introduce by accident. */
+int mir_check_ownership_function(MirFunction* func, FILE* diag) {
+    int errors = 0;
+    if (!func || func->is_extern) return 0;
+
+    for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
+        for (MirInst* a = bb->first; a; a = a->next) {
+            MirValueId consumed = MIR_VALUE_NONE;
+            switch (a->opcode) {
+                case MIR_ARC_RELEASE: consumed = a->as.unary.operand; break;
+                case MIR_MOVE:        consumed = a->as.unary.operand; break;
+                case MIR_DROP:        consumed = a->as.unary.operand; break;
+                default: break;
+            }
+            if (consumed == MIR_VALUE_NONE) continue;
+
+            for (MirInst* b = a->next; b; b = b->next) {
+                MirValueId other = MIR_VALUE_NONE;
+                switch (b->opcode) {
+                    case MIR_ARC_RELEASE: other = b->as.unary.operand; break;
+                    case MIR_MOVE:        other = b->as.unary.operand; break;
+                    case MIR_DROP:        other = b->as.unary.operand; break;
+                    default: break;
+                }
+                if (other == consumed) {
+                    mir_verror(diag,
+                        "@%s: bb%u value %%%u consumed twice (linearity)",
+                        func->name ? func->name : "?", bb->id, consumed);
+                    errors++;
+                    break;
+                }
+            }
+        }
+    }
+    return errors;
+}
+
 bool mir_validate_module(MirModule* module) {
     return mir_verify_module(module, stderr) == 0;
 }

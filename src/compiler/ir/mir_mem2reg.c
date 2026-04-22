@@ -68,14 +68,17 @@ static void compute_rpo(MirFunction* func, BlockOrder* rpo) {
  * reducible CFGs), and easy to implement correctly.
  * ================================================================ */
 
-/* Map block id → RPO index for O(1) lookup */
-static int rpo_index[MAX_BLOCKS];
+/* Per-invocation RPO-index context (no global state → re-entrant). */
+typedef struct {
+    int data[MAX_BLOCKS];
+} RpoIndexMap;
 
-static MirBlock* intersect(MirBlock* b1, MirBlock* b2) {
+static MirBlock* intersect(MirBlock* b1, MirBlock* b2,
+                            const RpoIndexMap* rpo_map) {
     while (b1 != b2) {
-        while (rpo_index[b1->id] > rpo_index[b2->id])
+        while (rpo_map->data[b1->id] > rpo_map->data[b2->id])
             b1 = b1->idom;
-        while (rpo_index[b2->id] > rpo_index[b1->id])
+        while (rpo_map->data[b2->id] > rpo_map->data[b1->id])
             b2 = b2->idom;
     }
     return b1;
@@ -86,10 +89,11 @@ void mir_compute_dominators(MirFunction* func) {
     compute_rpo(func, &rpo);
     if (rpo.count == 0) return;
 
-    /* Build RPO index map */
-    memset(rpo_index, -1, sizeof(rpo_index));
+    /* Build RPO index map — stack-allocated, not a global. */
+    RpoIndexMap rpo_map;
+    memset(&rpo_map, -1, sizeof(rpo_map));
     for (int i = 0; i < rpo.count; i++) {
-        rpo_index[rpo.blocks[i]->id] = i;
+        rpo_map.data[rpo.blocks[i]->id] = i;
     }
 
     /* Initialize: entry dominates itself, all others undefined */
@@ -121,7 +125,7 @@ void mir_compute_dominators(MirFunction* func) {
                 MirBlock* pred = bb->predecessors[p];
                 if (pred == new_idom) continue;
                 if (pred->idom != NULL) {
-                    new_idom = intersect(pred, new_idom);
+                    new_idom = intersect(pred, new_idom, &rpo_map);
                 }
             }
 
@@ -319,9 +323,44 @@ static bool is_promotable(MirFunction* func, MirInst* alloca_inst,
                 if (inst->as.transfer.source == ptr) return false;
                 break;
 
+            /* Struct/aggregate construction — ptr stored into an aggregate field */
+            case MIR_STRUCT_INIT:
+                for (int fi = 0; fi < inst->as.struct_init.n_fields; fi++) {
+                    if (inst->as.struct_init.fields[fi] == ptr) return false;
+                }
+                break;
+            case MIR_INSERT:
+                if (inst->as.field_op.insert_val == ptr) return false;
+                if (inst->as.field_op.aggregate == ptr)  return false;
+                break;
+            case MIR_EXTRACT:
+                if (inst->as.field_op.aggregate == ptr) return false;
+                break;
+
+            /* SIMD vector ops — any operand slot could carry the alloca addr */
+            case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+            case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+            case MIR_VEC_BROADCAST: case MIR_VEC_REDUCE_SUM: case MIR_VEC_DOT:
+            case MIR_VEC_ADD: case MIR_VEC_SUB: case MIR_VEC_MUL: case MIR_VEC_DIV:
+            case MIR_VEC_MIN: case MIR_VEC_MAX:
+            case MIR_VEC_AND: case MIR_VEC_OR: case MIR_VEC_XOR:
+            case MIR_VEC_FMA:
+            case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT: case MIR_VEC_CMP_GT:
+            case MIR_VEC_SELECT:
+                if (inst->as.vec.a == ptr || inst->as.vec.b == ptr ||
+                    inst->as.vec.c == ptr) return false;
+                break;
+
+            /* Coroutine suspend — captures the entire stack frame */
+            case MIR_SUSPEND:
+                return false;
+
             default:
-                /* Check binary/unary operands — if alloca ptr used as a value
-                 * operand (not through load/store), it's not promotable. */
+                /* Conservative: any opcode not explicitly handled above might
+                 * capture the alloca address. Check the common scalar operand
+                 * fields; if none match, allow it (the opcode doesn't refer to
+                 * pointer-typed values). For unknown opcodes that DO use ptr,
+                 * the inner check will reject. */
                 {
                     bool uses = false;
                     switch (inst->opcode) {
@@ -353,8 +392,18 @@ static bool is_promotable(MirFunction* func, MirInst* alloca_inst,
                     case MIR_ARC_RETAIN: case MIR_ARC_RELEASE: case MIR_DROP:
                         uses = (inst->as.refop.ptr == ptr);
                         break;
-                    default:
+                    /* Truly data-free opcodes — cannot reference ptr */
+                    case MIR_NOP: case MIR_UNDEF: case MIR_DEBUGLOC:
+                    case MIR_BR: case MIR_RET_VOID: case MIR_UNREACHABLE:
+                    case MIR_CONST_INT: case MIR_CONST_FLOAT:
+                    case MIR_CONST_BOOL: case MIR_CONST_STRING:
+                    case MIR_CONST_NULL: case MIR_CONST_FUNC:
+                    case MIR_ALLOCA: case MIR_PHI:
+                        uses = false;
                         break;
+                    default:
+                        /* Truly unknown opcode: conservatively reject. */
+                        return false;
                     }
                     if (uses) return false;
                 }
@@ -634,6 +683,25 @@ static void rename_block(MirFunction* func,
                                     ri->as.gep.index == load_result)
                                     ri->as.gep.index = replacement;
                                 break;
+                            /* SIMD vector operands */
+                            case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+                            case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+                            case MIR_VEC_BROADCAST: case MIR_VEC_REDUCE_SUM:
+                            case MIR_VEC_DOT:
+                            case MIR_VEC_ADD: case MIR_VEC_SUB:
+                            case MIR_VEC_MUL: case MIR_VEC_DIV:
+                            case MIR_VEC_MIN: case MIR_VEC_MAX:
+                            case MIR_VEC_AND: case MIR_VEC_OR: case MIR_VEC_XOR:
+                            case MIR_VEC_FMA:
+                            case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT:
+                            case MIR_VEC_CMP_GT: case MIR_VEC_SELECT:
+                                if (ri->as.vec.a == load_result)
+                                    ri->as.vec.a = replacement;
+                                if (ri->as.vec.b == load_result)
+                                    ri->as.vec.b = replacement;
+                                if (ri->as.vec.c == load_result)
+                                    ri->as.vec.c = replacement;
+                                break;
                             default:
                                 break;
                             }
@@ -787,11 +855,25 @@ int mir_mem2reg(MirFunction* func, MirMem2RegStats* stats) {
 
     /* ── Step 4: Rename variables via dominator tree DFS ── */
 
-    /* Push undefined (MIR_VALUE_NONE) as initial value for uninitialized vars */
+    /* Push explicit MIR_UNDEF values as initial reaching definitions so that
+     * uninitialised loads receive a valid (though undefined) SSA value rather
+     * than MIR_VALUE_NONE, which would crash downstream passes. */
     for (int a = 0; a < n_promotable; a++) {
-        /* If the alloca is in the entry block and never stored before a load,
-         * the initial value is "undef" (MIR_VALUE_NONE). */
-        vs_push(&alloca_ctxs[a].stack, MIR_VALUE_NONE);
+        MirInst* undef_inst = (MirInst*)mir_arena_alloc(
+            func->parent->arena, sizeof(MirInst));
+        memset(undef_inst, 0, sizeof(MirInst));
+        undef_inst->opcode = MIR_UNDEF;
+        undef_inst->type   = promotable[a].alloc_type;
+        undef_inst->result = mir_function_new_value(func, promotable[a].alloc_type);
+        /* Insert at the very start of the entry block (before any phis). */
+        MirBlock* entry = func->entry_block;
+        undef_inst->next = entry->first;
+        undef_inst->prev = NULL;
+        if (entry->first) entry->first->prev = undef_inst;
+        else              entry->last         = undef_inst;
+        entry->first = undef_inst;
+        entry->inst_count++;
+        vs_push(&alloca_ctxs[a].stack, undef_inst->result);
     }
 
     rename_block(func, func->entry_block, alloca_ctxs, n_promotable, stats);

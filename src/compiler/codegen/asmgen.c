@@ -1274,8 +1274,10 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 // Generate code to get the object pointer
                 generate_asm_expr(gen, member->object, "rax", symbols);
 
-                // Save object pointer in r15 (callee-saved register)
-                emit_asm(gen, "    mov r15, rax  ; Save object pointer in r15\n");
+                /* Save object pointer in a frame slot — avoids clobbering callee-saved
+                   registers (r14/r15) without a matching prologue push. */
+                int mc_this_off = alloc_local(gen, "__cpx_this");
+                emit_asm(gen, "    mov [rbp - %d], rax  ; save object ptr\n", mc_this_off);
 
                 // Allocate shadow space + stack args (must be 16-byte aligned)
                 int reg_args_limit = ABI_I_REG_COUNT - 1; // 1 for 'this'
@@ -1297,7 +1299,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 }
 
                 // Object pointer ('this') goes in the first argument register
-                emit_asm(gen, "    mov %s, r15  ; Load object pointer (this)\n", ABI_I_REGS[0]);
+                emit_asm(gen, "    mov %s, [rbp - %d]  ; Load object pointer (this)\n", ABI_I_REGS[0], mc_this_off);
 
                 // Determine the class of the object to find the method
                 // Use the class_name from the object expression (set by semantic analyzer)
@@ -1469,8 +1471,10 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
 
             // Fields are already zero-initialized by arc_alloc_full
 
-            // Save object pointer in a temp register before pushing args
-            emit_asm(gen, "    mov r15, rax  ; Save object pointer in r15\n");
+            /* Save object pointer in a frame slot — avoids clobbering callee-saved
+               registers (r14/r15) without a matching prologue push. */
+            int new_this_off = alloc_local(gen, "__cpx_new_this");
+            emit_asm(gen, "    mov [rbp - %d], rax  ; save new object ptr\n", new_this_off);
 
             // Allocate shadow space + space for stack args (must be 16-byte aligned)
             int c_reg_limit = ABI_I_REG_COUNT - 1; // 1 for 'this'
@@ -1492,7 +1496,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             }
 
             // Object pointer (this) goes in the first argument register
-            emit_asm(gen, "    mov %s, r15  ; Load object pointer (this)\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    mov %s, [rbp - %d]  ; Load object pointer (this)\n", ABI_I_REGS[0], new_this_off);
 
             // Copy float constructor args into XMM registers
             if (ctor && ctor->param_types) {
@@ -2459,11 +2463,15 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             snprintf(loop_lbl, sizeof(loop_lbl), "L%d", lb);
             snprintf(end_lbl,  sizeof(end_lbl),  "L%d", gen->label_count++);
 
-            /* Load the iterable object into r15 (callee-saved via push/pop) */
+            /* Store the iterable and its length in frame slots so they survive
+               calls inside the loop body without clobbering callee-saved regs. */
+            int fi_iter_off = alloc_local(gen, "__cpx_fi_iter");
+            int fi_len_off  = alloc_local(gen, "__cpx_fi_len");
             emit_asm(gen, "    ; for-in loop over '%s'\n", fi->var_name);
-            generate_asm_expr(gen, fi->iterable, "r15", symbols);
-            /* Assume iterable has a .length field at offset 0 (ARC runtime List) */
-            emit_asm(gen, "    mov r14, [r15 + 0]  ; r14 = length\n");
+            generate_asm_expr(gen, fi->iterable, "rax", symbols);
+            emit_asm(gen, "    mov [rbp - %d], rax  ; save iterable ptr\n", fi_iter_off);
+            emit_asm(gen, "    mov rax, [rax + 0]   ; load length\n");
+            emit_asm(gen, "    mov [rbp - %d], rax  ; save length\n", fi_len_off);
             /* Allocate index on stack */
             int idx_off = alloc_local(gen, "__cpx_for_idx");
             int var_off = alloc_local(gen, fi->var_name);
@@ -2478,10 +2486,11 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
 
             emit_asm(gen, "%s:\n", loop_lbl);
             emit_asm(gen, "    mov rax, [rbp - %d]  ; load idx\n", idx_off);
-            emit_asm(gen, "    cmp rax, r14\n");
+            emit_asm(gen, "    cmp rax, [rbp - %d]  ; idx < length\n", fi_len_off);
             emit_asm(gen, "    jge %s  ; idx >= length → end\n", end_lbl);
-            /* Load arr[idx]: data starts at offset 8 (after length) — adjust as needed */
-            emit_asm(gen, "    lea rbx, [r15 + 8]  ; base of data array\n");
+            /* Load arr[idx]: data starts at offset 8 (after length) */
+            emit_asm(gen, "    mov rcx, [rbp - %d]  ; load iterable ptr\n", fi_iter_off);
+            emit_asm(gen, "    lea rbx, [rcx + 8]   ; base of data array\n");
             emit_asm(gen, "    mov rcx, [rbx + rax*8]  ; load element\n");
             emit_asm(gen, "    mov [rbp - %d], rcx  ; store into loop var\n", var_off);
 
@@ -2496,8 +2505,10 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
 
         case STMT_MATCH: {
             MatchStmt* ms = &stmt->as.match_stmt;
-            /* Generate subject into r15 */
-            generate_asm_expr(gen, ms->subject, "r15", symbols);
+            /* Store subject in a frame slot — avoids callee-saved register clobbering. */
+            int ms_subj_off = alloc_local(gen, "__cpx_match_subj");
+            generate_asm_expr(gen, ms->subject, "rax", symbols);
+            emit_asm(gen, "    mov [rbp - %d], rax  ; save match subject\n", ms_subj_off);
 
             int end_id = gen->label_count++;
             char end_lbl[32];
@@ -2516,7 +2527,8 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
                 } else {
                     /* Compare subject to pattern */
                     generate_asm_expr(gen, arm->pattern, "rax", symbols);
-                    emit_asm(gen, "    cmp r15, rax\n");
+                    emit_asm(gen, "    mov rcx, [rbp - %d]  ; load match subject\n", ms_subj_off);
+                    emit_asm(gen, "    cmp rcx, rax\n");
                     emit_asm(gen, "    jne %s  ; pattern mismatch\n", arm_lbl);
                     generate_asm_stmt(gen, arm->body, symbols);
                     emit_asm(gen, "    jmp %s  ; end match\n", end_lbl);

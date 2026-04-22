@@ -18,6 +18,43 @@
 extern "C" {
 #endif
 
+/* ── Platform-specific atomics ──────────────────────────────────────────────
+ * These macros are defined here (not in arc.c) so that the cycle collector
+ * and any other file that manipulates ARC ref-counts can use the same
+ * atomic primitives without duplicating the platform detection logic.
+ * ─────────────────────────────────────────────────────────────────────────── */
+#ifdef _MSC_VER
+#  include <intrin.h>
+#  define ATOMIC_INC(x)       _InterlockedIncrement((volatile long*)(x))
+#  define ATOMIC_DEC(x)       _InterlockedDecrement((volatile long*)(x))
+#  define ATOMIC_LOAD(x)      (*(volatile long*)(x))
+#  define ATOMIC_CAS(x,o,n)   _InterlockedCompareExchange((volatile long*)(x),(n),(o))
+/* size_t (64-bit) counters for stats */
+#  define ATOMIC_INC_SZ(x)    _InterlockedIncrement64((volatile __int64*)(x))
+#  define ATOMIC_DEC_SZ(x)    _InterlockedDecrement64((volatile __int64*)(x))
+#  define ATOMIC_ADD_SZ(x,v)  _InterlockedExchangeAdd64((volatile __int64*)(x),(__int64)(v))
+#  define ATOMIC_SUB_SZ(x,v)  _InterlockedExchangeAdd64((volatile __int64*)(x),-(__int64)(v))
+#elif defined(__GNUC__) || defined(__clang__)
+#  define ATOMIC_INC(x)       __sync_add_and_fetch((x), 1)
+#  define ATOMIC_DEC(x)       __sync_sub_and_fetch((x), 1)
+#  define ATOMIC_LOAD(x)      __sync_add_and_fetch((x), 0)
+#  define ATOMIC_CAS(x,o,n)   __sync_val_compare_and_swap((x),(o),(n))
+#  define ATOMIC_INC_SZ(x)    __sync_fetch_and_add((x),(size_t)1)
+#  define ATOMIC_DEC_SZ(x)    __sync_fetch_and_sub((x),(size_t)1)
+#  define ATOMIC_ADD_SZ(x,v)  __sync_fetch_and_add((x),(v))
+#  define ATOMIC_SUB_SZ(x,v)  __sync_fetch_and_sub((x),(v))
+#else
+/* Fallback: non-atomic (single-threaded only) */
+#  define ATOMIC_INC(x)       (++(*(x)))
+#  define ATOMIC_DEC(x)       (--(*(x)))
+#  define ATOMIC_LOAD(x)      (*(x))
+#  define ATOMIC_CAS(x,o,n)   (*(x)==(o)?(*(x)=(n),(o)):*(x))
+#  define ATOMIC_INC_SZ(x)    (++(*(x)))
+#  define ATOMIC_DEC_SZ(x)    (--(*(x)))
+#  define ATOMIC_ADD_SZ(x,v)  ((*(x))+=(v))
+#  define ATOMIC_SUB_SZ(x,v)  ((*(x))-=(v))
+#endif
+
 // ARC object flags
 #define ARC_FLAG_NONE          0x00
 #define ARC_FLAG_MOVED         0x01  // Value has been moved (ownership transfer)

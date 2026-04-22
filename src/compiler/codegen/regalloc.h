@@ -8,6 +8,7 @@
 
 #include "compiler/frontend/ast.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 // x86-64 registers
 typedef enum {
@@ -41,17 +42,23 @@ typedef struct {
     LiveInterval* intervals;
     int interval_count;
     int max_intervals;
-    
+
     // Available registers (bitmap)
     bool gp_regs_available[16];
     bool fp_regs_available[16];
-    
+
     // Spill tracking
     int spill_count;
     int spill_slot_size;
-    
+
     // Current position
     int current_pos;
+
+    /* Bitmask of callee-saved GP registers actually assigned during allocation.
+       Bit i is set when REG_RBX/R12/R13/R14/R15 (i = register index) is used.
+       The prologue/epilogue generator reads this to emit the correct push/pop
+       sequence without saving unused callee-saved registers. */
+    uint32_t used_callee_saved_mask;
 } RegAllocator;
 
 // Initialize register allocator
@@ -78,6 +85,9 @@ void regalloc_free_register(RegAllocator* alloc, Register reg);
 
 // Get register name
 const char* register_name(Register reg, int size);
+
+// Return the bitmask of callee-saved GP registers used (for prologue/epilogue)
+uint32_t regalloc_used_callee_saved_mask(const RegAllocator* alloc);
 
 // Cleanup
 void free_regalloc(RegAllocator* alloc);

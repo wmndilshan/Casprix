@@ -437,8 +437,21 @@ static int log2_int(int64_t v) {
     return n;
 }
 
+/* Insert a new instruction immediately before `before` in `bb`. */
+static void inst_insert_before(MirBlock* bb, MirInst* before, MirInst* inst) {
+    inst->next = before;
+    inst->prev = before->prev;
+    if (before->prev)
+        before->prev->next = inst;
+    else
+        bb->first = inst;
+    before->prev = inst;
+    bb->inst_count++;
+}
+
 int mir_pass_strength_reduce(MirFunction* func) {
     int changes = 0;
+    MirArena* arena = func->parent->arena;
 
     for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
         for (MirInst* inst = bb->first; inst; inst = inst->next) {
@@ -447,14 +460,17 @@ int mir_pass_strength_reduce(MirFunction* func) {
                 if (rhs_def && rhs_def->opcode == MIR_CONST_INT &&
                     is_power_of_two(rhs_def->as.imm_i64)) {
                     int shift = log2_int(rhs_def->as.imm_i64);
-                    /* Create shift constant */
-                    MirValueId shift_val = mir_function_new_value(func, inst->type);
-                    /* Modify in place: mul → shl */
+                    /* Emit a fresh constant for the shift amount so we don't
+                     * corrupt other uses of rhs_def. */
+                    MirInst* sc = (MirInst*)mir_arena_alloc(arena, sizeof(MirInst));
+                    memset(sc, 0, sizeof(MirInst));
+                    sc->opcode     = MIR_CONST_INT;
+                    sc->type       = rhs_def->type;
+                    sc->result     = mir_function_new_value(func, rhs_def->type);
+                    sc->as.imm_i64 = shift;
+                    inst_insert_before(bb, inst, sc);
                     inst->opcode = MIR_SHL;
-                    /* We need to create the shift constant. Since we're modifying
-                     * in-place and the arena is available, create a new const inst */
-                    rhs_def->as.imm_i64 = shift;
-                    (void)shift_val;
+                    inst->as.binary.rhs = sc->result;
                     changes++;
                 }
             }
@@ -463,9 +479,17 @@ int mir_pass_strength_reduce(MirFunction* func) {
                 MirInst* rhs_def = find_def(func, inst->as.binary.rhs);
                 if (rhs_def && rhs_def->opcode == MIR_CONST_INT &&
                     is_power_of_two(rhs_def->as.imm_i64)) {
-                    /* x % 2^n → x & (2^n - 1) */
+                    /* x % 2^n → x & (2^n - 1): emit fresh mask constant. */
+                    int64_t mask = rhs_def->as.imm_i64 - 1;
+                    MirInst* mc = (MirInst*)mir_arena_alloc(arena, sizeof(MirInst));
+                    memset(mc, 0, sizeof(MirInst));
+                    mc->opcode     = MIR_CONST_INT;
+                    mc->type       = rhs_def->type;
+                    mc->result     = mir_function_new_value(func, rhs_def->type);
+                    mc->as.imm_i64 = mask;
+                    inst_insert_before(bb, inst, mc);
                     inst->opcode = MIR_BAND;
-                    rhs_def->as.imm_i64 = rhs_def->as.imm_i64 - 1;
+                    inst->as.binary.rhs = mc->result;
                     changes++;
                 }
             }
@@ -482,34 +506,105 @@ int mir_pass_strength_reduce(MirFunction* func) {
  * - Merge blocks with single predecessor/successor.
  * ================================================================ */
 
+/* Remove `dead` from `live`'s predecessor list and patch its phis. */
+static void cfg_remove_pred(MirBlock* live, MirBlock* dead) {
+    /* Remove dead from live->predecessors. */
+    for (int i = 0; i < live->pred_count; i++) {
+        if (live->predecessors[i] == dead) {
+            live->predecessors[i] = live->predecessors[live->pred_count - 1];
+            live->pred_count--;
+            break;
+        }
+    }
+    /* Patch phi nodes: drop the edge that came from dead. */
+    for (MirInst* phi = live->first;
+         phi && phi->opcode == MIR_PHI;
+         phi = phi->next) {
+        for (int i = 0; i < phi->as.phi.n_edges; i++) {
+            if (phi->as.phi.edges[i].block == dead) {
+                /* Compact by shifting tail left. */
+                phi->as.phi.edges[i] =
+                    phi->as.phi.edges[phi->as.phi.n_edges - 1];
+                phi->as.phi.n_edges--;
+                break;
+            }
+        }
+    }
+}
+
+/* Remove `succ` from `pred`'s successor list. */
+static void cfg_remove_succ(MirBlock* pred, MirBlock* succ) {
+    for (int i = 0; i < pred->succ_count; i++) {
+        if (pred->successors[i] == succ) {
+            pred->successors[i] = pred->successors[pred->succ_count - 1];
+            pred->succ_count--;
+            return;
+        }
+    }
+}
+
 int mir_pass_simplify_cfg(MirFunction* func) {
     int changes = 0;
 
     for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
         if (!bb->last) continue;
 
-        /* condbr on constant → br */
+        /* condbr on constant → br; fully repair CFG and phi edges. */
         if (bb->last->opcode == MIR_CONDBR) {
             MirInst* cond_def = find_def(func, bb->last->as.condbr.cond);
             if (cond_def && cond_def->opcode == MIR_CONST_BOOL) {
-                MirBlock* target = cond_def->as.imm_bool
-                                   ? bb->last->as.condbr.true_bb
-                                   : bb->last->as.condbr.false_bb;
-                bb->last->opcode = MIR_BR;
+                MirBlock* target   = cond_def->as.imm_bool
+                                     ? bb->last->as.condbr.true_bb
+                                     : bb->last->as.condbr.false_bb;
+                MirBlock* dead_bb  = cond_def->as.imm_bool
+                                     ? bb->last->as.condbr.false_bb
+                                     : bb->last->as.condbr.true_bb;
+                /* Rewrite terminator. */
+                bb->last->opcode       = MIR_BR;
                 bb->last->as.br.target = target;
-                /* Note: predecessor/successor lists may become stale;
-                 * a full CFG rebuild would be needed for correctness */
+                /* Repair CFG: remove the edge to the dead successor. */
+                cfg_remove_succ(bb, dead_bb);
+                cfg_remove_pred(dead_bb, bb);
                 changes++;
             }
         }
 
-        /* Block with only a br instruction → thread through */
+        /* Trivial forwarder block (only a br): thread predecessors through.
+         * Skip entry block and blocks with phis in the target (phi requires
+         * stable pred lists — merging them would need phi-edge rewriting
+         * which we defer to a separate CFG canonicalise pass). */
         if (bb->first && bb->first == bb->last &&
-            bb->first->opcode == MIR_BR && bb != func->entry_block) {
-            /* This is a trivial forwarder block. We don't remove it here
-             * but mark it for later cleanup. Full block merging would
-             * require updating all predecessor branch targets. */
-            changes++; /* Count it but don't modify yet (conservative) */
+            bb->first->opcode == MIR_BR &&
+            bb != func->entry_block) {
+            MirBlock* target = bb->first->as.br.target;
+            /* Only thread if target has no phis (safe heuristic). */
+            bool target_has_phi = (target->first &&
+                                   target->first->opcode == MIR_PHI);
+            if (!target_has_phi) {
+                for (int i = 0; i < bb->pred_count; i++) {
+                    MirBlock* pred = bb->predecessors[i];
+                    /* Redirect pred's terminator from bb → target. */
+                    for (MirInst* t = pred->last; t; t = t->prev) {
+                        if (t->opcode == MIR_BR && t->as.br.target == bb)
+                            t->as.br.target = target;
+                        else if (t->opcode == MIR_CONDBR) {
+                            if (t->as.condbr.true_bb  == bb)
+                                t->as.condbr.true_bb  = target;
+                            if (t->as.condbr.false_bb == bb)
+                                t->as.condbr.false_bb = target;
+                        }
+                    }
+                    /* Update succ/pred lists. */
+                    cfg_remove_succ(pred, bb);
+                    if (target != bb) {
+                        mir_block_add_successor(pred, target);
+                        mir_block_add_predecessor(target, pred);
+                    }
+                }
+                cfg_remove_pred(target, bb);
+                bb->pred_count = 0;
+                changes++;
+            }
         }
     }
     return changes;
@@ -566,6 +661,9 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
     if (level == MIR_OPT_NONE) return;
     if (func->is_extern) return;
 
+    mir_assert_ssa_valid(func, "pre-optimize");
+    mir_assert_ownership_valid(func, "pre-optimize");
+
     int max_iterations = 10;
     for (int iter = 0; iter < max_iterations; iter++) {
         int total_changes = 0;
@@ -575,6 +673,8 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
             int c = mir_pass_constant_fold(func);
             if (stats) stats->constants_folded += c;
             total_changes += c;
+            mir_assert_ssa_valid(func, "constant_fold");
+            mir_assert_ownership_valid(func, "constant_fold");
         }
 
         /* Phase 2: copy propagation */
@@ -582,6 +682,8 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
             int c = mir_pass_copy_propagate(func);
             if (stats) stats->copies_propagated += c;
             total_changes += c;
+            mir_assert_ssa_valid(func, "copy_propagate");
+            mir_assert_ownership_valid(func, "copy_propagate");
         }
 
         /* Phase 3: dead code elimination */
@@ -589,6 +691,8 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
             int c = mir_pass_dead_code_eliminate(func);
             if (stats) stats->dead_insts_eliminated += c;
             total_changes += c;
+            mir_assert_ssa_valid(func, "dead_code_eliminate");
+            mir_assert_ownership_valid(func, "dead_code_eliminate");
         }
 
         /* Phase 4: strength reduction */
@@ -596,6 +700,8 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
             int c = mir_pass_strength_reduce(func);
             if (stats) stats->strength_reductions += c;
             total_changes += c;
+            mir_assert_ssa_valid(func, "strength_reduce");
+            mir_assert_ownership_valid(func, "strength_reduce");
         }
 
         /* Phase 5: CFG simplification */
@@ -603,6 +709,8 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
             int c = mir_pass_simplify_cfg(func);
             if (stats) stats->branches_simplified += c;
             total_changes += c;
+            mir_assert_ssa_valid(func, "simplify_cfg");
+            mir_assert_ownership_valid(func, "simplify_cfg");
         }
 
         /* Phase 6: ARC elision */
@@ -610,6 +718,8 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
             int c = mir_pass_arc_elision(func);
             if (stats) stats->arc_pairs_elided += c;
             total_changes += c;
+            mir_assert_ssa_valid(func, "arc_elision");
+            mir_assert_ownership_valid(func, "arc_elision");
         }
 
         if (stats) stats->total_passes++;
