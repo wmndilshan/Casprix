@@ -46,6 +46,8 @@
  * symbol wins when windows.h's winnt.h also tries to define it. */
 #include "../../src/compiler/ir/mir.h"
 #include "jit_bridge.h"
+#include "../io/direct_io.h"
+#include "../io/fast_format.h"
 
 #if defined(_WIN32) || defined(_WIN64)
 #  define WIN32_LEAN_AND_MEAN
@@ -912,10 +914,15 @@ void cjb_free_native(CvmJitBridge* bridge, CvmProfile* profile) {
 }
 
 void cjb_print_stats(CvmJitBridge* bridge, FILE* out) {
-    if (!out) out = stdout;
-    fprintf(out, "JIT Bridge Statistics\n");
-    fprintf(out, "  Functions compiled  : %d\n", bridge->functions_compiled);
-    fprintf(out, "  Total native bytes  : %llu\n",
-            (unsigned long long)bridge->total_native_bytes);
-    fprintf(out, "  Exec blocks tracked : %d\n", bridge->block_count);
+    (void)out;
+    char line[192];
+    size_t n = cpx_fmt_snprintf(line, sizeof(line), "JIT Bridge Statistics\n");
+    (void)cpx_io_write_all_fd(1, line, n);
+    n = cpx_fmt_snprintf(line, sizeof(line), "  Functions compiled  : %d\n", bridge->functions_compiled);
+    (void)cpx_io_write_all_fd(1, line, n);
+    n = cpx_fmt_snprintf(line, sizeof(line), "  Total native bytes  : %llu\n",
+                         (unsigned long long)bridge->total_native_bytes);
+    (void)cpx_io_write_all_fd(1, line, n);
+    n = cpx_fmt_snprintf(line, sizeof(line), "  Exec blocks tracked : %d\n", bridge->block_count);
+    (void)cpx_io_write_all_fd(1, line, n);
 }

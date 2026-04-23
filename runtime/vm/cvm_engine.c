@@ -40,6 +40,8 @@
 #include "../../src/compiler/ir/mir.h"
 #include "cvm_engine.h"
 #include "jit_bridge.h"
+#include "../io/direct_io.h"
+#include "../io/fast_format.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -61,8 +63,13 @@
  * ───────────────────────────────────────────────────────────── */
 
 static void cvm_diag(CvmState* vm, const char* fmt, ...) {
-    FILE* out = vm->diag ? vm->diag : stderr;
-    va_list ap; va_start(ap, fmt); vfprintf(out, fmt, ap); va_end(ap);
+    (void)vm;
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    size_t n = cpx_fmt_vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    (void)cpx_io_write_all_fd(2, buf, n);
 }
 
 static inline CvmReg cvm_safe_div_i64(CvmReg lhs_u, CvmReg rhs_u) {
@@ -993,22 +1000,30 @@ CvmReg cvm_call_function(CvmState* vm, MirFunction* func,
 }
 
 void cvm_print_stats(CvmState* vm, FILE* out) {
-    if (!out) out = stdout;
-    fprintf(out, "CVM Statistics\n");
-    fprintf(out, "  Instructions executed : %llu\n",
-            (unsigned long long)vm->inst_executed);
-    fprintf(out, "  JIT calls             : %llu\n",
-            (unsigned long long)vm->jit_calls);
-    fprintf(out, "  Frame depth peak      : %d\n", vm->frame_depth_peak);
-    fprintf(out, "  Trap code             : %d\n", vm->trap_code);
-    fprintf(out, "  Functions profiled    : %d\n", vm->profile_count);
+    (void)out;
+    char line[256];
+    size_t n = cpx_fmt_snprintf(line, sizeof(line), "CVM Statistics\n");
+    (void)cpx_io_write_all_fd(1, line, n);
+    n = cpx_fmt_snprintf(line, sizeof(line), "  Instructions executed : %llu\n",
+                         (unsigned long long)vm->inst_executed);
+    (void)cpx_io_write_all_fd(1, line, n);
+    n = cpx_fmt_snprintf(line, sizeof(line), "  JIT calls             : %llu\n",
+                         (unsigned long long)vm->jit_calls);
+    (void)cpx_io_write_all_fd(1, line, n);
+    n = cpx_fmt_snprintf(line, sizeof(line), "  Frame depth peak      : %d\n", vm->frame_depth_peak);
+    (void)cpx_io_write_all_fd(1, line, n);
+    n = cpx_fmt_snprintf(line, sizeof(line), "  Trap code             : %d\n", vm->trap_code);
+    (void)cpx_io_write_all_fd(1, line, n);
+    n = cpx_fmt_snprintf(line, sizeof(line), "  Functions profiled    : %d\n", vm->profile_count);
+    (void)cpx_io_write_all_fd(1, line, n);
     for (int i = 0; i < vm->profile_count; i++) {
         CvmProfile* p = &vm->profiles[i];
-        fprintf(out, "    [%s] calls=%d tier=%s\n",
-                p->func_name ? p->func_name : "(unnamed)",
-                p->call_count,
-                p->tier == CVM_TIER_NATIVE ? "native"
-                : p->tier == CVM_TIER_JIT_PENDING ? "pending"
-                : "interpret");
+        n = cpx_fmt_snprintf(line, sizeof(line), "    [%s] calls=%d tier=%s\n",
+                             p->func_name ? p->func_name : "(unnamed)",
+                             p->call_count,
+                             p->tier == CVM_TIER_NATIVE ? "native"
+                             : p->tier == CVM_TIER_JIT_PENDING ? "pending"
+                             : "interpret");
+        (void)cpx_io_write_all_fd(1, line, n);
     }
 }
