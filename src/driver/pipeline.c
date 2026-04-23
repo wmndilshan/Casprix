@@ -236,17 +236,22 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     ctx.registry_init = true;
     {
         int modules_loaded = 0;
+        CPX_INFO("Analyzing %d statements for modules", ctx.stmt_count);
         for (int i = 0; i < ctx.stmt_count; i++) {
-            if (ctx.statements[i] && ctx.statements[i]->type == STMT_INCLUDE) {
-                IncludeStmt* incl = &ctx.statements[i]->as.include;
-                if (module_requires_skia_runtime(incl->module_name))
-                    g_link_needs_skia = true;
-                Module* mod = load_module(&ctx.module_registry, incl->module_name, (void*)source_path);
-                if (mod) {
-                    modules_loaded++;
-                    CPX_INFO("Loaded module: %s", incl->module_name);
-                } else if (!incl->is_import) {
-                    CPX_WARN("Module not found: %s", incl->module_name);
+            if (ctx.statements[i]) {
+                CPX_DEBUG("Stmt %d: type %d", i, ctx.statements[i]->type);
+                if (ctx.statements[i]->type == STMT_INCLUDE) {
+                    IncludeStmt* incl = &ctx.statements[i]->as.include;
+                    CPX_INFO("Found include/import: %s", incl->module_name);
+                    if (module_requires_skia_runtime(incl->module_name))
+                        g_link_needs_skia = true;
+                    Module* mod = load_module(&ctx.module_registry, incl->module_name, (void*)source_path);
+                    if (mod) {
+                        modules_loaded++;
+                        CPX_INFO("Successfully loaded module: %s", incl->module_name);
+                    } else if (!incl->is_import) {
+                        CPX_WARN("Module not found: %s", incl->module_name);
+                    }
                 }
             }
         }

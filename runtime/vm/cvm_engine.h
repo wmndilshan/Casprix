@@ -111,6 +111,11 @@ typedef struct CvmFrame {
     CvmReg*         regs;       /* register file, size = func->next_value_id */
     int             reg_count;
 
+    /* MIR_ALLOCA allocations owned by this frame (freed on return). */
+    void**          allocas;
+    int             alloca_count;
+    int             alloca_cap;
+
     /* Return value slot in the *caller's* register file */
     CvmReg*         caller_regs;
     MirValueId      result_id;  /* where the caller expects the return value */
@@ -134,6 +139,7 @@ typedef struct {
     /* Live call-frame stack (for GC scanning) */
     CvmFrame*       frame_stack;   /* top (newest) frame */
     int             frame_depth;
+    int             frame_depth_peak;
 
     /* Optional JIT bridge (NULL → no JIT) */
     CvmJitBridge*   jit;

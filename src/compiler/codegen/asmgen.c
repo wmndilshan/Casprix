@@ -1759,7 +1759,14 @@ static void generate_asm_print(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
     generate_asm_expr(gen, print->expression, "rax", symbols);
     
     switch (type) {
-        case TYPE_INT:
+        case TYPE_I8:
+        case TYPE_I16:
+        case TYPE_I32:
+        case TYPE_I64:
+        case TYPE_U8:
+        case TYPE_U16:
+        case TYPE_U32:
+        case TYPE_U64:
             emit_asm(gen, "    lea %s, [rel fmt_int]\n", ABI_I_REGS[0]);
             emit_asm(gen, "    mov %s, rax\n", ABI_I_REGS[1]);
             emit_asm(gen, "    call printf\n");

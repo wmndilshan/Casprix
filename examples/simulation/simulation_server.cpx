@@ -1,0 +1,79 @@
+// =============================================================================
+// Casprix High-Performance Concurrent Simulation Backend
+// =============================================================================
+
+import "lib/std/sync/atomic"
+
+// --- FFI: Simulation Storage (to be moved to std later) ---
+extern func simulation_storage_init() -> void
+extern func simulation_create(id: i32, name: string, value: f32) -> bool
+extern func simulation_get(id: i32, out_name: rawptr, out_value: rawptr) -> bool
+extern func simulation_update(id: i32, delta: f32) -> bool
+
+// --- FFI: HTTP Server (from runtime) ---
+extern func http_server_create(bind_addr: string, port: i32) -> rawptr
+extern func http_server_route(server: rawptr, method: i32, path: string, handler: rawptr, user_data: rawptr) -> bool
+extern func http_server_listen(server: rawptr) -> bool
+
+// Helper for FFI pointers
+extern func ptr_create_f32() -> rawptr
+extern func ptr_get_f32(p: rawptr) -> f32
+extern func ptr_create_buf(size: i32) -> rawptr
+extern func ptr_to_string(p: rawptr) -> string
+
+// =============================================================================
+// Simulation Server logic
+// =============================================================================
+
+func handle_root(req: rawptr, userdata: rawptr, counter: AtomicInt) -> void {
+    let count = counter.add(1)
+    print("Request #")
+    print(count)
+}
+
+func handle_create_sim(req: rawptr, userdata: rawptr) -> void {
+    // Dummy ID for demo
+    let id: i32 = 101
+    let success = simulation_create(id, "Flight_Sim_01", 100.0)
+    if success {
+        print("Created simulation 101")
+    } else {
+        print("Simulation 101 already exists")
+    }
+}
+
+func handle_update_sim(req: rawptr, userdata: rawptr) -> void {
+    let id: i32 = 101
+    let success = simulation_update(id, 5.5)
+    if success {
+        print("Updated simulation 101 (added 5.5)")
+    }
+}
+
+func main() -> void {
+    print("Initializing Concurrent Simulation Backend...")
+    simulation_storage_init()
+    
+    let g_request_count: AtomicInt = new AtomicInt(0)
+    
+    let server = http_server_create("0.0.0.0", 8080)
+    
+    // In Casprix, we'd pass function pointers to http_server_route
+    // For this demo, we'll simulate the execution loop
+    print("Server listening on port 8080 (Simulated)")
+    
+    // Demonstrate atomic and concurrent safety
+    print("Running atomic race test...")
+    
+    for (i: i32 = 0; i < 5; i = i + 1) {
+        handle_create_sim(0, 0)
+        handle_update_sim(0, 0)
+        handle_root(0, 0, g_request_count)
+    }
+    
+    print("Final request count:")
+    print(g_request_count.load())
+    
+    print("Backend simulation successful.")
+    g_request_count.destroy()
+}

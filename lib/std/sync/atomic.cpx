@@ -1,0 +1,56 @@
+// Casprix Standard Library: Synchronization and Atomic Primitives
+
+extern func cpx_atomic_int_create(initial: i64) -> rawptr
+extern func cpx_atomic_int_destroy(handle: rawptr) -> void
+extern func cpx_atomic_int_add(handle: rawptr, val: i64) -> i64
+extern func cpx_atomic_int_load(handle: rawptr) -> i64
+extern func cpx_atomic_int_store(handle: rawptr, val: i64) -> void
+
+extern func cpx_mutex_create() -> rawptr
+extern func cpx_mutex_destroy(handle: rawptr) -> void
+extern func cpx_mutex_lock(handle: rawptr) -> void
+extern func cpx_mutex_unlock(handle: rawptr) -> void
+
+class AtomicInt {
+    private let handle: rawptr
+
+    public func new(initial: i64) -> void {
+        this.handle = cpx_atomic_int_create(initial)
+    }
+
+    public func add(val: i64) -> i64 {
+        return cpx_atomic_int_add(this.handle, val)
+    }
+
+    public func load() -> i64 {
+        return cpx_atomic_int_load(this.handle)
+    }
+
+    public func store(val: i64) -> void {
+        cpx_atomic_int_store(this.handle, val)
+    }
+
+    public func destroy() -> void {
+        cpx_atomic_int_destroy(this.handle)
+    }
+}
+
+class Mutex {
+    private let handle: rawptr
+
+    public func new() -> void {
+        this.handle = cpx_mutex_create()
+    }
+
+    public func lock() -> void {
+        cpx_mutex_lock(this.handle)
+    }
+
+    public func unlock() -> void {
+        cpx_mutex_unlock(this.handle)
+    }
+
+    public func destroy() -> void {
+        cpx_mutex_destroy(this.handle)
+    }
+}
