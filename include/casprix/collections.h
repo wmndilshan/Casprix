@@ -14,6 +14,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+struct Arena;
+typedef struct Arena Arena;
 
 /* ---- Opaque types (created on heap, managed by runtime) ---- */
 typedef struct NuwanList      NuwanList;
@@ -24,7 +26,8 @@ typedef struct NuwanSwissMap  NuwanSwissMap;
 typedef NuwanList             NuwanStack;
 
 /* ---- List: dynamic int64 array, cache-aligned ---- */
-NuwanList* nuwan_list_new(void);
+NuwanList* nuwan_list_new(Arena* a);
+bool       nuwan_list_reserve(NuwanList* l, size_t cap);
 bool       nuwan_list_push(NuwanList* l, int64_t val);
 int64_t    nuwan_list_get(const NuwanList* l, size_t idx);
 bool       nuwan_list_set(NuwanList* l, size_t idx, int64_t val);
@@ -40,7 +43,8 @@ int64_t    nuwan_list_sum(const NuwanList* l);      /* SSE2 vectorized sum */
 void       nuwan_list_free(NuwanList* l);
 
 /* ---- Map: Robin Hood hashmap, string key → int64 value ---- */
-NuwanMap* nuwan_map_new(void);
+NuwanMap* nuwan_map_new(Arena* a);
+void      nuwan_map_reserve(NuwanMap* m, size_t expected_size);
 void      nuwan_map_put(NuwanMap* m, const char* key, int64_t val);
 int64_t   nuwan_map_get(const NuwanMap* m, const char* key);
 bool      nuwan_map_has(const NuwanMap* m, const char* key);
@@ -51,7 +55,7 @@ void      nuwan_map_clear(NuwanMap* m);
 void      nuwan_map_free(NuwanMap* m);
 
 /* ---- Stack: LIFO, backed by NuwanList ---- */
-NuwanStack* nuwan_stack_new(void);
+NuwanStack* nuwan_stack_new(Arena* a);
 bool        nuwan_stack_push(NuwanStack* s, int64_t v);
 int64_t     nuwan_stack_pop(NuwanStack* s);
 int64_t     nuwan_stack_peek(const NuwanStack* s);
@@ -61,7 +65,7 @@ void        nuwan_stack_clear(NuwanStack* s);
 void        nuwan_stack_free(NuwanStack* s);
 
 /* ---- Queue: O(1) ring-buffer FIFO ---- */
-NuwanQueue* nuwan_queue_new(void);
+NuwanQueue* nuwan_queue_new(Arena* a);
 bool        nuwan_queue_enqueue(NuwanQueue* q, int64_t val);
 int64_t     nuwan_queue_dequeue(NuwanQueue* q);
 int64_t     nuwan_queue_peek(const NuwanQueue* q);
@@ -71,7 +75,8 @@ void        nuwan_queue_clear(NuwanQueue* q);
 void        nuwan_queue_free(NuwanQueue* q);
 
 /* ---- Priority Queue: binary min-heap, dual parallel arrays ---- */
-NuwanPQ* nuwan_pq_new(void);
+NuwanPQ* nuwan_pq_new(Arena* a);
+bool     nuwan_pq_reserve(NuwanPQ* pq, size_t cap);
 bool     nuwan_pq_push(NuwanPQ* pq, int64_t priority, int64_t value);
 int64_t  nuwan_pq_pop(NuwanPQ* pq);
 int64_t  nuwan_pq_peek(const NuwanPQ* pq);
@@ -99,8 +104,8 @@ void     nuwan_pq_free(NuwanPQ* pq);
  * existing callers are undisturbed.  Prefer this map for AI/LLM workloads
  * where string keys dominate and lookup latency is on the hot path.
  * -------------------------------------------------------------------------- */
-NuwanSwissMap* nuwan_swiss_new(void);
-NuwanSwissMap* nuwan_swiss_new_reserved(size_t expected_size);
+NuwanSwissMap* nuwan_swiss_new(Arena* a);
+NuwanSwissMap* nuwan_swiss_new_reserved(Arena* a, size_t expected_size);
 void           nuwan_swiss_reserve(NuwanSwissMap* m, size_t expected_size);
 
 bool     nuwan_swiss_put(NuwanSwissMap* m, const char* key, int64_t val);

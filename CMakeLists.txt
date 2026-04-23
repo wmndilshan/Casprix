@@ -324,6 +324,11 @@ if(BUILD_RUNTIME)
     endforeach()
 
     # I/O subsystem
+    foreach(_f direct_io fast_format lockfree_log ml_telemetry dataset_stream checkpoint_io)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/io/${_f}.c")
+            list(APPEND RUNTIME_SOURCES "runtime/io/${_f}.c")
+        endif()
+    endforeach()
     if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/io/file_async.c")
         list(APPEND RUNTIME_SOURCES runtime/io/file_async.c)
     endif()

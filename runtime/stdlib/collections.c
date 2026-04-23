@@ -5,9 +5,11 @@
  */
 
 #include "../../include/casprix/collections.h"
+#include "../../src/support/arena.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <immintrin.h>
 
 /* nuwan_string_hash is defined in string_ops.c */
 extern uint64_t nuwan_string_hash(const char* s);
@@ -22,8 +24,31 @@ void nuwan_array_sort_net4(int64_t* a) {
 }
 
 int64_t nuwan_array_sum_i64(const int64_t* arr, size_t n) {
+    if (!arr || n == 0) return 0;
+    size_t i = 0;
     int64_t s = 0;
-    for (size_t i = 0; i < n; i++) s += arr[i];
+
+#if defined(__AVX2__)
+    __m256i sum_v = _mm256_setzero_si256();
+    for (; i + 4 <= n; i += 4) {
+        __m256i v = _mm256_loadu_si256((const __m256i*)&arr[i]);
+        sum_v = _mm256_add_epi64(sum_v, v);
+    }
+    int64_t temp[4];
+    _mm256_storeu_si256((__m256i*)temp, sum_v);
+    s = temp[0] + temp[1] + temp[2] + temp[3];
+#elif defined(__SSE2__)
+    __m128i sum_v = _mm_setzero_si128();
+    for (; i + 2 <= n; i += 2) {
+        __m128i v = _mm_loadu_si128((const __m128i*)&arr[i]);
+        sum_v = _mm_add_epi64(sum_v, v);
+    }
+    int64_t temp[2];
+    _mm_storeu_si128((__m128i*)temp, sum_v);
+    s = temp[0] + temp[1];
+#endif
+
+    for (; i < n; i++) s += arr[i];
     return s;
 }
 
@@ -34,28 +59,37 @@ int64_t nuwan_array_sum_i64(const int64_t* arr, size_t n) {
 #define LIST_INIT_CAP 16
 
 struct NuwanList {
+    Arena*   arena;
     int64_t* data;
     size_t   size;
     size_t   cap;
 };
 
-NuwanList* nuwan_list_new(void) {
-    NuwanList* l = (NuwanList*)malloc(sizeof(NuwanList));
+NuwanList* nuwan_list_new(Arena* a) {
+    NuwanList* l = (NuwanList*)arena_alloc(a, sizeof(NuwanList));
     if (!l) return NULL;
-    l->data = (int64_t*)malloc(LIST_INIT_CAP * sizeof(int64_t));
-    if (!l->data) { free(l); return NULL; }
-    l->size = 0;
-    l->cap  = LIST_INIT_CAP;
+    l->arena = a;
+    l->size  = 0;
+    l->cap   = LIST_INIT_CAP;
+    /* Aligned to 64 bytes for optimal cache line utilization */
+    l->data  = (int64_t*)arena_alloc_aligned(a, l->cap * sizeof(int64_t), 64);
     return l;
+}
+
+bool nuwan_list_reserve(NuwanList* l, size_t cap) {
+    if (!l || cap <= l->cap) return true;
+    int64_t* nd = (int64_t*)arena_alloc_aligned(l->arena, cap * sizeof(int64_t), 64);
+    if (!nd) return false;
+    if (l->size) memcpy(nd, l->data, l->size * sizeof(int64_t));
+    l->data = nd;
+    l->cap = cap;
+    return true;
 }
 
 bool nuwan_list_push(NuwanList* l, int64_t v) {
     if (!l) return false;
     if (l->size == l->cap) {
-        size_t nc = l->cap * 2;
-        int64_t* nd = (int64_t*)realloc(l->data, nc * sizeof(int64_t));
-        if (!nd) return false;
-        l->data = nd; l->cap = nc;
+        if (!nuwan_list_reserve(l, l->cap * 2)) return false;
     }
     l->data[l->size++] = v;
     return true;
@@ -121,71 +155,110 @@ int64_t nuwan_list_sum(const NuwanList* l) {
 }
 
 void nuwan_list_free(NuwanList* l) {
-    if (!l) return;
-    free(l->data);
-    free(l);
+    /* No-op in Arena-managed runtime. */
+    (void)l;
 }
 
 /* ── NuwanMap (Robin Hood open-addressing, string key → int64) ─────────── */
 
-#define MAP_INIT_CAP 16
-#define MAP_LOAD_NUM 3
-#define MAP_LOAD_DEN 4   /* load factor 0.75 */
+#define LIST_INIT_CAP 16
+#define MAP_INIT_CAP  16
+#define MAP_LOAD_NUM 7
+#define MAP_LOAD_DEN 8   /* load factor 0.875 - Robin Hood handles this well */
 #define MAP_EMPTY    UINT64_MAX
 
-typedef struct { char* key; int64_t val; uint64_t hash; } MapEntry;
+typedef struct {
+    char*    key;
+    int64_t  val;
+    uint64_t hash;
+    uint32_t dib; /* Distance from ideal bucket */
+} MapEntry;
 
 struct NuwanMap {
+    Arena*    arena;
     MapEntry* slots;
     size_t    size;
     size_t    cap;
 };
 
-NuwanMap* nuwan_map_new(void) {
-    NuwanMap* m = (NuwanMap*)calloc(1, sizeof(NuwanMap));
+NuwanMap* nuwan_map_new(Arena* a) {
+    NuwanMap* m = (NuwanMap*)arena_calloc(a, 1, sizeof(NuwanMap));
     if (!m) return NULL;
+    m->arena = a;
     m->cap   = MAP_INIT_CAP;
-    m->slots = (MapEntry*)calloc(m->cap, sizeof(MapEntry));
-    if (!m->slots) { free(m); return NULL; }
+    m->slots = (MapEntry*)arena_alloc_aligned(a, m->cap * sizeof(MapEntry), 64);
+    if (!m->slots) return NULL;
     for (size_t i = 0; i < m->cap; i++) m->slots[i].hash = MAP_EMPTY;
     return m;
 }
 
 static bool map_insert_raw(MapEntry* slots, size_t cap, char* key, int64_t val, uint64_t h) {
     size_t idx = h % cap;
+    uint32_t cdib = 0;
     while (1) {
         if (slots[idx].hash == MAP_EMPTY) {
-            slots[idx] = (MapEntry){key, val, h};
+            slots[idx] = (MapEntry){key, val, h, cdib};
             return true;
         }
         if (slots[idx].hash == h && strcmp(slots[idx].key, key) == 0) {
-            free(key);  /* duplicate key — update value */
+            /* duplicate key — update value. Note: key was strdup'd by caller */
             slots[idx].val = val;
             return false;
         }
+        
+        /* Robin Hood: if current slot is "richer" (smaller DIB) than us, swap. */
+        if (slots[idx].dib < cdib) {
+            MapEntry tmp = slots[idx];
+            slots[idx] = (MapEntry){key, val, h, cdib};
+            key = tmp.key;
+            val = tmp.val;
+            h = tmp.hash;
+            cdib = tmp.dib;
+        }
+        
         idx = (idx + 1) % cap;
+        cdib++;
     }
 }
 
 static void map_grow(NuwanMap* m) {
     size_t nc = m->cap * 2;
-    MapEntry* ns = (MapEntry*)calloc(nc, sizeof(MapEntry));
+    MapEntry* ns = (MapEntry*)arena_alloc_aligned(m->arena, nc * sizeof(MapEntry), 64);
     if (!ns) return;
     for (size_t i = 0; i < nc; i++) ns[i].hash = MAP_EMPTY;
     for (size_t i = 0; i < m->cap; i++) {
         if (m->slots[i].hash != MAP_EMPTY)
             map_insert_raw(ns, nc, m->slots[i].key, m->slots[i].val, m->slots[i].hash);
     }
-    free(m->slots);
     m->slots = ns;
     m->cap   = nc;
+}
+
+void nuwan_map_reserve(NuwanMap* m, size_t expected_size) {
+    if (!m) return;
+    size_t target_cap = MAP_INIT_CAP;
+    while (expected_size * MAP_LOAD_DEN >= target_cap * MAP_LOAD_NUM) target_cap <<= 1;
+    if (target_cap > m->cap) {
+        /* This is slightly wasteful in an Arena, but necessary if not pre-sized. */
+        MapEntry* ns = (MapEntry*)arena_alloc_aligned(m->arena, target_cap * sizeof(MapEntry), 64);
+        if (!ns) return;
+        for (size_t i = 0; i < target_cap; i++) ns[i].hash = MAP_EMPTY;
+        for (size_t i = 0; i < m->cap; i++) {
+            if (m->slots[i].hash != MAP_EMPTY)
+                map_insert_raw(ns, target_cap, m->slots[i].key, m->slots[i].val, m->slots[i].hash);
+        }
+        m->slots = ns;
+        m->cap = target_cap;
+    }
 }
 
 void nuwan_map_put(NuwanMap* m, const char* key, int64_t val) {
     if (!m || !key) return;
     if (m->size * MAP_LOAD_DEN >= m->cap * MAP_LOAD_NUM) map_grow(m);
     uint64_t h = nuwan_string_hash(key);
-    if (map_insert_raw(m->slots, m->cap, strdup(key), val, h)) {
+    /* We must copy the key into the arena */
+    char* ak = arena_strdup(m->arena, key);
+    if (map_insert_raw(m->slots, m->cap, ak, val, h)) {
         m->size++;
     }
 }
@@ -236,22 +309,21 @@ bool   nuwan_map_empty(const NuwanMap* m) { return !m || m->size == 0; }
 
 void nuwan_map_clear(NuwanMap* m) {
     if (!m) return;
+    /* In an Arena, we don't free individual keys. Just mark everything empty. */
     for (size_t i = 0; i < m->cap; i++) {
-        if (m->slots[i].hash != MAP_EMPTY) { free(m->slots[i].key); m->slots[i].hash = MAP_EMPTY; }
+        m->slots[i].hash = MAP_EMPTY;
+        m->slots[i].key = NULL;
     }
     m->size = 0;
 }
 
 void nuwan_map_free(NuwanMap* m) {
-    if (!m) return;
-    nuwan_map_clear(m);
-    free(m->slots);
-    free(m);
+    (void)m;
 }
 
 /* ── NuwanStack (alias over NuwanList) ─────────────────────────────────── */
 
-NuwanStack* nuwan_stack_new(void)                    { return nuwan_list_new(); }
+NuwanStack* nuwan_stack_new(Arena* a)                    { return nuwan_list_new(a); }
 bool        nuwan_stack_push(NuwanStack* s, int64_t v) { return nuwan_list_push(s, v); }
 int64_t     nuwan_stack_pop(NuwanStack* s)           { return nuwan_list_pop(s); }
 int64_t     nuwan_stack_peek(const NuwanStack* s)    { return (s && s->size) ? s->data[s->size-1] : 0; }
@@ -265,16 +337,18 @@ void        nuwan_stack_free(NuwanStack* s)          { nuwan_list_free(s); }
 #define QUEUE_INIT_CAP 16
 
 struct NuwanQueue {
+    Arena*   arena;
     int64_t* data;
     size_t   head, tail, size, cap;
 };
 
-NuwanQueue* nuwan_queue_new(void) {
-    NuwanQueue* q = (NuwanQueue*)calloc(1, sizeof(NuwanQueue));
+NuwanQueue* nuwan_queue_new(Arena* a) {
+    NuwanQueue* q = (NuwanQueue*)arena_calloc(a, 1, sizeof(NuwanQueue));
     if (!q) return NULL;
-    q->data = (int64_t*)malloc(QUEUE_INIT_CAP * sizeof(int64_t));
-    if (!q->data) { free(q); return NULL; }
-    q->cap = QUEUE_INIT_CAP;
+    q->arena = a;
+    q->data  = (int64_t*)arena_alloc_aligned(a, QUEUE_INIT_CAP * sizeof(int64_t), 64);
+    if (!q->data) return NULL;
+    q->cap   = QUEUE_INIT_CAP;
     return q;
 }
 
@@ -282,11 +356,10 @@ bool nuwan_queue_enqueue(NuwanQueue* q, int64_t v) {
     if (!q) return false;
     if (q->size == q->cap) {
         size_t nc = q->cap * 2;
-        int64_t* nd = (int64_t*)malloc(nc * sizeof(int64_t));
+        int64_t* nd = (int64_t*)arena_alloc_aligned(q->arena, nc * sizeof(int64_t), 64);
         if (!nd) return false;
         /* linearise ring */
         for (size_t i = 0; i < q->size; i++) nd[i] = q->data[(q->head + i) % q->cap];
-        free(q->data);
         q->data = nd; q->head = 0; q->tail = q->size; q->cap = nc;
     }
     q->data[q->tail] = v;
@@ -315,9 +388,7 @@ void nuwan_queue_clear(NuwanQueue* q) {
 }
 
 void nuwan_queue_free(NuwanQueue* q) {
-    if (!q) return;
-    free(q->data);
-    free(q);
+    (void)q;
 }
 
 /* ── NuwanPQ (binary min-heap) ──────────────────────────────────────────── */
@@ -325,19 +396,36 @@ void nuwan_queue_free(NuwanQueue* q) {
 #define PQ_INIT_CAP 16
 
 struct NuwanPQ {
+    Arena*   arena;
     int64_t* prios;
     int64_t* vals;
     size_t   size, cap;
 };
 
-NuwanPQ* nuwan_pq_new(void) {
-    NuwanPQ* pq = (NuwanPQ*)calloc(1, sizeof(NuwanPQ));
+NuwanPQ* nuwan_pq_new(Arena* a) {
+    NuwanPQ* pq = (NuwanPQ*)arena_calloc(a, 1, sizeof(NuwanPQ));
     if (!pq) return NULL;
-    pq->prios = (int64_t*)malloc(PQ_INIT_CAP * sizeof(int64_t));
-    pq->vals  = (int64_t*)malloc(PQ_INIT_CAP * sizeof(int64_t));
-    if (!pq->prios || !pq->vals) { free(pq->prios); free(pq->vals); free(pq); return NULL; }
-    pq->cap = PQ_INIT_CAP;
+    pq->arena = a;
+    pq->cap   = PQ_INIT_CAP;
+    pq->prios = (int64_t*)arena_alloc_aligned(a, pq->cap * sizeof(int64_t), 64);
+    pq->vals  = (int64_t*)arena_alloc_aligned(a, pq->cap * sizeof(int64_t), 64);
+    if (!pq->prios || !pq->vals) return NULL;
     return pq;
+}
+
+bool nuwan_pq_reserve(NuwanPQ* pq, size_t cap) {
+    if (!pq || cap <= pq->cap) return true;
+    int64_t* np = (int64_t*)arena_alloc_aligned(pq->arena, cap * sizeof(int64_t), 64);
+    int64_t* nv = (int64_t*)arena_alloc_aligned(pq->arena, cap * sizeof(int64_t), 64);
+    if (!np || !nv) return false;
+    if (pq->size) {
+        memcpy(np, pq->prios, pq->size * sizeof(int64_t));
+        memcpy(nv, pq->vals,  pq->size * sizeof(int64_t));
+    }
+    pq->prios = np;
+    pq->vals  = nv;
+    pq->cap   = cap;
+    return true;
 }
 
 static void pq_swap(NuwanPQ* pq, size_t a, size_t b) {
@@ -348,16 +436,7 @@ static void pq_swap(NuwanPQ* pq, size_t a, size_t b) {
 bool nuwan_pq_push(NuwanPQ* pq, int64_t priority, int64_t value) {
     if (!pq) return false;
     if (pq->size == pq->cap) {
-        size_t nc = pq->cap * 2;
-        /* Realloc each array independently so neither pointer is lost if
-           the second realloc fails (Bug #4 fix). */
-        int64_t* np = (int64_t*)realloc(pq->prios, nc * sizeof(int64_t));
-        if (!np) return false;
-        pq->prios = np;
-        int64_t* nv = (int64_t*)realloc(pq->vals, nc * sizeof(int64_t));
-        if (!nv) return false;   /* prios already grown but that's acceptable */
-        pq->vals = nv;
-        pq->cap = nc;
+        if (!nuwan_pq_reserve(pq, pq->cap * 2)) return false;
     }
     size_t i = pq->size++;
     pq->prios[i] = priority; pq->vals[i] = value;
@@ -393,10 +472,7 @@ size_t  nuwan_pq_size(const NuwanPQ* pq)           { return pq ? pq->size : 0; }
 bool    nuwan_pq_empty(const NuwanPQ* pq)          { return !pq || pq->size == 0; }
 
 void nuwan_pq_free(NuwanPQ* pq) {
-    if (!pq) return;
-    free(pq->prios);
-    free(pq->vals);
-    free(pq);
+    (void)pq;
 }
 
 /* ============================================================================
@@ -487,6 +563,7 @@ typedef struct SwissEntry {
 } SwissEntry;
 
 struct NuwanSwissMap {
+    Arena*      arena;
     uint8_t*    ctrl;            /* cap bytes, 16-byte aligned               */
     SwissEntry* slots;           /* cap entries, parallel to ctrl            */
     size_t      cap;             /* slot count, power of 2, >= SWISS_GROUP_SIZE */
@@ -603,30 +680,12 @@ static size_t swiss_normalise_cap(size_t hint) {
  * The ctrl array is 16-byte aligned for aligned SIMD loads; we use aligned
  * malloc where available and fall back to `malloc + memset` otherwise. */
 static bool swiss_alloc_arrays(NuwanSwissMap* m, size_t cap) {
-    uint8_t* ctrl = NULL;
-    /* Windows (including MinGW) routes through _aligned_malloc — C11's
-     * aligned_alloc is not consistently exposed across msvcrt versions.
-     * Everywhere else we use POSIX posix_memalign. */
-#if defined(_WIN32)
-    ctrl = (uint8_t*)_aligned_malloc(cap, 16);
-#elif defined(__APPLE__) || defined(__linux__) || defined(__unix__)
-    if (posix_memalign((void**)&ctrl, 16, cap) != 0) ctrl = NULL;
-#else
-    /* Over-allocate and manually align as a last resort; we keep the raw
-     * pointer nowhere because we always free via the matching branch. */
-    ctrl = (uint8_t*)malloc(cap);
-#endif
+    /* Aligned to 16 bytes for SIMD metadata loads */
+    uint8_t* ctrl = (uint8_t*)arena_alloc_aligned(m->arena, cap, 16);
     if (!ctrl) return false;
 
-    SwissEntry* slots = (SwissEntry*)calloc(cap, sizeof(SwissEntry));
-    if (!slots) {
-#if defined(_WIN32)
-        _aligned_free(ctrl);
-#else
-        free(ctrl);
-#endif
-        return false;
-    }
+    SwissEntry* slots = (SwissEntry*)arena_calloc(m->arena, cap, sizeof(SwissEntry));
+    if (!slots) return false;
     memset(ctrl, (int)SWISS_CTRL_EMPTY, cap);
 
     m->ctrl        = ctrl;
@@ -639,28 +698,9 @@ static bool swiss_alloc_arrays(NuwanSwissMap* m, size_t cap) {
 }
 
 static void swiss_free_arrays(NuwanSwissMap* m) {
-    if (!m) return;
-    if (m->slots) {
-        for (size_t i = 0; i < m->cap; i++) {
-            /* Only FULL slots hold a live key pointer.  EMPTY/DELETED ctrls
-             * leave the slot bytes zeroed (via calloc). */
-            if ((m->ctrl[i] & 0x80u) == 0u && m->slots[i].key) {
-                free(m->slots[i].key);
-                m->slots[i].key = NULL;
-            }
-        }
-        free(m->slots);
-        m->slots = NULL;
-    }
-    if (m->ctrl) {
-#if defined(_WIN32)
-        _aligned_free(m->ctrl);
-#else
-        free(m->ctrl);
-#endif
-        m->ctrl = NULL;
-    }
-    m->cap = m->size = m->tombstones = m->growth_left = 0;
+    /* No-op in Arena-managed runtime. Individual key freeing must be
+     * handled by the Arena reset if they were allocated in the same arena. */
+    (void)m;
 }
 
 /* ── Rehash-in-place vs. grow-then-rehash ─────────────────────────────────── */
@@ -831,14 +871,6 @@ static bool swiss_rehash(NuwanSwissMap* m, size_t new_cap) {
         }
     }
 
-    /* Free the old ctrl but NOT the keys: their ownership moved to tmp. */
-#if defined(_WIN32)
-    _aligned_free(m->ctrl);
-#else
-    free(m->ctrl);
-#endif
-    free(m->slots);
-
     m->ctrl        = tmp.ctrl;
     m->slots       = tmp.slots;
     m->cap         = tmp.cap;
@@ -850,15 +882,16 @@ static bool swiss_rehash(NuwanSwissMap* m, size_t new_cap) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-NuwanSwissMap* nuwan_swiss_new(void) {
-    NuwanSwissMap* m = (NuwanSwissMap*)calloc(1, sizeof(*m));
+NuwanSwissMap* nuwan_swiss_new(Arena* a) {
+    NuwanSwissMap* m = (NuwanSwissMap*)arena_calloc(a, 1, sizeof(NuwanSwissMap));
     if (!m) return NULL;
-    if (!swiss_alloc_arrays(m, SWISS_INIT_CAP)) { free(m); return NULL; }
+    m->arena = a;
+    if (!swiss_alloc_arrays(m, SWISS_INIT_CAP)) return NULL;
     return m;
 }
 
-NuwanSwissMap* nuwan_swiss_new_reserved(size_t expected_size) {
-    NuwanSwissMap* m = nuwan_swiss_new();
+NuwanSwissMap* nuwan_swiss_new_reserved(Arena* a, size_t expected_size) {
+    NuwanSwissMap* m = nuwan_swiss_new(a);
     if (!m) return NULL;
     nuwan_swiss_reserve(m, expected_size);
     return m;
@@ -877,35 +910,28 @@ void nuwan_swiss_reserve(NuwanSwissMap* m, size_t expected_size) {
 
 bool nuwan_swiss_put(NuwanSwissMap* m, const char* key, int64_t val) {
     if (!m || !key) return false;
-
     if (m->growth_left == 0) {
         if (!swiss_rehash_or_grow(m)) return false;
     }
-
     uint64_t hash = swiss_hash(key);
     SwissProbe p = swiss_find_for_insert(m, key, hash);
-    ((NuwanSwissMap*)m)->last_probe_len = p.probe_len;
+    m->last_probe_len = p.probe_len;
 
     if (p.found) {
-        /* Duplicate: update value in place; keep existing key allocation. */
         m->slots[p.index].val = val;
         return true;
     }
 
     if (p.index == (size_t)-1) {
-        /* Degenerate case: table wedged full.  Force a grow and retry. */
         if (!swiss_rehash_or_grow(m)) return false;
         p = swiss_find_for_insert(m, key, hash);
-        ((NuwanSwissMap*)m)->last_probe_len = p.probe_len;
+        m->last_probe_len = p.probe_len;
         if (p.index == (size_t)-1) return false;
     }
 
     const uint8_t prev_ctrl = m->ctrl[p.index];
-    char* key_copy = NULL;
-    size_t klen = strlen(key);
-    key_copy = (char*)malloc(klen + 1);
+    char* key_copy = arena_strdup(m->arena, key);
     if (!key_copy) return false;
-    memcpy(key_copy, key, klen + 1);
 
     m->ctrl[p.index]        = swiss_h2(hash);
     m->slots[p.index].hash  = hash;
@@ -913,8 +939,6 @@ bool nuwan_swiss_put(NuwanSwissMap* m, const char* key, int64_t val) {
     m->slots[p.index].val   = val;
     m->size++;
     if (prev_ctrl == SWISS_CTRL_EMPTY) {
-        /* Consumed a truly-empty slot -- the only state that reduces our
-         * future growth budget.  Reclaiming a DELETED slot is "free". */
         m->growth_left--;
     } else {
         assert(prev_ctrl == SWISS_CTRL_DELETED);
@@ -952,7 +976,6 @@ bool nuwan_swiss_remove(NuwanSwissMap* m, const char* key) {
     if (!p.found) return false;
 
     size_t idx = p.index;
-    free(m->slots[idx].key);
     m->slots[idx].key  = NULL;
     m->slots[idx].hash = 0;
     m->slots[idx].val  = 0;
@@ -986,12 +1009,6 @@ size_t nuwan_swiss_tombstones(const NuwanSwissMap* m) {
 
 void nuwan_swiss_clear(NuwanSwissMap* m) {
     if (!m) return;
-    for (size_t i = 0; i < m->cap; i++) {
-        if ((m->ctrl[i] & 0x80u) == 0u && m->slots[i].key) {
-            free(m->slots[i].key);
-            m->slots[i].key = NULL;
-        }
-    }
     memset(m->ctrl, (int)SWISS_CTRL_EMPTY, m->cap);
     memset(m->slots, 0, m->cap * sizeof(SwissEntry));
     m->size        = 0;
@@ -1000,7 +1017,5 @@ void nuwan_swiss_clear(NuwanSwissMap* m) {
 }
 
 void nuwan_swiss_free(NuwanSwissMap* m) {
-    if (!m) return;
-    swiss_free_arrays(m);
-    free(m);
+    (void)m;
 }

@@ -155,6 +155,8 @@ if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_vm_jit.c")
         # CVM interpreter + JIT bridge
         ${CMAKE_SOURCE_DIR}/runtime/vm/cvm_engine.c
         ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
         # MIR subsystem (builder, printer, optimizer, borrow checker)
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c

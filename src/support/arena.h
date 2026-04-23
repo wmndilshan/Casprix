@@ -22,7 +22,7 @@ typedef struct ArenaBlock {
 } ArenaBlock;
 
 // Arena allocator
-typedef struct {
+typedef struct Arena {
     ArenaBlock* current_block;
     ArenaBlock* first_block;
     size_t total_allocated;
