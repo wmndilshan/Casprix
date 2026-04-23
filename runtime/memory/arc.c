@@ -14,6 +14,19 @@ static ArcStats g_arc_stats = {0};
 
 // --- Internal helpers ---
 
+#ifndef _WIN32
+extern char __data_start;
+extern char _end;
+#endif
+
+static inline bool is_static_ptr(void* obj) {
+#ifndef _WIN32
+    return (char*)obj >= &__data_start && (char*)obj < &_end;
+#else
+    return false; // Windows implementation would need GetModuleHandle/GetModuleInformation
+#endif
+}
+
 static inline ArcHeader* get_header(void* obj) {
     assert(obj != NULL);
     return ARC_OBJ_TO_HEADER(obj);
@@ -94,7 +107,7 @@ void* arc_alloc_full(size_t size, arc_destructor_fn destructor, arc_scan_fn scan
 }
 
 void* arc_retain(void* obj) {
-    if (!obj) return NULL;
+    if (!obj || is_static_ptr(obj)) return obj;
 
     ArcHeader* header = get_header(obj);
     assert(header->strong_count > 0 && "arc_retain on dead object");
@@ -107,7 +120,7 @@ void* arc_retain(void* obj) {
 }
 
 void arc_release(void* obj) {
-    if (!obj) return;
+    if (!obj || is_static_ptr(obj)) return;
 
     ArcHeader* header = get_header(obj);
     assert(header->strong_count > 0 && "arc_release on dead object");

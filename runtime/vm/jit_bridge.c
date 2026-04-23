@@ -68,34 +68,38 @@
  * Platform-specific executable memory
  * ───────────────────────────────────────────────────────────── */
 
-#if defined(_WIN32) || defined(_WIN64)
-
-void* jit_alloc_exec(size_t size) {
-    return VirtualAlloc(NULL, size,
-                        MEM_COMMIT | MEM_RESERVE,
-                        PAGE_EXECUTE_READWRITE);
-}
-
-void jit_free_exec(void* mem, size_t size) {
-    (void)size;
-    if (mem) VirtualFree(mem, 0, MEM_RELEASE);
-}
-
-#else
+#if !defined(_WIN32) && !defined(_WIN64)
 #  include <sys/mman.h>
 #  include <unistd.h>
+#endif
 
 void* jit_alloc_exec(size_t size) {
-    void* p = mmap(NULL, size,
-                   PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#if defined(_WIN32) || defined(_WIN64)
+    return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+#else
+    void* p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     return (p == MAP_FAILED) ? NULL : p;
+#endif
+}
+
+bool jit_protect_exec(void* mem, size_t size) {
+    if (!mem) return false;
+#if defined(_WIN32) || defined(_WIN64)
+    DWORD old;
+    return VirtualProtect(mem, size, PAGE_EXECUTE_READ, &old);
+#else
+    return mprotect(mem, size, PROT_READ | PROT_EXEC) == 0;
+#endif
 }
 
 void jit_free_exec(void* mem, size_t size) {
+#if defined(_WIN32) || defined(_WIN64)
+    (void)size;
+    if (mem) VirtualFree(mem, 0, MEM_RELEASE);
+#else
     if (mem) munmap(mem, size);
-}
 #endif
+}
 
 /* ─────────────────────────────────────────────────────────────
  * Mini x86-64 code emitter
@@ -105,16 +109,23 @@ typedef struct {
     uint8_t* buf;
     size_t   pos;
     size_t   cap;
+    bool     overflowed;
 } X64Emit;
 
 static void xe_init(X64Emit* e, size_t cap) {
     e->buf = malloc(cap);
     e->pos = 0;
     e->cap = cap;
+    e->overflowed = (e->buf == NULL);
 }
 static void xe_free(X64Emit* e) { free(e->buf); }
 static void xe_byte(X64Emit* e, uint8_t b) {
-    if (e->pos < e->cap) e->buf[e->pos++] = b;
+    if (e->overflowed || !e->buf) return;
+    if (e->pos < e->cap) {
+        e->buf[e->pos++] = b;
+    } else {
+        e->overflowed = true;
+    }
 }
 static void xe_u32(X64Emit* e, uint32_t v) {
     xe_byte(e, (uint8_t)(v));
@@ -123,7 +134,8 @@ static void xe_u32(X64Emit* e, uint32_t v) {
     xe_byte(e, (uint8_t)(v >> 24));
 }
 static void xe_i64(X64Emit* e, int64_t v) {
-    for (int i = 0; i < 8; i++) xe_byte(e, (uint8_t)(v >> (i*8)));
+    uint64_t u = (uint64_t)v;
+    for (int i = 0; i < 8; i++) xe_byte(e, (uint8_t)(u >> (i * 8)));
 }
 
 /* Registers: rax=0, rcx=1, rdx=2, rbx=3, rsp=4, rbp=5, rsi=6, rdi=7,
@@ -149,7 +161,10 @@ static void xe_mov_r_imm64(X64Emit* e, int reg, int64_t imm) {
 
 /* MOV rDEST, rSRC (64-bit) */
 static void xe_mov_r_r(X64Emit* e, int dst, int src) {
-    uint8_t rex = 0x48 | (dst >= 8 ? 0x04 : 0) | (src >= 8 ? 0x01 : 0);
+    /* 0x89: MOV r/m64, r64. reg=src, r/m=dst. 
+     * REX.R = bit 2 of REX (0x04) -> extends reg (src)
+     * REX.B = bit 0 of REX (0x01) -> extends r/m (dst) */
+    uint8_t rex = 0x48 | (src >= 8 ? 0x04 : 0) | (dst >= 8 ? 0x01 : 0);
     xe_byte(e, rex);
     xe_byte(e, 0x89);
     xe_byte(e, 0xC0 | ((src & 7) << 3) | (dst & 7));
@@ -157,6 +172,7 @@ static void xe_mov_r_r(X64Emit* e, int dst, int src) {
 
 /* ADD rDST, rSRC */
 static void xe_add_r_r(X64Emit* e, int dst, int src) {
+    /* 0x03: ADD r64, r/m64. reg=dst, r/m=src. */
     uint8_t rex = 0x48 | (dst >= 8 ? 0x04 : 0) | (src >= 8 ? 0x01 : 0);
     xe_byte(e, rex); xe_byte(e, 0x03);
     xe_byte(e, 0xC0 | ((dst & 7) << 3) | (src & 7));
@@ -164,6 +180,7 @@ static void xe_add_r_r(X64Emit* e, int dst, int src) {
 
 /* SUB rDST, rSRC */
 static void xe_sub_r_r(X64Emit* e, int dst, int src) {
+    /* 0x2B: SUB r64, r/m64. reg=dst, r/m=src. */
     uint8_t rex = 0x48 | (dst >= 8 ? 0x04 : 0) | (src >= 8 ? 0x01 : 0);
     xe_byte(e, rex); xe_byte(e, 0x2B);
     xe_byte(e, 0xC0 | ((dst & 7) << 3) | (src & 7));
@@ -171,6 +188,7 @@ static void xe_sub_r_r(X64Emit* e, int dst, int src) {
 
 /* IMUL rDST, rSRC */
 static void xe_imul_r_r(X64Emit* e, int dst, int src) {
+    /* 0x0F 0xAF: IMUL r64, r/m64. reg=dst, r/m=src. */
     uint8_t rex = 0x48 | (dst >= 8 ? 0x04 : 0) | (src >= 8 ? 0x01 : 0);
     xe_byte(e, rex); xe_byte(e, 0x0F); xe_byte(e, 0xAF);
     xe_byte(e, 0xC0 | ((dst & 7) << 3) | (src & 7));
@@ -301,6 +319,8 @@ static bool jit_function_is_supported(MirFunction* func) {
                 case MIR_STRUCT_INIT:
                 case MIR_EXTRACT:
                 case MIR_INSERT:
+                case MIR_CALL:
+                case MIR_CALL_INDIRECT:
                 case MIR_CALL_VIRTUAL:
                 case MIR_ARC_RETAIN:
                 case MIR_ARC_RELEASE:
@@ -316,11 +336,12 @@ static bool jit_function_is_supported(MirFunction* func) {
             }
         }
     }
+
     return true;
 }
 
 static uint8_t* jit_compile_function(MirFunction* func, size_t* out_size) {
-    if (!func || !func->entry_block) return NULL;
+    if (!func || !func->entry_block || !out_size) return NULL;
     if (!jit_function_is_supported(func)) return NULL;
 
     X64Emit e;
@@ -508,6 +529,8 @@ static uint8_t* jit_compile_function(MirFunction* func, size_t* out_size) {
                         patches[n_patches].block_id = inst->as.condbr.true_bb ? inst->as.condbr.true_bb->id : 0;
                         n_patches++;
                         xe_u32(&e, 0); /* placeholder */
+                    } else {
+                        e.overflowed = true;
                     }
                     /* JMP rel32 (to false_bb) */
                     if (n_patches < MAX_PATCHES) {
@@ -516,6 +539,8 @@ static uint8_t* jit_compile_function(MirFunction* func, size_t* out_size) {
                         patches[n_patches].block_id = inst->as.condbr.false_bb ? inst->as.condbr.false_bb->id : 0;
                         n_patches++;
                         xe_u32(&e, 0);
+                    } else {
+                        e.overflowed = true;
                     }
                     break;
                 }
@@ -527,6 +552,8 @@ static uint8_t* jit_compile_function(MirFunction* func, size_t* out_size) {
                         patches[n_patches].block_id = inst->as.br.target ? inst->as.br.target->id : 0;
                         n_patches++;
                         xe_u32(&e, 0);
+                    } else {
+                        e.overflowed = true;
                     }
                     break;
 
@@ -566,6 +593,28 @@ static uint8_t* jit_compile_function(MirFunction* func, size_t* out_size) {
                     xe_byte(&e, 0x90);
                     break;
             }
+        }
+    }
+
+    if (e.overflowed) {
+        xe_free(&e);
+        return NULL;
+    }
+
+    /* Ensure generated code always returns even for malformed MIR. */
+    if (e.pos == 0 || e.buf[e.pos - 1] != 0xC3) {
+        xe_mov_r_imm64(&e, RAX, 0);
+        xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xC4); xe_byte(&e, 0x08);
+        xe_byte(&e, 0x41); xe_byte(&e, 0x5F);
+        xe_byte(&e, 0x41); xe_byte(&e, 0x5E);
+        xe_byte(&e, 0x41); xe_byte(&e, 0x5D);
+        xe_byte(&e, 0x41); xe_byte(&e, 0x5C);
+        xe_pop(&e, RBP);
+        xe_pop(&e, RBX);
+        xe_ret(&e);
+        if (e.overflowed) {
+            xe_free(&e);
+            return NULL;
         }
     }
 
@@ -660,74 +709,83 @@ static int64_t cjb_dispatcher(void* code,
  *
  * cjb_dispatcher signature: int64_t f(void* code, CvmReg* regs, int n_args)
  */
+/*
+ * Generate a trampoline stub.
+ *
+ * Entry:  rdi/rcx = CvmReg* regs,  rsi/rdx = int n_args
+ * Action: Marshal args 1-6 into ABI registers; call target; 
+ *         write rax back to regs[0]; restore stack; ret.
+ */
 static void* jit_gen_trampoline(void* code_ptr, size_t* out_size) {
     X64Emit e;
-    xe_init(&e, 192);
+    xe_init(&e, 256);
 
-    /* PUSH rbx (callee-saved; we use it to hold regs ptr) */
+    /* Prologue: push rbx, rbp, r12 (callee-saved) */
     xe_push(&e, RBX);
-
-    /* MOV r10, code_ptr */
-    xe_byte(&e, 0x49); xe_byte(&e, 0xBA);
-    xe_i64(&e, (int64_t)(uintptr_t)code_ptr);
-
-    /* MOV r11, cjb_dispatcher */
-    xe_byte(&e, 0x49); xe_byte(&e, 0xBB);
-    xe_i64(&e, (int64_t)(uintptr_t)&cjb_dispatcher);
+    xe_push(&e, RBP);
+    xe_byte(&e, 0x41); xe_byte(&e, 0x54); /* push r12 */
 
 #if defined(_WIN32) || defined(_WIN64)
-    /* Win64 ABI: on entry rcx=regs, rdx=n_args
-     * We need: rcx=code, rdx=regs, r8=n_args  for cjb_dispatcher */
-    /* MOV rbx, rcx  — save regs ptr (RBX is callee-saved)
-     * REX.W=48, MOV r/m64 r64=89, mod=11 reg=rcx=1 r/m=rbx=3: C0|1<<3|3=0xCB */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x89); xe_byte(&e, 0xCB);
-    /* MOV r8, rdx   — n_args → R8
-     * REX.W|REX.B=0x49, MOV r/m64 r64=89, mod=11 reg=rdx=2 r/m=r8&7=0: C0|2<<3|0=0xD0 */
-    xe_byte(&e, 0x49); xe_byte(&e, 0x89); xe_byte(&e, 0xD0);
-    /* MOV rdx, rcx  — regs → rdx
-     * REX.W=48, 89, mod=11 reg=rcx=1 r/m=rdx=2: C0|1<<3|2=0xCA */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x89); xe_byte(&e, 0xCA);
-    /* MOV rcx, r10  — code → rcx
-     * REX.W|REX.R=4C, 89, mod=11 reg=r10&7=2(+REX.R) r/m=rcx=1: C0|2<<3|1=0xD1 */
-    xe_byte(&e, 0x4C); xe_byte(&e, 0x89); xe_byte(&e, 0xD1);
-    /* SUB rsp, 40   (shadow space 32 + 8 to align stack after push rbx) */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xEC); xe_byte(&e, 0x28);
-    /* CALL r11 */
-    xe_byte(&e, 0x41); xe_byte(&e, 0xFF); xe_byte(&e, 0xD3);
-    /* ADD rsp, 40 */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xC4); xe_byte(&e, 0x28);
-    /* MOV [rbx], rax  — write retval back to regs[0] */
-    /* MOV qword ptr [rbx+0], rax: REX.W 89 /r: 48 89 03 */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x89); xe_byte(&e, 0x03);
+    /* Win64 ABI: rcx=regs, rdx=n_args */
+    xe_mov_r_r(&e, RBX, RCX); /* save regs ptr */
+    xe_mov_r_r(&e, R12, RDX); /* save n_args */
+    
+    /* Marshal args: regs[0..3] -> rcx, rdx, r8, r9 */
+    /* Check n_args >= 1 */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xFC); xe_byte(&e, 0x01); /* cmp r12, 1 */
+    /* jb + ... (skip) */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x8B); xe_byte(&e, 0x0B); /* mov rcx, [rbx] */
+    /* Repeat for rdx, r8, r9 with offsets 8, 16, 24 if n_args >= 2, 3, 4 */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x8B); xe_byte(&e, 0x53); xe_byte(&e, 0x08); /* mov rdx, [rbx+8] */
+    xe_byte(&e, 0x4C); xe_byte(&e, 0x8B); xe_byte(&e, 0x43); xe_byte(&e, 0x10); /* mov r8,  [rbx+16] */
+    xe_byte(&e, 0x4C); xe_byte(&e, 0x8B); xe_byte(&e, 0x4B); xe_byte(&e, 0x18); /* mov r9,  [rbx+24] */
+
+    /* Align stack for call (3 pushes = 24 bytes + return address = 32. 
+     * Needs 32 bytes shadow space on Win64. Total 64. Already aligned to 16.) */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xEC); xe_byte(&e, 0x20); /* sub rsp, 32 */
 #else
-    /* SysV AMD64: on entry rdi=regs, rsi=n_args
-     * We need: rdi=code, rsi=regs, rdx=n_args  for cjb_dispatcher */
-    /* MOV rbx, rdi  (save regs ptr) */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x89); xe_byte(&e, 0xFB);
-    /* MOV rdx, rsi  (n_args → rdx) */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x89); xe_byte(&e, 0xF2);
-    /* MOV rsi, rdi  (regs → rsi) */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x89); xe_byte(&e, 0xFE);
-    /* MOV rdi, r10  (code → rdi) */
-    xe_byte(&e, 0x4C); xe_byte(&e, 0x89); xe_byte(&e, 0xD7);
-    /* SUB rsp, 8   (align stack to 16 after push rbx) */
+    /* SysV ABI: rdi=regs, rsi=n_args */
+    xe_mov_r_r(&e, RBX, RDI); /* save regs ptr */
+    xe_mov_r_r(&e, R12, RSI); /* save n_args */
+
+    /* Marshal args: regs[0..5] -> rdi, rsi, rdx, rcx, r8, r9 */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x8B); xe_byte(&e, 0x3B); /* mov rdi, [rbx] */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x8B); xe_byte(&e, 0x73); xe_byte(&e, 0x08); /* mov rsi, [rbx+8] */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x8B); xe_byte(&e, 0x53); xe_byte(&e, 0x10); /* mov rdx, [rbx+16] */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x8B); xe_byte(&e, 0x4B); xe_byte(&e, 0x18); /* mov rcx, [rbx+24] */
+    xe_byte(&e, 0x4C); xe_byte(&e, 0x8B); xe_byte(&e, 0x43); xe_byte(&e, 0x20); /* mov r8,  [rbx+32] */
+    xe_byte(&e, 0x4C); xe_byte(&e, 0x8B); xe_byte(&e, 0x4B); xe_byte(&e, 0x28); /* mov r9,  [rbx+40] */
+
+    /* Align stack: 3 pushes = 24 bytes. Need sub rsp, 8 to align to 16. */
     xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xEC); xe_byte(&e, 0x08);
-    /* CALL r11 */
-    xe_byte(&e, 0x41); xe_byte(&e, 0xFF); xe_byte(&e, 0xD3);
-    /* ADD rsp, 8 */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xC4); xe_byte(&e, 0x08);
-    /* MOV [rbx], rax  — write retval back to regs[0] */
-    xe_byte(&e, 0x48); xe_byte(&e, 0x89); xe_byte(&e, 0x03);
 #endif
 
-    /* POP rbx */
+    /* Call target */
+    xe_byte(&e, 0x48); xe_byte(&e, 0xB8);
+    xe_i64(&e, (int64_t)(uintptr_t)code_ptr);
+    xe_byte(&e, 0xFF); xe_byte(&e, 0xD0); /* call rax */
+
+#if defined(_WIN32) || defined(_WIN64)
+    xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xC4); xe_byte(&e, 0x20);
+#else
+    xe_byte(&e, 0x48); xe_byte(&e, 0x83); xe_byte(&e, 0xC4); xe_byte(&e, 0x08);
+#endif
+
+    /* Store return value: mov [rbx], rax */
+    xe_byte(&e, 0x48); xe_byte(&e, 0x89); xe_byte(&e, 0x03);
+
+    /* Epilogue */
+    xe_byte(&e, 0x41); xe_byte(&e, 0x5C); /* pop r12 */
+    xe_pop(&e, RBP);
     xe_pop(&e, RBX);
-    /* RET */
     xe_ret(&e);
 
     *out_size = e.pos;
     void* mem = jit_alloc_exec(e.pos);
-    if (mem) memcpy(mem, e.buf, e.pos);
+    if (mem) {
+        memcpy(mem, e.buf, e.pos);
+        jit_protect_exec(mem, e.pos);
+    }
     xe_free(&e);
     return mem;
 }
@@ -753,17 +811,30 @@ void cjb_destroy(CvmJitBridge* bridge) {
 }
 
 /* Register an exec block with the bridge for lifecycle tracking */
-static void cjb_track(CvmJitBridge* bridge, void* mem, size_t size) {
+static bool cjb_track(CvmJitBridge* bridge, void* mem, size_t size) {
     if (bridge->block_count >= bridge->block_cap) {
-        bridge->block_cap = bridge->block_cap ? bridge->block_cap * 2 : 16;
-        bridge->exec_blocks = realloc(bridge->exec_blocks,
-                                       (size_t)bridge->block_cap * sizeof(void*));
-        bridge->exec_sizes  = realloc(bridge->exec_sizes,
-                                       (size_t)bridge->block_cap * sizeof(size_t));
+        int new_cap = bridge->block_cap ? bridge->block_cap * 2 : 16;
+        void** new_blocks = (void**)malloc((size_t)new_cap * sizeof(void*));
+        size_t* new_sizes = (size_t*)malloc((size_t)new_cap * sizeof(size_t));
+        if (!new_blocks || !new_sizes) {
+            free(new_blocks);
+            free(new_sizes);
+            return false;
+        }
+        if (bridge->block_count > 0) {
+            memcpy(new_blocks, bridge->exec_blocks, (size_t)bridge->block_count * sizeof(void*));
+            memcpy(new_sizes, bridge->exec_sizes, (size_t)bridge->block_count * sizeof(size_t));
+        }
+        free(bridge->exec_blocks);
+        free(bridge->exec_sizes);
+        bridge->exec_blocks = new_blocks;
+        bridge->exec_sizes = new_sizes;
+        bridge->block_cap = new_cap;
     }
     bridge->exec_blocks[bridge->block_count] = mem;
     bridge->exec_sizes [bridge->block_count] = size;
     bridge->block_count++;
+    return true;
 }
 
 JitResult cjb_compile_function(CvmJitBridge* bridge,
@@ -771,6 +842,8 @@ JitResult cjb_compile_function(CvmJitBridge* bridge,
                                 MirFunction* func,
                                 CvmProfile*  profile) {
     (void)module;
+    if (!bridge || !func || !profile) return JIT_ERR_COMPILE_FAILED;
+    if (profile->tier == CVM_TIER_NATIVE && profile->native_fn) return JIT_ERR_ALREADY_NATIVE;
 
     /* Thread-safety: CAS from PENDING → NATIVE */
     /* (On MSVC we use a simple assignment; the test is single-threaded.) */
@@ -790,9 +863,13 @@ JitResult cjb_compile_function(CvmJitBridge* bridge,
     }
     memcpy(exec_page, code_bytes, code_size);
     free(code_bytes);
+    jit_protect_exec(exec_page, code_size);
 
     /* Track for cleanup */
-    cjb_track(bridge, exec_page, code_size);
+    if (!cjb_track(bridge, exec_page, code_size)) {
+        jit_free_exec(exec_page, code_size);
+        return JIT_ERR_ALLOC_FAILED;
+    }
     bridge->total_native_bytes += code_size;
     bridge->functions_compiled++;
 
@@ -803,7 +880,10 @@ JitResult cjb_compile_function(CvmJitBridge* bridge,
         /* No trampoline memory — skip JIT (not fatal) */
         return JIT_ERR_ALLOC_FAILED;
     }
-    cjb_track(bridge, tramp_mem, tramp_size);
+    if (!cjb_track(bridge, tramp_mem, tramp_size)) {
+        jit_free_exec(tramp_mem, tramp_size);
+        return JIT_ERR_ALLOC_FAILED;
+    }
 
     /* 4. Install */
     profile->native_fn   = (CvmNativeFn)tramp_mem;
@@ -817,14 +897,9 @@ JitResult cjb_compile_function(CvmJitBridge* bridge,
 void cjb_call(CvmJitBridge* bridge, CvmProfile* profile,
               CvmReg* regs, int n_args) {
     (void)bridge;
-    if (profile->native_fn) {
+    if (profile && profile->native_fn && regs) {
+        if (n_args < 0) n_args = 0;
         profile->native_fn(regs, n_args);
-        /* The trampoline returns int64_t in rax; our generated stubs
-         * do NOT write back to regs[0] (trampoline is read-only from
-         * the CVM side).  We read the return value differently:
-         * the calling convention places retval in rax which the
-         * C caller sees as the return of the Fn6 call.
-         * cjb_dispatcher returns int64_t → intercepted in cvm_dispatch_call. */
     }
 }
 

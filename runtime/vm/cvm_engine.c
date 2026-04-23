@@ -46,6 +46,15 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <math.h>
+#include <limits.h>
+
+#if defined(__GNUC__) || defined(__clang__)
+#  define CVM_LIKELY(x)   __builtin_expect(!!(x), 1)
+#  define CVM_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#  define CVM_LIKELY(x)   (x)
+#  define CVM_UNLIKELY(x) (x)
+#endif
 
 /* ─────────────────────────────────────────────────────────────
  * Internal helpers
@@ -56,10 +65,28 @@ static void cvm_diag(CvmState* vm, const char* fmt, ...) {
     va_list ap; va_start(ap, fmt); vfprintf(out, fmt, ap); va_end(ap);
 }
 
-/* Resolve a MirValueId to the register slot in the current frame.
- * Returns 0 for MIR_VALUE_NONE. */
-#define REG(id)   ((id) == MIR_VALUE_NONE ? (CvmReg)0 : frame->regs[(id)])
-#define SET(id,v) do { if ((id) != MIR_VALUE_NONE) frame->regs[(id)] = (v); } while(0)
+static inline CvmReg cvm_safe_div_i64(CvmReg lhs_u, CvmReg rhs_u) {
+    int64_t lhs = (int64_t)lhs_u;
+    int64_t rhs = (int64_t)rhs_u;
+    if (rhs == 0) return 0;
+    if (lhs == INT64_MIN && rhs == -1) return (CvmReg)(uint64_t)INT64_MIN;
+    return (CvmReg)(uint64_t)(lhs / rhs);
+}
+
+static inline CvmReg cvm_safe_mod_i64(CvmReg lhs_u, CvmReg rhs_u) {
+    int64_t lhs = (int64_t)lhs_u;
+    int64_t rhs = (int64_t)rhs_u;
+    if (rhs == 0) return 0;
+    if (lhs == INT64_MIN && rhs == -1) return 0;
+    return (CvmReg)(uint64_t)(lhs % rhs);
+}
+
+static inline CvmReg cvm_safe_fptosi(double d) {
+    if (!isfinite(d)) return 0;
+    if (d >= (double)INT64_MAX) return (CvmReg)(uint64_t)INT64_MAX;
+    if (d <= (double)INT64_MIN) return (CvmReg)(uint64_t)INT64_MIN;
+    return (CvmReg)(uint64_t)(int64_t)d;
+}
 
 /* ─────────────────────────────────────────────────────────────
  * Profile management
@@ -68,15 +95,24 @@ static void cvm_diag(CvmState* vm, const char* fmt, ...) {
 CvmProfile* cvm_get_profile(CvmState* vm, MirFunction* func) {
     /* Linear scan — profile count is small (number of functions in module). */
     for (int i = 0; i < vm->profile_count; i++) {
-        if (vm->profiles[i].func_name == func->name ||
-            (func->name && strcmp(vm->profiles[i].func_name, func->name) == 0)) {
+        const char* existing = vm->profiles[i].func_name;
+        if (existing == func->name ||
+            (existing && func->name && strcmp(existing, func->name) == 0)) {
             return &vm->profiles[i];
         }
     }
     /* Grow and insert */
     if (vm->profile_count >= vm->profile_cap) {
-        vm->profile_cap = vm->profile_cap ? vm->profile_cap * 2 : 16;
-        vm->profiles = realloc(vm->profiles, (size_t)vm->profile_cap * sizeof(CvmProfile));
+        int new_cap = vm->profile_cap ? vm->profile_cap * 2 : 16;
+        CvmProfile* new_profiles = (CvmProfile*)realloc(
+            vm->profiles, (size_t)new_cap * sizeof(CvmProfile));
+        if (!new_profiles) {
+            cvm_diag(vm, "[CVM] OOM growing profile table\n");
+            vm->trap_code = 1;
+            return NULL;
+        }
+        vm->profiles = new_profiles;
+        vm->profile_cap = new_cap;
     }
     CvmProfile* p = &vm->profiles[vm->profile_count++];
     memset(p, 0, sizeof(*p));
@@ -140,12 +176,70 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
                                 const char* func_name,
                                 MirValueId* arg_ids, int n_args);
 
-/* ── Computed-goto dispatch table ── */
+static inline CvmReg cvm_reg_get(CvmState* vm, CvmFrame* frame, MirValueId id) {
+    if (id == MIR_VALUE_NONE) return 0;
+    if (CVM_UNLIKELY((int)id >= frame->reg_count)) {
+        vm->trap_code = 5;
+        return 0;
+    }
+    return frame->regs[id];
+}
+
+static inline void cvm_reg_set(CvmState* vm, CvmFrame* frame, MirValueId id, CvmReg value) {
+    if (id == MIR_VALUE_NONE) return;
+    if (CVM_UNLIKELY((int)id >= frame->reg_count)) {
+        vm->trap_code = 5;
+        return;
+    }
+    frame->regs[id] = value;
+}
+
+static bool cvm_frame_track_alloca(CvmFrame* frame, void* mem) {
+    if (!mem) return false;
+    if (frame->alloca_count >= frame->alloca_cap) {
+        int new_cap = frame->alloca_cap ? frame->alloca_cap * 2 : 16;
+        void** new_ptrs = (void**)realloc(frame->allocas, (size_t)new_cap * sizeof(void*));
+        if (!new_ptrs) return false;
+        frame->allocas = new_ptrs;
+        frame->alloca_cap = new_cap;
+    }
+    frame->allocas[frame->alloca_count++] = mem;
+    return true;
+}
+
+static void cvm_frame_free_allocas(CvmFrame* frame) {
+    for (int i = frame->alloca_count - 1; i >= 0; --i) {
+        free(frame->allocas[i]);
+    }
+    free(frame->allocas);
+    frame->allocas = NULL;
+    frame->alloca_count = 0;
+    frame->alloca_cap = 0;
+}
+
 #if defined(__GNUC__) || defined(__clang__)
 #  define CVM_USE_COMPUTED_GOTO 1
 #else
 #  define CVM_USE_COMPUTED_GOTO 0
 #endif
+
+/* ─────────────────────────────────────────────────────────────
+ * Dispatch preparation
+ * ───────────────────────────────────────────────────────────── */
+
+static void cvm_prepare_dispatch(CvmState* vm, MirModule* module, const void** table) {
+    if (!module || !table) return;
+    for (MirFunction* func = module->func_list; func; func = func->next_func) {
+        for (MirBlock* blk = func->entry_block; blk; blk = blk->next_block) {
+            for (MirInst* inst = blk->first; inst; inst = inst->next) {
+                int oc = (int)inst->opcode;
+                if (oc >= 0 && oc < MIR_DEBUGLOC + 1) {
+                    inst->vm_data = (void*)table[oc];
+                }
+            }
+        }
+    }
+}
 
 static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
                                 CvmReg* args, int n_args) {
@@ -153,7 +247,16 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
     int reg_count = func->next_value_id > 0 ? (int)func->next_value_id : 1;
     if (reg_count > CVM_MAX_REGS) reg_count = CVM_MAX_REGS;
 
-    CvmReg* regs = calloc((size_t)reg_count, sizeof(CvmReg));
+    size_t reg_bytes = (size_t)reg_count * sizeof(CvmReg);
+    /* Keep register file cacheline-aligned to reduce split-line slot accesses. */
+    CvmReg* regs = NULL;
+#if defined(_ISOC11_SOURCE)
+    size_t aligned_size = (reg_bytes + 63u) & ~(size_t)63u;
+    regs = (CvmReg*)aligned_alloc(64u, aligned_size);
+    if (regs) memset(regs, 0, aligned_size);
+#else
+    regs = (CvmReg*)calloc((size_t)reg_count, sizeof(CvmReg));
+#endif
     if (!regs) {
         cvm_diag(vm, "[CVM] OOM allocating register file for %s\n", func->name);
         vm->trap_code = 1;
@@ -172,11 +275,17 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
         .func       = func,
         .regs       = regs,
         .reg_count  = reg_count,
+        .allocas    = NULL,
+        .alloca_count = 0,
+        .alloca_cap = 0,
         .prev       = vm->frame_stack,
     };
     CvmFrame* frame = &frame_val;
+#define REG(id)      cvm_reg_get(vm, frame, (id))
+#define SET(id, val) cvm_reg_set(vm, frame, (id), (val))
     vm->frame_stack = frame;
     vm->frame_depth++;
+    if (vm->frame_depth > vm->frame_depth_peak) vm->frame_depth_peak = vm->frame_depth;
     if (vm->frame_depth > CVM_MAX_CALL_DEPTH) {
         cvm_diag(vm, "[CVM] Stack overflow in %s\n", func->name);
         vm->trap_code = 2;
@@ -196,107 +305,111 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
      * values defined in mir.h (MIR_CONST_INT = 0, …).
      * ──────────────────────────────────────────────────── */
     static const void* dispatch_table[] = {
-        /* MIR_CONST_INT      */ &&op_const_int,
-        /* MIR_CONST_FLOAT    */ &&op_const_float,
-        /* MIR_CONST_BOOL     */ &&op_const_bool,
-        /* MIR_CONST_STRING   */ &&op_const_string,
-        /* MIR_CONST_FUNC     */ &&op_nop,
-        /* MIR_CONST_NULL     */ &&op_const_null,
-        /* MIR_GLOBAL_ADDR    */ &&op_nop,
-        /* MIR_ADD            */ &&op_add,
-        /* MIR_SUB            */ &&op_sub,
-        /* MIR_MUL            */ &&op_mul,
-        /* MIR_DIV            */ &&op_div,
-        /* MIR_MOD            */ &&op_mod,
-        /* MIR_NEG            */ &&op_neg,
-        /* MIR_FADD           */ &&op_fadd,
-        /* MIR_FSUB           */ &&op_fsub,
-        /* MIR_FMUL           */ &&op_fmul,
-        /* MIR_FDIV           */ &&op_fdiv,
-        /* MIR_FNEG           */ &&op_fneg,
-        /* MIR_BAND           */ &&op_band,
-        /* MIR_BOR            */ &&op_bor,
-        /* MIR_BXOR           */ &&op_bxor,
-        /* MIR_BNOT           */ &&op_bnot,
-        /* MIR_SHL            */ &&op_shl,
-        /* MIR_SHR            */ &&op_shr,
-        /* MIR_USHR           */ &&op_ushr,
-        /* MIR_CMP_EQ         */ &&op_cmp_eq,
-        /* MIR_CMP_NE         */ &&op_cmp_ne,
-        /* MIR_CMP_LT         */ &&op_cmp_lt,
-        /* MIR_CMP_LE         */ &&op_cmp_le,
-        /* MIR_CMP_GT         */ &&op_cmp_gt,
-        /* MIR_CMP_GE         */ &&op_cmp_ge,
-        /* MIR_LOGIC_AND      */ &&op_logic_and,
-        /* MIR_LOGIC_OR       */ &&op_logic_or,
-        /* MIR_LOGIC_NOT      */ &&op_logic_not,
-        /* MIR_CAST           */ &&op_cast,
-        /* MIR_BITCAST        */ &&op_bitcast,
-        /* MIR_TRUNC          */ &&op_trunc,
-        /* MIR_ZEXT           */ &&op_zext,
-        /* MIR_SEXT           */ &&op_sext,
-        /* MIR_SITOFP         */ &&op_sitofp,
-        /* MIR_FPTOSI         */ &&op_fptosi,
-        /* MIR_ALLOCA         */ &&op_alloca,
-        /* MIR_LOAD           */ &&op_load,
-        /* MIR_STORE          */ &&op_store,
-        /* MIR_GET_FIELD_PTR  */ &&op_get_field_ptr,
-        /* MIR_GET_ELEM_PTR   */ &&op_get_elem_ptr,
-        /* MIR_BR             */ &&op_br,
-        /* MIR_CONDBR         */ &&op_condbr,
-        /* MIR_SWITCH         */ &&op_switch,
-        /* MIR_RET            */ &&op_ret,
-        /* MIR_RET_VOID       */ &&op_ret_void,
-        /* MIR_UNREACHABLE    */ &&op_unreachable,
-        /* MIR_CALL           */ &&op_call,
-        /* MIR_CALL_INDIRECT  */ &&op_call_indirect,
-        /* MIR_CALL_VIRTUAL   */ &&op_call_virtual,
-        /* MIR_PHI            */ &&op_phi,
-        /* MIR_COPY           */ &&op_copy,
-        /* MIR_ARC_RETAIN     */ &&op_arc_retain,
-        /* MIR_ARC_RELEASE    */ &&op_arc_release,
-        /* MIR_OBJ_ALLOC      */ &&op_nop,
-        /* MIR_BORROW         */ &&op_borrow,
-        /* MIR_BORROW_MUT     */ &&op_borrow,
-        /* MIR_MOVE           */ &&op_move,
-        /* MIR_DROP           */ &&op_nop,
-        /* MIR_STRUCT_INIT    */ &&op_nop,
-        /* MIR_EXTRACT        */ &&op_extract,
-        /* MIR_INSERT         */ &&op_nop,
-        /* MIR_VEC_LOAD           */ &&op_nop,
-        /* MIR_VEC_LOAD_UNALIGNED */ &&op_nop,
-        /* MIR_VEC_STORE          */ &&op_nop,
-        /* MIR_VEC_STORE_UNALIGNED*/ &&op_nop,
-        /* MIR_VEC_BROADCAST      */ &&op_nop,
-        /* MIR_VEC_ADD            */ &&op_nop,
-        /* MIR_VEC_SUB            */ &&op_nop,
-        /* MIR_VEC_MUL            */ &&op_nop,
-        /* MIR_VEC_DIV            */ &&op_nop,
-        /* MIR_VEC_MIN            */ &&op_nop,
-        /* MIR_VEC_MAX            */ &&op_nop,
-        /* MIR_VEC_AND            */ &&op_nop,
-        /* MIR_VEC_OR             */ &&op_nop,
-        /* MIR_VEC_XOR            */ &&op_nop,
-        /* MIR_VEC_FMA            */ &&op_nop,
-        /* MIR_VEC_REDUCE_SUM     */ &&op_nop,
-        /* MIR_VEC_DOT            */ &&op_nop,
-        /* MIR_VEC_CMP_EQ         */ &&op_nop,
-        /* MIR_VEC_CMP_LT         */ &&op_nop,
-        /* MIR_VEC_CMP_GT         */ &&op_nop,
-        /* MIR_VEC_SELECT         */ &&op_nop,
-        /* MIR_NOP            */ &&op_nop,
-        /* MIR_SUSPEND        */ &&op_nop,
-        /* MIR_DEBUGLOC       */ &&op_nop,
+        /* [MIR_CONST_INT]    */ &&op_const_int,
+        /* [MIR_CONST_FLOAT]  */ &&op_const_float,
+        /* [MIR_CONST_BOOL]   */ &&op_const_bool,
+        /* [MIR_CONST_STRING] */ &&op_const_string,
+        /* [MIR_CONST_FUNC]   */ &&op_nop,
+        /* [MIR_CONST_NULL]   */ &&op_const_null,
+        /* [MIR_GLOBAL_ADDR]  */ &&op_nop,
+        /* [MIR_ADD]          */ &&op_add,
+        /* [MIR_SUB]          */ &&op_sub,
+        /* [MIR_MUL]          */ &&op_mul,
+        /* [MIR_DIV]          */ &&op_div,
+        /* [MIR_MOD]          */ &&op_mod,
+        /* [MIR_NEG]          */ &&op_neg,
+        /* [MIR_FADD]         */ &&op_fadd,
+        /* [MIR_FSUB]         */ &&op_fsub,
+        /* [MIR_FMUL]         */ &&op_fmul,
+        /* [MIR_FDIV]         */ &&op_fdiv,
+        /* [MIR_FNEG]         */ &&op_fneg,
+        /* [MIR_BAND]         */ &&op_band,
+        /* [MIR_BOR]          */ &&op_bor,
+        /* [MIR_BXOR]         */ &&op_bxor,
+        /* [MIR_BNOT]         */ &&op_bnot,
+        /* [MIR_SHL]          */ &&op_shl,
+        /* [MIR_SHR]          */ &&op_shr,
+        /* [MIR_USHR]         */ &&op_ushr,
+        /* [MIR_CMP_EQ]       */ &&op_cmp_eq,
+        /* [MIR_CMP_NE]       */ &&op_cmp_ne,
+        /* [MIR_CMP_LT]       */ &&op_cmp_lt,
+        /* [MIR_CMP_LE]       */ &&op_cmp_le,
+        /* [MIR_CMP_GT]       */ &&op_cmp_gt,
+        /* [MIR_CMP_GE]       */ &&op_cmp_ge,
+        /* [MIR_LOGIC_AND]    */ &&op_logic_and,
+        /* [MIR_LOGIC_OR]     */ &&op_logic_or,
+        /* [MIR_LOGIC_NOT]    */ &&op_logic_not,
+        /* [MIR_CAST]         */ &&op_cast,
+        /* [MIR_BITCAST]      */ &&op_bitcast,
+        /* [MIR_TRUNC]        */ &&op_trunc,
+        /* [MIR_ZEXT]         */ &&op_zext,
+        /* [MIR_SEXT]         */ &&op_sext,
+        /* [MIR_SITOFP]       */ &&op_sitofp,
+        /* [MIR_FPTOSI]       */ &&op_fptosi,
+        /* [MIR_ALLOCA]       */ &&op_alloca,
+        /* [MIR_LOAD]         */ &&op_load,
+        /* [MIR_STORE]        */ &&op_store,
+        /* [MIR_GET_FIELD_PTR]*/ &&op_get_field_ptr,
+        /* [MIR_GET_ELEM_PTR] */ &&op_get_elem_ptr,
+        /* [MIR_BR]           */ &&op_br,
+        /* [MIR_CONDBR]       */ &&op_condbr,
+        /* [MIR_SWITCH]       */ &&op_switch,
+        /* [MIR_RET]          */ &&op_ret,
+        /* [MIR_RET_VOID]     */ &&op_ret_void,
+        /* [MIR_UNREACHABLE]  */ &&op_unreachable,
+        /* [MIR_CALL]         */ &&op_call,
+        /* [MIR_CALL_INDIRECT]*/ &&op_call_indirect,
+        /* [MIR_CALL_VIRTUAL] */ &&op_call_virtual,
+        /* [MIR_PHI]          */ &&op_phi,
+        /* [MIR_COPY]         */ &&op_copy,
+        /* [MIR_ARC_RETAIN]   */ &&op_arc_retain,
+        /* [MIR_ARC_RELEASE]  */ &&op_arc_release,
+        /* [MIR_OBJ_ALLOC]    */ &&op_nop,
+        /* [MIR_BORROW]       */ &&op_borrow,
+        /* [MIR_BORROW_MUT]   */ &&op_borrow,
+        /* [MIR_MOVE]         */ &&op_move,
+        /* [MIR_DROP]         */ &&op_nop,
+        /* [MIR_STRUCT_INIT]  */ &&op_nop,
+        /* [MIR_EXTRACT]      */ &&op_extract,
+        /* [MIR_INSERT]       */ &&op_nop,
+        /* [MIR_VEC_LOAD]     */ &&op_nop,
+        /* [MIR_VEC_LOAD_UNALIGNED]  */ &&op_nop,
+        /* [MIR_VEC_STORE]           */ &&op_nop,
+        /* [MIR_VEC_STORE_UNALIGNED] */ &&op_nop,
+        /* [MIR_VEC_BROADCAST]       */ &&op_nop,
+        /* [MIR_VEC_ADD]             */ &&op_nop,
+        /* [MIR_VEC_SUB]             */ &&op_nop,
+        /* [MIR_VEC_MUL]             */ &&op_nop,
+        /* [MIR_VEC_DIV]             */ &&op_nop,
+        /* [MIR_VEC_MIN]             */ &&op_nop,
+        /* [MIR_VEC_MAX]             */ &&op_nop,
+        /* [MIR_VEC_AND]             */ &&op_nop,
+        /* [MIR_VEC_OR]              */ &&op_nop,
+        /* [MIR_VEC_XOR]             */ &&op_nop,
+        /* [MIR_VEC_FMA]             */ &&op_nop,
+        /* [MIR_VEC_REDUCE_SUM]      */ &&op_nop,
+        /* [MIR_VEC_DOT]             */ &&op_nop,
+        /* [MIR_VEC_CMP_EQ]          */ &&op_nop,
+        /* [MIR_VEC_CMP_LT]          */ &&op_nop,
+        /* [MIR_VEC_CMP_GT]          */ &&op_nop,
+        /* [MIR_VEC_SELECT]          */ &&op_nop,
+        /* [MIR_NOP]                 */ &&op_nop,
+        /* [MIR_UNDEF]               */ &&op_nop,
+        /* [MIR_SUSPEND]             */ &&op_nop,
+        /* [MIR_DEBUGLOC]            */ &&op_nop,
     };
 
+    /* One-time initialization of the module for direct threading. */
+    if (CVM_UNLIKELY(!func->entry_block->first->vm_data)) {
+        cvm_prepare_dispatch(vm, vm->module, dispatch_table);
+    }
+
 #  define NEXT_INST()  do { \
+        if (CVM_UNLIKELY(vm->trap_code)) goto done; \
         inst = inst->next; \
         if (!inst) goto block_end; \
         vm->inst_executed++; \
-        int _oc = (int)inst->opcode; \
-        if (_oc < 0 || _oc >= (int)(sizeof(dispatch_table)/sizeof(dispatch_table[0]))) \
-            goto op_nop; \
-        goto *dispatch_table[_oc]; \
+        goto *inst->vm_data; \
     } while(0)
 
     MirInst* inst = NULL;
@@ -307,12 +420,7 @@ block_start:
     inst = cur_block->first;
     if (!inst) goto block_end;
     vm->inst_executed++;
-    {
-        int _oc = (int)inst->opcode;
-        if (_oc >= 0 && _oc < (int)(sizeof(dispatch_table)/sizeof(dispatch_table[0])))
-            goto *dispatch_table[_oc];
-    }
-    goto op_nop;
+    goto *inst->vm_data;
 
     /* ── Instruction handlers ── */
 
@@ -345,12 +453,12 @@ op_sub:  SET(inst->result, REG(inst->as.binary.lhs) - REG(inst->as.binary.rhs));
 op_mul:  SET(inst->result, REG(inst->as.binary.lhs) * REG(inst->as.binary.rhs)); NEXT_INST();
 op_div: {
     CvmReg d = REG(inst->as.binary.rhs);
-    SET(inst->result, d ? (int64_t)REG(inst->as.binary.lhs) / (int64_t)d : 0);
+    SET(inst->result, cvm_safe_div_i64(REG(inst->as.binary.lhs), d));
     NEXT_INST();
 }
 op_mod: {
     CvmReg d = REG(inst->as.binary.rhs);
-    SET(inst->result, d ? (int64_t)REG(inst->as.binary.lhs) % (int64_t)d : 0);
+    SET(inst->result, cvm_safe_mod_i64(REG(inst->as.binary.lhs), d));
     NEXT_INST();
 }
 op_neg:
@@ -418,13 +526,18 @@ op_sitofp:
     NEXT_INST();
 
 op_fptosi:
-    SET(inst->result, (CvmReg)(int64_t)cvm_bits_to_f64(REG(inst->as.unary.operand)));
+    SET(inst->result, cvm_safe_fptosi(cvm_bits_to_f64(REG(inst->as.unary.operand))));
     NEXT_INST();
 
 op_alloca: {
     /* Heap-allocate a slot (in a real VM this would use a bump allocator) */
     int sz = inst->as.alloca.count > 0 ? inst->as.alloca.count : 1;
     void* mem = calloc((size_t)sz, 8);
+    if (CVM_UNLIKELY(!mem || !cvm_frame_track_alloca(frame, mem))) {
+        free(mem);
+        vm->trap_code = 1;
+        goto done;
+    }
     SET(inst->result, (CvmReg)(uintptr_t)mem);
     NEXT_INST();
 }
@@ -452,16 +565,20 @@ op_store: {
 }
 
 op_get_field_ptr: {
-    uint8_t* base = (uint8_t*)(uintptr_t)REG(inst->as.gep.base);
-    int idx = inst->as.gep.field_index;
-    SET(inst->result, (CvmReg)(uintptr_t)(base + (ptrdiff_t)idx * 8));
+    uintptr_t base = (uintptr_t)REG(inst->as.gep.base);
+    if (CVM_UNLIKELY(inst->as.gep.field_index < 0)) {
+        vm->trap_code = 6;
+        goto done;
+    }
+    uint64_t off = (uint64_t)(uint32_t)inst->as.gep.field_index * 8u;
+    SET(inst->result, (CvmReg)(base + (uintptr_t)off));
     NEXT_INST();
 }
 
 op_get_elem_ptr: {
-    uint8_t* base = (uint8_t*)(uintptr_t)REG(inst->as.gep.base);
-    int64_t idx = (int64_t)REG(inst->as.gep.index);
-    SET(inst->result, (CvmReg)(uintptr_t)(base + idx * 8));
+    uintptr_t base = (uintptr_t)REG(inst->as.gep.base);
+    uint64_t idx = (uint64_t)REG(inst->as.gep.index);
+    SET(inst->result, (CvmReg)(base + (uintptr_t)(idx * 8u)));
     NEXT_INST();
 }
 
@@ -553,7 +670,8 @@ op_borrow:
 op_move:
     SET(inst->result, REG(inst->as.transfer.source));
     /* The source is "moved" — in the VM we zero it to detect use-after-move. */
-    if (inst->as.transfer.source != MIR_VALUE_NONE)
+    if (inst->as.transfer.source != MIR_VALUE_NONE &&
+        (int)inst->as.transfer.source < frame->reg_count)
         frame->regs[inst->as.transfer.source] = 0;
     NEXT_INST();
 
@@ -588,6 +706,7 @@ done:
     /* Pop frame */
     vm->frame_stack = frame->prev;
     vm->frame_depth--;
+    cvm_frame_free_allocas(frame);
     free(regs);
     return retval;
 
@@ -608,8 +727,8 @@ done:
                 case MIR_ADD: SET(inst->result, REG(inst->as.binary.lhs) + REG(inst->as.binary.rhs)); break;
                 case MIR_SUB: SET(inst->result, REG(inst->as.binary.lhs) - REG(inst->as.binary.rhs)); break;
                 case MIR_MUL: SET(inst->result, REG(inst->as.binary.lhs) * REG(inst->as.binary.rhs)); break;
-                case MIR_DIV: { CvmReg d = REG(inst->as.binary.rhs); SET(inst->result, d ? (int64_t)REG(inst->as.binary.lhs) / (int64_t)d : 0); break; }
-                case MIR_MOD: { CvmReg d = REG(inst->as.binary.rhs); SET(inst->result, d ? (int64_t)REG(inst->as.binary.lhs) % (int64_t)d : 0); break; }
+                case MIR_DIV: { CvmReg d = REG(inst->as.binary.rhs); SET(inst->result, cvm_safe_div_i64(REG(inst->as.binary.lhs), d)); break; }
+                case MIR_MOD: { CvmReg d = REG(inst->as.binary.rhs); SET(inst->result, cvm_safe_mod_i64(REG(inst->as.binary.lhs), d)); break; }
                 case MIR_NEG: SET(inst->result, (CvmReg)(-(int64_t)REG(inst->as.unary.operand))); break;
                 case MIR_FADD: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) + cvm_bits_to_f64(REG(inst->as.binary.rhs)))); break;
                 case MIR_FSUB: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) - cvm_bits_to_f64(REG(inst->as.binary.rhs)))); break;
@@ -642,10 +761,16 @@ done:
                 case MIR_SITOFP:
                     SET(inst->result, cvm_f64_to_bits((double)(int64_t)REG(inst->as.unary.operand))); break;
                 case MIR_FPTOSI:
-                    SET(inst->result, (CvmReg)(int64_t)cvm_bits_to_f64(REG(inst->as.unary.operand))); break;
+                    SET(inst->result, cvm_safe_fptosi(cvm_bits_to_f64(REG(inst->as.unary.operand)))); break;
                 case MIR_ALLOCA: {
                     int sz = inst->as.alloca.count > 0 ? inst->as.alloca.count : 1;
-                    SET(inst->result, (CvmReg)(uintptr_t)calloc((size_t)sz, 8));
+                    void* mem = calloc((size_t)sz, 8);
+                    if (!mem || !cvm_frame_track_alloca(frame, mem)) {
+                        free(mem);
+                        vm->trap_code = 1;
+                        goto done_sw;
+                    }
+                    SET(inst->result, (CvmReg)(uintptr_t)mem);
                     break;
                 }
                 case MIR_LOAD: {
@@ -672,7 +797,8 @@ done:
                 case MIR_MOVE:
                     SET(inst->result, REG(inst->as.transfer.source));
                     if (inst->as.transfer.source != MIR_VALUE_NONE)
-                        frame->regs[inst->as.transfer.source] = 0;
+                        if ((int)inst->as.transfer.source < frame->reg_count)
+                            frame->regs[inst->as.transfer.source] = 0;
                     break;
                 case MIR_EXTRACT: {
                     uint8_t* b = (uint8_t*)(uintptr_t)REG(inst->as.field_op.aggregate);
@@ -719,6 +845,7 @@ done:
                 default:
                     break;  /* skip unknown / vec / nop */
             }
+            if (CVM_UNLIKELY(vm->trap_code)) goto done_sw;
         }
         /* fall-through to next block */
         cur_block = cur_block ? cur_block->next_block : NULL;
@@ -729,9 +856,12 @@ next_block_sw:
 done_sw:
     vm->frame_stack = frame->prev;
     vm->frame_depth--;
+    cvm_frame_free_allocas(frame);
     free(regs);
     return retval;
 #endif  /* CVM_USE_COMPUTED_GOTO */
+#undef REG
+#undef SET
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -754,13 +884,21 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
     CvmReg args[64];
     int actual = n_args < 64 ? n_args : 64;
     for (int i = 0; i < actual; i++) {
-        args[i] = (arg_ids && arg_ids[i] != MIR_VALUE_NONE)
-                ? caller_frame->regs[arg_ids[i]]
-                : 0;
+        if (!arg_ids || arg_ids[i] == MIR_VALUE_NONE) {
+            args[i] = 0;
+            continue;
+        }
+        MirValueId aid = arg_ids[i];
+        if (CVM_UNLIKELY((int)aid >= caller_frame->reg_count)) {
+            vm->trap_code = 5;
+            return 0;
+        }
+        args[i] = caller_frame->regs[aid];
     }
 
     /* Tiering check */
     CvmProfile* prof = cvm_get_profile(vm, callee);
+    if (!prof) return 0;
     prof->call_count++;
 
     if (prof->tier == CVM_TIER_NATIVE && prof->native_fn) {
@@ -768,13 +906,15 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
         /* Delegate to JIT bridge */
         CvmReg jit_regs[64];
         memcpy(jit_regs, args, (size_t)actual * sizeof(CvmReg));
-        prof->native_fn(jit_regs, actual);
+        if (vm->jit) cjb_call(vm->jit, prof, jit_regs, actual);
+        else prof->native_fn(jit_regs, actual);
         return jit_regs[0];
     }
 
-    if (prof->tier == CVM_TIER_INTERPRET &&
-        prof->call_count >= CVM_JIT_THRESHOLD &&
-        vm->jit) {
+    /* Lightweight profiling: compile at threshold, then sample every 64 calls. */
+    if (prof->tier == CVM_TIER_INTERPRET && vm->jit &&
+        (prof->call_count == CVM_JIT_THRESHOLD ||
+         (prof->call_count > CVM_JIT_THRESHOLD && (prof->call_count & 63) == 0))) {
         /* Trigger compilation */
         prof->tier = CVM_TIER_JIT_PENDING;
         JitResult jr = cjb_compile_function(vm->jit, vm->module, callee, prof);
@@ -794,6 +934,7 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
 
 CvmState* cvm_state_create(MirModule* module, CvmJitBridge* jit) {
     CvmState* vm = calloc(1, sizeof(CvmState));
+    if (!vm) return NULL;
     vm->module = module;
     vm->jit    = jit;
     vm->diag   = stderr;
@@ -817,6 +958,7 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
     for (int i = 0; i < cnt; i++) reg_args[i] = (CvmReg)args[i];
 
     CvmProfile* prof = cvm_get_profile(vm, func);
+    if (!prof) return 0;
     prof->call_count++;
 
     /* Tiering check — same logic as cvm_dispatch_call */
@@ -824,12 +966,13 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
         vm->jit_calls++;
         CvmReg jit_regs[64];
         memcpy(jit_regs, reg_args, (size_t)cnt * sizeof(CvmReg));
-        prof->native_fn(jit_regs, cnt);
+        if (vm->jit) cjb_call(vm->jit, prof, jit_regs, cnt);
+        else prof->native_fn(jit_regs, cnt);
         return (int64_t)jit_regs[0];
     }
-    if (prof->tier == CVM_TIER_INTERPRET &&
-        prof->call_count >= CVM_JIT_THRESHOLD &&
-        vm->jit) {
+    if (prof->tier == CVM_TIER_INTERPRET && vm->jit &&
+        (prof->call_count == CVM_JIT_THRESHOLD ||
+         (prof->call_count > CVM_JIT_THRESHOLD && (prof->call_count & 63) == 0))) {
         prof->tier = CVM_TIER_JIT_PENDING;
         JitResult jr = cjb_compile_function(vm->jit, vm->module, func, prof);
         if (jr != JIT_OK) {
@@ -844,6 +987,7 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
 CvmReg cvm_call_function(CvmState* vm, MirFunction* func,
                           CvmReg* args, int n_args) {
     CvmProfile* prof = cvm_get_profile(vm, func);
+    if (!prof) return 0;
     prof->call_count++;
     return cvm_exec_function(vm, func, args, n_args);
 }
@@ -855,13 +999,13 @@ void cvm_print_stats(CvmState* vm, FILE* out) {
             (unsigned long long)vm->inst_executed);
     fprintf(out, "  JIT calls             : %llu\n",
             (unsigned long long)vm->jit_calls);
-    fprintf(out, "  Frame depth peak      : %d\n", vm->frame_depth);
+    fprintf(out, "  Frame depth peak      : %d\n", vm->frame_depth_peak);
     fprintf(out, "  Trap code             : %d\n", vm->trap_code);
     fprintf(out, "  Functions profiled    : %d\n", vm->profile_count);
     for (int i = 0; i < vm->profile_count; i++) {
         CvmProfile* p = &vm->profiles[i];
         fprintf(out, "    [%s] calls=%d tier=%s\n",
-                p->func_name,
+                p->func_name ? p->func_name : "(unnamed)",
                 p->call_count,
                 p->tier == CVM_TIER_NATIVE ? "native"
                 : p->tier == CVM_TIER_JIT_PENDING ? "pending"

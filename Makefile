@@ -219,6 +219,7 @@ RUNTIME_EXT = \
     $(COROUTINE_SRC) \
     $(wildcard $(RUNTIME_DIR)/concurrent/channel.c) \
     $(wildcard $(RUNTIME_DIR)/sync/lockfree_deque.c) \
+    $(wildcard $(RUNTIME_DIR)/sync/atomic.c) \
     $(wildcard $(RUNTIME_DIR)/net/socket.c) \
     $(wildcard $(RUNTIME_DIR)/net/http.c) \
     $(wildcard $(RUNTIME_DIR)/net/http_server.c) \
@@ -228,7 +229,8 @@ RUNTIME_EXT = \
     $(wildcard $(RUNTIME_DIR)/binding/lang_abi.c) \
     $(wildcard $(RUNTIME_DIR)/math/math_lib_runtime.c) \
     $(wildcard $(RUNTIME_DIR)/math/linalg_runtime.c) \
-    $(wildcard $(RUNTIME_DIR)/math/stats_runtime.c)
+    $(wildcard $(RUNTIME_DIR)/math/stats_runtime.c) \
+    $(wildcard $(RUNTIME_DIR)/ai/llm/*.c)
 
 ALL_RUNTIME_SOURCES = $(RUNTIME_CORE) $(RUNTIME_MEMORY) $(RUNTIME_EXT)
 RUNTIME_OBJECTS     = $(patsubst $(RUNTIME_DIR)/%.c,$(OBJ_DIR)/runtime/%.o,$(ALL_RUNTIME_SOURCES))

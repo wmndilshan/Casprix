@@ -11,11 +11,11 @@
 
 // ===== TOKENIZER BINDINGS =====
 
-void* nuwan_tokenizer_create(i32 vocab_size) {
+void* cpx_tokenizer_create(i32 vocab_size) {
     return (void*)tokenizer_create(vocab_size);
 }
 
-void nuwan_tokenizer_train(void* handle, const char* text, i32 min_freq) {
+void cpx_tokenizer_train(void* handle, const char* text, i32 min_freq) {
     // For now, simplified training
     // Full implementation would call tokenizer_train
     Tokenizer* tok = (Tokenizer*)handle;
@@ -23,71 +23,71 @@ void nuwan_tokenizer_train(void* handle, const char* text, i32 min_freq) {
     // Training logic already in tokenizer_train
 }
 
-i32* nuwan_tokenizer_encode(void* handle, const char* text, i32* out_len) {
+i32* cpx_tokenizer_encode(void* handle, const char* text, i32* out_len) {
     Tokenizer* tok = (Tokenizer*)handle;
     return tokenizer_encode(tok, text, out_len);
 }
 
-char* nuwan_tokenizer_decode(void* handle, const i32* tokens, i32 len) {
+char* cpx_tokenizer_decode(void* handle, const i32* tokens, i32 len) {
     Tokenizer* tok = (Tokenizer*)handle;
     return tokenizer_decode(tok, tokens, len);
 }
 
-bool nuwan_tokenizer_save(void* handle, const char* path) {
+bool cpx_tokenizer_save(void* handle, const char* path) {
     Tokenizer* tok = (Tokenizer*)handle;
     return tokenizer_save(tok, path);
 }
 
-void* nuwan_tokenizer_load(const char* path) {
+void* cpx_tokenizer_load(const char* path) {
     return (void*)tokenizer_load(path);
 }
 
-void nuwan_tokenizer_destroy(void* handle) {
+void cpx_tokenizer_destroy(void* handle) {
     Tokenizer* tok = (Tokenizer*)handle;
     tokenizer_destroy(tok);
 }
 
 // ===== DATASET BINDINGS =====
 
-void* nuwan_dataset_create(i32 num_seqs, i32 seq_len, i32 vocab_size) {
+void* cpx_dataset_create(i32 num_seqs, i32 seq_len, i32 vocab_size) {
     return (void*)dataset_create(num_seqs, seq_len, vocab_size);
 }
 
-bool nuwan_dataset_save(void* handle, const char* path) {
+bool cpx_dataset_save(void* handle, const char* path) {
     Dataset* ds = (Dataset*)handle;
     return dataset_save(ds, path);
 }
 
-void* nuwan_dataset_load(const char* path) {
+void* cpx_dataset_load(const char* path) {
     return (void*)dataset_load(path);
 }
 
-void nuwan_dataset_shuffle(void* handle) {
+void cpx_dataset_shuffle(void* handle) {
     Dataset* ds = (Dataset*)handle;
     dataset_shuffle(ds);
 }
 
-const i32* nuwan_dataset_get_sequence(void* handle, i32 index) {
+const i32* cpx_dataset_get_sequence(void* handle, i32 index) {
     Dataset* ds = (Dataset*)handle;
     return dataset_get_sequence(ds, index);
 }
 
-i32 nuwan_dataset_get_num_sequences(void* handle) {
+i32 cpx_dataset_get_num_sequences(void* handle) {
     Dataset* ds = (Dataset*)handle;
     return ds->header.num_sequences;
 }
 
-i32 nuwan_dataset_get_seq_length(void* handle) {
+i32 cpx_dataset_get_seq_length(void* handle) {
     Dataset* ds = (Dataset*)handle;
     return ds->header.seq_length;
 }
 
-void nuwan_dataset_destroy(void* handle) {
+void cpx_dataset_destroy(void* handle) {
     Dataset* ds = (Dataset*)handle;
     dataset_destroy(ds);
 }
 
-void** nuwan_dataset_split(void* handle, f32 train_r, f32 val_r, f32 test_r) {
+void** cpx_dataset_split(void* handle, f32 train_r, f32 val_r, f32 test_r) {
     Dataset* ds = (Dataset*)handle;
     Dataset** splits = dataset_split(ds, train_r, val_r, test_r);
     return (void**)splits;
@@ -95,13 +95,13 @@ void** nuwan_dataset_split(void* handle, f32 train_r, f32 val_r, f32 test_r) {
 
 // ===== MODEL BINDINGS =====
 
-void* nuwan_transformer_create(i32 vocab_size, i32 hidden_dim, i32 num_layers,
+void* cpx_transformer_create(i32 vocab_size, i32 hidden_dim, i32 num_layers,
                                 i32 num_heads, i32 ffn_dim, i32 max_seq_len) {
     return (void*)transformer_create(vocab_size, hidden_dim, num_layers,
                                       num_heads, ffn_dim, max_seq_len);
 }
 
-f32* nuwan_transformer_forward(void* model, const i32* token_ids, 
+f32* cpx_transformer_forward(void* model, const i32* token_ids, 
                                 i32 batch, i32 seq_len) {
     TransformerModel* m = (TransformerModel*)model;
     
@@ -127,68 +127,68 @@ f32* nuwan_transformer_forward(void* model, const i32* token_ids,
     return result;
 }
 
-bool nuwan_transformer_save(void* model, const char* path) {
+bool cpx_transformer_save(void* model, const char* path) {
     // TODO: Implement checkpoint saving
     // Would save all weights to file
     return false;
 }
 
-void* nuwan_transformer_load(const char* path) {
+void* cpx_transformer_load(const char* path) {
     // TODO: Implement checkpoint loading
     return NULL;
 }
 
-void nuwan_transformer_destroy(void* model) {
+void cpx_transformer_destroy(void* model) {
     TransformerModel* m = (TransformerModel*)model;
     transformer_destroy(m);
 }
 
 // ===== TRAINING UTILITIES =====
 
-f32 nuwan_cross_entropy_loss(const f32* logits, const i32* targets,
+f32 cpx_cross_entropy_loss(const f32* logits, const i32* targets,
                               i32 batch, i32 vocab_size) {
     return cross_entropy_loss(logits, targets, batch, vocab_size);
 }
 
 // ===== OPTIMIZER BINDINGS =====
 
-void* nuwan_adam_create(i32 num_params, f32 lr, f32 beta1, f32 beta2) {
+void* cpx_adam_create(i32 num_params, f32 lr, f32 beta1, f32 beta2) {
     return (void*)adam_create(num_params, lr, beta1, beta2);
 }
 
-void nuwan_adam_set_weight_decay(void* handle, f32 weight_decay) {
+void cpx_adam_set_weight_decay(void* handle, f32 weight_decay) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
     opt->weight_decay = weight_decay;
 }
 
-void nuwan_adam_set_epsilon(void* handle, f32 epsilon) {
+void cpx_adam_set_epsilon(void* handle, f32 epsilon) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
     opt->epsilon = epsilon;
 }
 
-void nuwan_adam_set_lr(void* handle, f32 lr) {
+void cpx_adam_set_lr(void* handle, f32 lr) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
     opt->learning_rate = lr;
 }
 
-f32 nuwan_adam_get_lr(void* handle) {
+f32 cpx_adam_get_lr(void* handle) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
     return opt->learning_rate;
 }
 
-i32 nuwan_adam_get_step(void* handle) {
+i32 cpx_adam_get_step(void* handle) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
     return opt->t;
 }
 
-void nuwan_adam_destroy(void* handle) {
+void cpx_adam_destroy(void* handle) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
     adam_destroy(opt);
 }
 
 // ===== TRAINING STEP BINDINGS =====
 
-f32 nuwan_train_step(void* model_handle, void* opt_handle, const i32* tokens,
+f32 cpx_train_step(void* model_handle, void* opt_handle, const i32* tokens,
                       const i32* targets, i32 batch, i32 seq_len) {
     TransformerModel* model = (TransformerModel*)model_handle;
     AdamOptimizer* opt = (AdamOptimizer*)opt_handle;
@@ -231,7 +231,7 @@ f32 nuwan_train_step(void* model_handle, void* opt_handle, const i32* tokens,
     return loss;
 }
 
-f32 nuwan_eval_step(void* model_handle, const i32* tokens, const i32* targets,
+f32 cpx_eval_step(void* model_handle, const i32* tokens, const i32* targets,
                      i32 batch, i32 seq_len) {
     TransformerModel* model = (TransformerModel*)model_handle;
     i32 vocab_size = model->vocab_size;
@@ -253,36 +253,36 @@ f32 nuwan_eval_step(void* model_handle, const i32* tokens, const i32* targets,
 
 // ===== LEARNING RATE SCHEDULE =====
 
-f32 nuwan_lr_schedule(i32 step, i32 warmup_steps, i32 max_steps,
+f32 cpx_lr_schedule(i32 step, i32 warmup_steps, i32 max_steps,
                        f32 max_lr, f32 min_lr) {
     return lr_schedule_warmup_cosine(step, warmup_steps, max_steps, max_lr, min_lr);
 }
 
 // ===== DATA LOADER BINDINGS =====
 
-void* nuwan_dataloader_create(void* dataset, i32 batch_size, i32 shuffle) {
+void* cpx_dataloader_create(void* dataset, i32 batch_size, i32 shuffle) {
     Dataset* ds = (Dataset*)dataset;
     return (void*)dataloader_create(ds, batch_size, shuffle ? true : false);
 }
 
-i32 nuwan_dataloader_next_batch(void* handle, i32** batch_out, i32** targets_out) {
+i32 cpx_dataloader_next_batch(void* handle, i32** batch_out, i32** targets_out) {
     DataLoader* loader = (DataLoader*)handle;
     return dataloader_next_batch(loader, batch_out, targets_out) ? 1 : 0;
 }
 
-void nuwan_dataloader_reset(void* handle) {
+void cpx_dataloader_reset(void* handle) {
     DataLoader* loader = (DataLoader*)handle;
     dataloader_reset(loader);
 }
 
-void nuwan_dataloader_destroy(void* handle) {
+void cpx_dataloader_destroy(void* handle) {
     DataLoader* loader = (DataLoader*)handle;
     dataloader_destroy(loader);
 }
 
 // ===== MODEL INFO BINDINGS =====
 
-i32 nuwan_transformer_get_num_params(void* model_handle) {
+i32 cpx_transformer_get_num_params(void* model_handle) {
     TransformerModel* m = (TransformerModel*)model_handle;
     i32 hidden = m->hidden_dim;
     i32 vocab = m->vocab_size;
@@ -302,24 +302,24 @@ i32 nuwan_transformer_get_num_params(void* model_handle) {
     return emb_params + layers * per_layer + final_params;
 }
 
-i32 nuwan_transformer_get_hidden_dim(void* model_handle) {
+i32 cpx_transformer_get_hidden_dim(void* model_handle) {
     TransformerModel* m = (TransformerModel*)model_handle;
     return m->hidden_dim;
 }
 
-i32 nuwan_transformer_get_vocab_size(void* model_handle) {
+i32 cpx_transformer_get_vocab_size(void* model_handle) {
     TransformerModel* m = (TransformerModel*)model_handle;
     return m->vocab_size;
 }
 
-i32 nuwan_transformer_get_num_layers(void* model_handle) {
+i32 cpx_transformer_get_num_layers(void* model_handle) {
     TransformerModel* m = (TransformerModel*)model_handle;
     return m->num_layers;
 }
 
 // ===== GENERATION BINDINGS =====
 
-i32* nuwan_generate(void* model_handle, const i32* prompt_tokens, i32 prompt_len,
+i32* cpx_generate(void* model_handle, const i32* prompt_tokens, i32 prompt_len,
                      i32 max_new_tokens, f32 temperature, i32* out_len) {
     TransformerModel* model = (TransformerModel*)model_handle;
     i32 vocab_size = model->vocab_size;
@@ -395,8 +395,8 @@ i32* nuwan_generate(void* model_handle, const i32* prompt_tokens, i32 prompt_len
     return output;
 }
 
-i32* nuwan_generate_greedy(void* model_handle, const i32* prompt_tokens,
+i32* cpx_generate_greedy(void* model_handle, const i32* prompt_tokens,
                             i32 prompt_len, i32 max_new_tokens, i32* out_len) {
-    return nuwan_generate(model_handle, prompt_tokens, prompt_len,
+    return cpx_generate(model_handle, prompt_tokens, prompt_len,
                            max_new_tokens, 0.0f, out_len);
 }

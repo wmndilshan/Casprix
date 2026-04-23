@@ -39,9 +39,7 @@
 //   extern func name(p: type) -> type
 // =============================================================================
 
-import "examples/llm_training/tokenizer"
-import "examples/llm_training/transformer"
-import "examples/llm_training/dataloader"
+import "lib/std/ai/llm"
 
 // ---------------------------------------------------------------------------
 // Additional FFI: timing, printing helpers
@@ -50,12 +48,6 @@ import "examples/llm_training/dataloader"
 extern func get_time_ms() -> i32
 extern func print_f32(val: f32) -> void
 extern func print_loss_log(step: i32, loss: f32, lr: f32, dt_ms: i32) -> void
-extern func encode_corpus_to_shards(
-    tokenizer_path: string,
-    input_txt: string,
-    output_prefix: string,
-    shard_size: i32
-) -> i32
 
 
 
@@ -134,16 +126,16 @@ class TrainingConfig {
         this.save_interval = 500
     }
 
-    // Quick config for testing (10 steps only)
+    // Quick config for testing (50 steps)
     public func make_tiny_run() -> void {
-        this.total_steps = 10
-        this.val_steps = 2
-        this.log_interval = 1
-        this.val_interval = 5
-        this.save_interval = 10
+        this.total_steps = 50
+        this.val_steps = 5
+        this.log_interval = 5
+        this.val_interval = 25
+        this.save_interval = 50
         this.batch_size = 4
         this.seq_len = 64
-        print("Using tiny test run config (10 steps).")
+        print("Using tiny test run config (50 steps).")
     }
 }
 
@@ -156,7 +148,7 @@ func train_tokenizer(cfg: TrainingConfig) -> void {
     print("")
     print("=== Phase 1: BPE Tokenizer Training ===")
 
-    let tok: BpeTokenizer = new BpeTokenizer(cfg.base_vocab_size, cfg.target_vocab_size)
+    let tok: Tokenizer = new Tokenizer(cfg.target_vocab_size)
     tok.train(cfg.raw_train_text, cfg.target_vocab_size)
     tok.save(cfg.tokenizer_path)
     tok.destroy()
@@ -176,7 +168,7 @@ func prepare_dataset(cfg: TrainingConfig) -> void {
     let shard_size: i32 = 10000000   // 10M tokens per shard
 
     print("Encoding training set...")
-    let train_shards: i32 = encode_corpus_to_shards(
+    let train_shards: i32 = encode_to_shards(
         cfg.tokenizer_path,
         cfg.raw_train_text,
         cfg.train_data_prefix,
@@ -186,7 +178,7 @@ func prepare_dataset(cfg: TrainingConfig) -> void {
     print(train_shards)
 
     print("Encoding validation set...")
-    let val_shards: i32 = encode_corpus_to_shards(
+    let val_shards: i32 = encode_to_shards(
         cfg.tokenizer_path,
         cfg.raw_val_text,
         cfg.val_data_prefix,
@@ -207,42 +199,33 @@ func pretrain(cfg: TrainingConfig) -> void {
     print("")
     print("=== Phase 3: Model Initialization ===")
 
-    // Build model config (TinyStories-appropriate small model)
-    let model_cfg: ModelConfig = new ModelConfig()
-    model_cfg.tiny()
-    model_cfg.vocab_size = cfg.target_vocab_size
-    model_cfg.max_seq_len = cfg.seq_len
-    model_cfg.print_info()
-
     // Create model
-    let model: TransformerModel = new TransformerModel(model_cfg)
-    let num_params: i32 = model.num_params()
+    let model: Transformer = new Transformer(
+        cfg.target_vocab_size,
+        128,  // hidden
+        4,    // layers
+        4,    // heads
+        512,  // ffn
+        cfg.seq_len
+    )
+    let num_params: i32 = model.get_num_params()
     print("Model parameters:")
     print(num_params)
 
     // Create optimizer
-    let opt: AdamWOptimizer = new AdamWOptimizer(
+    let opt: Optimizer = new Optimizer(
         num_params,
         cfg.max_lr,
         cfg.beta1,
-        cfg.beta2,
-        cfg.epsilon,
-        cfg.weight_decay
+        cfg.beta2
     )
 
     // Create data loaders
-    let train_loader: DataLoader = new DataLoader(
-        cfg.train_data_prefix,
-        cfg.batch_size,
-        cfg.seq_len,
-        0       // 0 = train split
-    )
-    let val_loader: DataLoader = new DataLoader(
-        cfg.val_data_prefix,
-        cfg.batch_size,
-        cfg.seq_len,
-        1       // 1 = val split
-    )
+    let train_ds: Dataset = Dataset.load(cfg.train_data_prefix)
+    let val_ds: Dataset = Dataset.load(cfg.val_data_prefix)
+
+    let train_loader: DataLoader = new DataLoader(train_ds, cfg.batch_size, true)
+    let val_loader: DataLoader = new DataLoader(val_ds, cfg.batch_size, false)
 
     print("")
     print("=== Phase 4: Pre-Training Loop ===")
@@ -264,14 +247,15 @@ func pretrain(cfg: TrainingConfig) -> void {
 
             mut val_loss_sum: f32 = 0.0
             for (v: i32 = 0; v < cfg.val_steps; v = v + 1) {
-                val_loader.next_batch()
-                let loss: f32 = model.forward(
-                    val_loader.tokens_buf,
-                    val_loader.targets_buf,
-                    cfg.batch_size,
-                    cfg.seq_len
-                )
+                let tokens_ptr = ptr_create_i32()
+                let targets_ptr = ptr_create_i32()
+                val_loader.next_batch(tokens_ptr, targets_ptr)
+                
+                let loss: f32 = model.eval_step(tokens_ptr, targets_ptr, cfg.batch_size, cfg.seq_len)
                 val_loss_sum = val_loss_sum + loss
+                
+                ptr_free(tokens_ptr)
+                ptr_free(targets_ptr)
             }
             // Average val loss
             let avg_val_loss: f32 = val_loss_sum / cfg.val_steps
@@ -290,7 +274,7 @@ func pretrain(cfg: TrainingConfig) -> void {
         let t0: i32 = get_time_ms()
 
         // Update learning rate (cosine schedule)
-        let lr: f32 = compute_cosine_lr(
+        let lr: f32 = compute_lr(
             step,
             cfg.warmup_steps,
             cfg.total_steps,
@@ -300,22 +284,15 @@ func pretrain(cfg: TrainingConfig) -> void {
         opt.set_lr(lr)
 
         // Load next batch
-        train_loader.next_batch()
+        let tokens_ptr = ptr_create_i32()
+        let targets_ptr = ptr_create_i32()
+        train_loader.next_batch(tokens_ptr, targets_ptr)
 
-        // Forward pass (compute loss)
-        model.zero_grad()
-        let loss: f32 = model.forward(
-            train_loader.tokens_buf,
-            train_loader.targets_buf,
-            cfg.batch_size,
-            cfg.seq_len
-        )
+        // Step
+        let loss: f32 = model.train_step(opt.handle, tokens_ptr, targets_ptr, cfg.batch_size, cfg.seq_len)
 
-        // Backward pass (compute gradients)
-        model.backward()
-
-        // Optimizer step (update weights)
-        opt.step(model)
+        ptr_free(tokens_ptr)
+        ptr_free(targets_ptr)
 
         let t1: i32 = get_time_ms()
         let dt: i32 = t1 - t0
@@ -327,6 +304,15 @@ func pretrain(cfg: TrainingConfig) -> void {
     }
 
     print("")
+    print("=== Phase 5: Testing Inference (Generation) ===")
+    print("Generating from prompt: Once upon a time...")
+    
+    let tok: Tokenizer = Tokenizer.load(cfg.tokenizer_path)
+    let prompt_tokens: rawptr = tok.encode("Once upon a time")
+    
+    let gen_out: rawptr = model.generate(prompt_tokens, 4, 20, 1.0)
+    print("Generation complete (tokens generated).")
+    
     print("=== Training Complete ===")
     print("Saving final model...")
     model.save("checkpoints/model_final.bin")
@@ -336,6 +322,11 @@ func pretrain(cfg: TrainingConfig) -> void {
     val_loader.destroy()
     opt.destroy()
     model.destroy()
+    tok.destroy()
+
+    print("All phases complete.")
+    print("Your model is saved in: checkpoints/model_final.bin")
+    print("Your tokenizer is saved in: data/tok32k.bin")
 }
 
 
@@ -349,9 +340,7 @@ func main() -> void {
     print("======================================================")
 
     let cfg: TrainingConfig = new TrainingConfig()
-
-    // Uncomment for a quick 10-step smoke test:
-    // cfg.make_tiny_run()
+    cfg.make_tiny_run()
 
     // Phase 1: Train BPE tokenizer from raw text
     train_tokenizer(cfg)
@@ -368,5 +357,4 @@ func main() -> void {
     print("Your tokenizer is saved in: data/tok32k.bin")
 }
 
-// Top-level call: Casprix executes this directly
-main()
+// Top-level entry (if needed) or just the main function

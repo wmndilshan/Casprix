@@ -278,6 +278,9 @@ struct MirInst {
     MirValueId      result;         /* SSA result value (0 if void) */
     MirType*        type;           /* Type of the result value */
 
+    /* VM-specific scratchpad (e.g. dispatch label for direct threading) */
+    void*           vm_data;
+
     union {
         /* Constants */
         int64_t     imm_i64;

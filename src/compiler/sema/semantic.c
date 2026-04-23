@@ -880,9 +880,8 @@ static void analyze_member_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         return;
     }
 
-    /* Analyze the base object first. This will trigger ownership checks
-       if the object is a variable access. */
-    analyze_expr(analyzer, member->object);
+    /* Check for static access BEFORE analyzing the object
+       This prevents error messages about undefined variables when the "variable" is actually a class name */
 
     // Check for static access BEFORE analyzing the object
     // This prevents error messages about undefined variables when the "variable" is actually a class name
