@@ -356,5 +356,4 @@ func main() -> void {
     print("Your model is saved in: checkpoints/model_final.bin")
     print("Your tokenizer is saved in: data/tok32k.bin")
 }
-
 // Top-level entry (if needed) or just the main function

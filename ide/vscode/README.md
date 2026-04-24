@@ -1,4 +1,4 @@
-# Casprix Language — VS Code Extension
+# Casprix 👻 Language — VS Code Extension
 
 Full language support for the [Casprix programming language](https://github.com/wmndilshan/casprix) inside Visual Studio Code.
 

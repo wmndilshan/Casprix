@@ -19,18 +19,17 @@ const os = require('os');
 
 const LANGUAGE_ID = 'casprix';
 
-/** All keywords for completion */
+/** Keywords accepted by the lexer. Keep this aligned with src/compiler/frontend/lexer.h. */
 const KEYWORDS = [
     'if', 'else', 'elif', 'for', 'while', 'return', 'break', 'continue',
     'match', 'in', 'async', 'await', 'spawn',
     'try', 'throw', 'catch', 'finally', 'import',
     'func', 'class', 'struct', 'enum', 'union', 'trait', 'impl',
-    'new', 'type', 'alloc',
+    'new',
     'let', 'const', 'mut', 'static', 'public', 'private',
     'protected', 'abstract', 'extern', 'extends', 'implements',
-    'move', 'copy', 'where', 'unsafe', 'dyn', 'lambda',
-    'true', 'false', 'null', 'this', 'super',
-    'or', 'and', 'not',
+    'move', 'copy', 'where', 'unsafe',
+    'true', 'false', 'this', 'super',
 ];
 
 const BUILTIN_TYPES = [
@@ -40,16 +39,15 @@ const BUILTIN_TYPES = [
     'int', 'float',
     'string', 'strbuf', 'bool', 'void', 'char',
     'array', 'slice', 'ptr', 'rawptr', 'ref',
-    'tensor', 'vec2', 'vec3', 'vec4', 'vec8', 'vec16',
+    'tensor', 'dyn', 'lambda',
+    'vec2', 'vec3', 'vec4', 'vec8', 'vec16',
     'mat2', 'mat3', 'mat4',
-    'Int', 'Float', 'String', 'Bool', 'Void',
 ];
 
 const BUILTIN_FUNCTIONS = [
-    'print', 'println', 'printf', 'sprintf',
+    'print',
     'len', 'sizeof', 'typeof',
-    'assert', 'panic', 'exit',
-    'alloc', 'free', 'copy', 'move', 'drop', 'clone', 'cast', 'transmute',
+    'assert', 'panic',
 ];
 
 /** Simple hover documentation for key concepts */
@@ -65,21 +63,52 @@ const HOVER_DOCS = {
     'enum': '**`enum`** — Declares an enumeration.',
     'match': '**`match`** — Pattern-matching expression.\n```cpx\nmatch x {\n    0 => "zero",\n    _ => "other"\n}\n```',
     'async': '**`async`** — Marks a function as asynchronous.',
-    'await': '**`await`** — Awaits an async value/future.',
-    'spawn': '**`spawn`** — Spawns a concurrent task.',
+    'await': '**`await`** — Planned async syntax. The current v1 parser does not fully accept await expressions yet.',
+    'spawn': '**`spawn`** — Planned concurrency syntax. The current v1 parser does not fully accept spawn statements yet.',
     'unsafe': '**`unsafe`** — Opts out of memory safety checks in this scope.',
     'move': '**`move`** — Transfers ownership of a value.',
-    'copy': '**`copy`** — Creates a bitwise copy of a value.',
+    'copy': '**`copy`** — Closure capture mode keyword.',
     'extern': '**`extern`** — Declares an external (C FFI) symbol.',
     'print': '**`print()`** — Prints a string to stdout.',
-    'println': '**`println()`** — Prints a string to stdout with newline.',
     'len': '**`len()`** — Returns the length of an array, slice, or string.',
     'assert': '**`assert()`** — Panics if the condition is false.',
     'typeof': '**`typeof()`** — Returns the type of an expression as a string.',
     'dyn': '**`dyn`** — Marks a type for dynamic dispatch (trait objects).\n```cpx\nlet x: dyn[Printable] = ...\n```',
-    'lambda': '**`lambda`** — Keyword for explicit lambda type annotation.',
-    'alloc': '**`alloc`** — Creates a high-performance memory allocation region.',
+    'lambda': '**`lambda`** — Explicit function/closure type annotation.',
 };
+
+const UNSUPPORTED_OR_PLANNED = [
+    {
+        regex: /\bvar\s+[A-Za-z_][A-Za-z0-9_]*/g,
+        message: '`var` is not part of Casprix v1. Use `let`, `mut`, `const`, or `name := value`.',
+        severity: vscode.DiagnosticSeverity.Error,
+    },
+    {
+        regex: /\basync\s+func\b/g,
+        message: '`async func` is planned, but the current parser does not accept it yet.',
+        severity: vscode.DiagnosticSeverity.Warning,
+    },
+    {
+        regex: /\bawait\b/g,
+        message: '`await` is tokenized but not fully accepted by the current parser.',
+        severity: vscode.DiagnosticSeverity.Warning,
+    },
+    {
+        regex: /\bspawn\b/g,
+        message: '`spawn` is planned, but the current parser does not accept it yet.',
+        severity: vscode.DiagnosticSeverity.Warning,
+    },
+    {
+        regex: /\bimport\s+"[^"]+"\s+as\s+[A-Za-z_][A-Za-z0-9_]*/g,
+        message: 'Import aliases are not accepted by the current parser. Use `import "module";`.',
+        severity: vscode.DiagnosticSeverity.Warning,
+    },
+    {
+        regex: /\?\s*;/g,
+        message: '`?` try-propagation is tokenized but not parsed yet.',
+        severity: vscode.DiagnosticSeverity.Warning,
+    },
+];
 
 // ============================================================================
 // Diagnostic Engine
@@ -128,11 +157,44 @@ function severityToDiag(severity) {
     }
 }
 
+function isCommentLine(lineText) {
+    return /^\s*(\/\/|#)/.test(lineText);
+}
+
+function collectLocalDiagnostics(document) {
+    const diagnostics = [];
+    for (let lineNo = 0; lineNo < document.lineCount; lineNo++) {
+        const text = document.lineAt(lineNo).text;
+        if (isCommentLine(text)) continue;
+
+        for (const rule of UNSUPPORTED_OR_PLANNED) {
+            rule.regex.lastIndex = 0;
+            let match;
+            while ((match = rule.regex.exec(text)) !== null) {
+                const start = match.index;
+                const end = Math.max(start + 1, start + match[0].length);
+                const diag = new vscode.Diagnostic(
+                    new vscode.Range(lineNo, start, lineNo, end),
+                    match[0].includes('async') || match[0].includes('await') || match[0].includes('spawn')
+                        ? rule.message
+                        : rule.message,
+                    rule.severity
+                );
+                diag.source = 'casprix-v1';
+                diagnostics.push(diag);
+            }
+        }
+    }
+    return diagnostics;
+}
+
 /**
  * Run `casprix --check-only <file>` and populate the diagnostics collection.
  */
 function checkDocument(document, diagnosticCollection) {
     if (document.languageId !== LANGUAGE_ID) return;
+
+    const localDiags = collectLocalDiagnostics(document);
 
     const config = vscode.workspace.getConfiguration('casprix');
     let compilerPath = config.get('compilerPath', 'casprix');
@@ -166,7 +228,7 @@ function checkDocument(document, diagnosticCollection) {
             }
 
             const output = (stderr || '') + (stdout || '');
-            const diags = [];
+            const diags = [...localDiags];
 
             for (const line of output.split('\n')) {
                 const parsed = parseDiagnosticLine(line.trim(), document.uri.fsPath);
@@ -190,8 +252,8 @@ function checkDocument(document, diagnosticCollection) {
             diagnosticCollection.set(document.uri, diags);
         });
     } catch (execErr) {
-        // Compiler not found — clear diagnostics silently
-        diagnosticCollection.set(document.uri, []);
+        // Compiler not found — still keep lightweight parser-surface diagnostics.
+        diagnosticCollection.set(document.uri, localDiags);
     }
 }
 
@@ -203,6 +265,7 @@ function checkDocument(document, diagnosticCollection) {
 function makeKeywordItem(kw) {
     const item = new vscode.CompletionItem(kw, vscode.CompletionItemKind.Keyword);
     item.detail = 'keyword';
+    if (HOVER_DOCS[kw]) item.documentation = new vscode.MarkdownString(HOVER_DOCS[kw]);
     return item;
 }
 
@@ -224,7 +287,7 @@ const completionProvider = {
         const linePrefix = document.lineAt(position).text.slice(0, position.character);
 
         // Don't complete inside comments or strings
-        if (/\/\//.test(linePrefix)) return undefined;
+        if (/^\s*(\/\/|#)/.test(linePrefix)) return undefined;
         if (/["']/.test(linePrefix) && linePrefix.split(/["']/).length % 2 === 0) return undefined;
 
         const items = [
@@ -232,6 +295,26 @@ const completionProvider = {
             ...BUILTIN_TYPES.map(makeTypeItem),
             ...BUILTIN_FUNCTIONS.map(makeFuncItem),
         ];
+
+        if (/\bimport\s+$/.test(linePrefix)) {
+            const item = new vscode.CompletionItem('import module path', vscode.CompletionItemKind.Module);
+            item.insertText = new vscode.SnippetString('"${1:lib/module}";');
+            item.detail = 'canonical import syntax';
+            item.documentation = 'The current parser accepts string module imports: `import "std/io";`';
+            items.unshift(item);
+        }
+
+        if (/:\s*&?$/.test(linePrefix) || /->\s*&?$/.test(linePrefix)) {
+            items.unshift(...BUILTIN_TYPES.map(makeTypeItem));
+        }
+
+        if (/\bimpl\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(linePrefix)) {
+            const item = new vscode.CompletionItem('for', vscode.CompletionItemKind.Keyword);
+            item.insertText = 'for ';
+            item.detail = 'trait implementation syntax';
+            items.unshift(item);
+        }
+
         return items;
     },
 };

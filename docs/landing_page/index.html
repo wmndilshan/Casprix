@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Casprix 👻 | Next-Gen VS Code Support</title>
+    <meta name="description" content="Experience the full power of the Casprix programming language in Visual Studio Code. Syntax highlighting, diagnostics, and more.">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+
+    <nav>
+        <div class="container nav-content">
+            <div class="logo">
+                <img src="assets/logo.png" alt="Casprix Logo" class="logo-img">
+                <span class="logo-text">CASPRIX</span>
+            </div>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#setup">Setup</a>
+                <a href="https://github.com/wmndilshan/casprix" class="btn-outline">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="container hero-grid">
+            <div class="hero-text">
+                <h1 class="fade-in">Code with the <span class="gradient-text">Ghost</span> in the Machine.</h1>
+                <p class="hero-subtext delay-1">The definitive VS Code extension for the Casprix programming language. High-performance, modern syntax, and seamless developer experience.</p>
+                <div class="hero-btns delay-2">
+                    <a href="#setup" class="btn-primary">Install Extension</a>
+                    <a href="#features" class="btn-secondary">Explore Features</a>
+                </div>
+            </div>
+            <div class="hero-preview delay-3">
+                <div class="editor-mockup">
+                    <div class="editor-header">
+                        <div class="dots">
+                            <span></span><span></span><span></span>
+                        </div>
+                        <div class="tab">main.cpx</div>
+                    </div>
+                    <div class="editor-content">
+                        <pre><code><span class="keyword">func</span> <span class="function">main</span>() -> <span class="type">int</span> {
+    <span class="keyword">let</span> <span class="variable">s</span>: <span class="type">string</span> = <span class="string">"Hello, Casprix!"</span>;
+    <span class="keyword">let</span> <span class="variable">v</span>: <span class="type">StringView</span> = <span class="keyword">new</span> <span class="type">StringView</span>(s);
+    
+    <span class="keyword">if</span> (v.<span class="property">len</span> > <span class="number">0</span>) {
+        <span class="function">print</span>(s);
+    }
+    
+    <span class="keyword">return</span> <span class="number">0</span>;
+}
+
+<span class="function">main</span>();</code></pre>
+                    </div>
+                    <div class="editor-status">
+                        <span class="status-item">UTF-8</span>
+                        <span class="status-item">Casprix 👻</span>
+                        <span class="status-item success">✓ No Errors</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <section id="features" class="features">
+        <div class="container">
+            <h2 class="section-title">Built for Performance.</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="icon">🎨</div>
+                    <h3>Syntax Highlighting</h3>
+                    <p>Complete TextMate grammar support for .cpx and .nd files with vivid, distinct color palettes.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="icon">✅</div>
+                    <h3>Live Diagnostics</h3>
+                    <p>Instant error and warning highlighting sourced directly from the Casprix compiler.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="icon">💡</div>
+                    <h3>Intelligent Auto-Complete</h3>
+                    <p>Context-aware suggestions for keywords, types, and built-in functions.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="icon">📝</div>
+                    <h3>Smart Snippets</h3>
+                    <p>Accelerate your workflow with custom snippets for classes, functions, and control flow.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="setup" class="setup">
+        <div class="container">
+            <div class="setup-box">
+                <h2>Ready to hauntingly fast?</h2>
+                <p>Install the Casprix extension in seconds.</p>
+                <div class="terminal">
+                    <div class="terminal-header">Terminal</div>
+                    <div class="terminal-body">
+                        <p><span class="prompt">$</span> antigravity --install-extension ide/vscode/casprix-language-1.1.0.vsix</p>
+                        <p class="success">Installing extension...</p>
+                        <p class="success">Extension 'casprix-language-1.1.0.vsix' was successfully installed.</p>
+                    </div>
+                </div>
+                <div class="setup-steps">
+                    <div class="step">
+                        <span class="step-num">1</span>
+                        <p>Open your Casprix project directory.</p>
+                    </div>
+                    <div class="step">
+                        <span class="step-num">2</span>
+                        <p>Configure the compiler path in your settings.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-logo">
+                    <span class="ghost">👻</span> CASPRIX
+                </div>
+                <p>&copy; 2026 Casprix Ecosystem. Built for the future of systems programming.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
