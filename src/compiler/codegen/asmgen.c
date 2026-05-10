@@ -190,6 +190,16 @@ static void emit_asm(AssemblyGenerator* gen, const char* format, ...) {
     va_end(args);
 }
 
+static void emit_mov(AssemblyGenerator* gen, const char* dest, const char* src) {
+    if (strcmp(dest, src) == 0) return;
+    emit_asm(gen, "    mov %s, %s\n", dest, src);
+}
+
+static void emit_stack_adj(AssemblyGenerator* gen, const char* op, int size) {
+    if (size == 0) return;
+    emit_asm(gen, "    %s rsp, %d\n", op, size);
+}
+
 /* NASM `db "..."` must not contain raw newlines/quotes; escape for printf + NASM. */
 static void emit_data_string_literal(AssemblyGenerator* gen, int idx, const char* raw) {
     char esc[4096];
@@ -1130,8 +1140,8 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                     emit_asm(gen, "    xor rax, rax\n");
                 }
 
-                emit_asm(gen, "    add rsp, %d\n", stack_size);
-                emit_asm(gen, "    mov %s, rax\n", reg);
+                emit_stack_adj(gen, "add", stack_size);
+                emit_mov(gen, reg, "rax");
                 break;
             }
 
@@ -1562,7 +1572,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 int stack_size = ABI_SHADOW_SPACE + (extra_args * 8);
                 if (stack_size % 16 != 0) stack_size += 8;
 
-                emit_asm(gen, "    sub rsp, %d\n", stack_size);
+                emit_stack_adj(gen, "sub", stack_size);
 
                 // Push extra arguments onto stack
                 for (int i = static_access->arg_count - 1; i >= ABI_I_REG_COUNT; i--) {
@@ -1580,8 +1590,8 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 // Call static method with mangled name
                 emit_asm(gen, "    call __static_%s_%s\n",
                         static_access->class_name, static_access->member_name);
-                emit_asm(gen, "    add rsp, %d\n", stack_size);
-                emit_asm(gen, "    mov %s, rax\n", reg);
+                emit_stack_adj(gen, "add", stack_size);
+                emit_mov(gen, reg, "rax");
             } else {
                 // Static field access: ClassName.staticField
                 emit_asm(gen, "    ; Static field access: %s.%s\n",
@@ -1976,6 +1986,7 @@ static void generate_asm_function(AssemblyGenerator* gen, Stmt* stmt, SymbolTabl
         emit_asm(gen, "    mov rax, 0\n");
     }
 
+    emit_stack_adj(gen, "add", 0); // Placeholder cleanup if needed
     emit_asm(gen, "    leave\n");
     emit_asm(gen, "    ret\n");
 }

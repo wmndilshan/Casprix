@@ -42,9 +42,11 @@ HAS_AVX2 ?= 1
 ifeq ($(HAS_AVX2),1)
     CFLAGS       += -mavx2 -mfma -DHAS_AVX2
     SIMD_ASM      = $(RUNTIME_DIR)/math/simd_kernels.asm \
-                    $(RUNTIME_DIR)/ai/llm/ops_avx2.asm
+                    $(RUNTIME_DIR)/ai/llm/ops_avx2.asm \
+                    $(RUNTIME_DIR)/async/coro_context.asm
     SIMD_OBJ      = $(OBJ_DIR)/simd_math_kernels.o \
-                    $(OBJ_DIR)/simd_llm_avx2.o
+                    $(OBJ_DIR)/simd_llm_avx2.o \
+                    $(OBJ_DIR)/coro_context.o
 endif
 
 # ============================================================================
@@ -296,6 +298,10 @@ $(OBJ_DIR)/simd_math_kernels.o: $(RUNTIME_DIR)/math/simd_kernels.asm | $(OBJ_DIR
 	$(ASM) $(ASMFLAGS) $< -o $@
 
 $(OBJ_DIR)/simd_llm_avx2.o: $(RUNTIME_DIR)/ai/llm/ops_avx2.asm | $(OBJ_DIR)
+	@echo "[ASM]  $<"
+	$(ASM) $(ASMFLAGS) $< -o $@
+
+$(OBJ_DIR)/coro_context.o: $(RUNTIME_DIR)/async/coro_context.asm | $(OBJ_DIR)
 	@echo "[ASM]  $<"
 	$(ASM) $(ASMFLAGS) $< -o $@
 endif

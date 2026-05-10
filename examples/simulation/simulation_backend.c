@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <pthread.h>
+#include "../../include/casprix/collections.h"
+#include "../../src/support/arena.h"
 
 /* ============================================================
  * Atomic Primitives
@@ -60,8 +62,6 @@ void mutex_unlock(intptr_t handle) {
  * Simulation State Storage (Simple Sharded Map)
  * ============================================================ */
 
-#define NUM_SHARDS 16
-
 typedef struct {
     int32_t id;
     float value;
@@ -69,19 +69,21 @@ typedef struct {
 } SimulationData;
 
 typedef struct {
-    SimulationData* data;
-    int32_t count;
-    int32_t capacity;
+    NuwanSwissMap* map;
     pthread_mutex_t lock;
 } Shard;
 
 static Shard g_shards[NUM_SHARDS];
+static Arena* g_sim_arena = NULL;
 
 void simulation_storage_init() {
+    if (g_sim_arena == NULL) {
+        g_sim_arena = arena_create();
+    }
     for (int i = 0; i < NUM_SHARDS; i++) {
-        g_shards[i].capacity = 1024;
-        g_shards[i].data = malloc(sizeof(SimulationData) * g_shards[i].capacity);
-        g_shards[i].count = 0;
+        g_shards[i].map = nuwan_swiss_new(g_sim_arena);
+        // Pre-reserve for "thousands" of requests
+        nuwan_swiss_reserve(g_shards[i].map, 1024);
         pthread_mutex_init(&g_shards[i].lock, NULL);
     }
 }
@@ -91,61 +93,67 @@ static int get_shard_idx(int32_t id) {
 }
 
 bool simulation_create(int32_t id, const char* name, float value) {
+    char key[16];
+    snprintf(key, 16, "%d", id);
+    
     int s_idx = get_shard_idx(id);
     Shard* s = &g_shards[s_idx];
     
     pthread_mutex_lock(&s->lock);
     
-    // Check if exists
-    for (int i = 0; i < s->count; i++) {
-        if (s->data[i].id == id) {
-            pthread_mutex_unlock(&s->lock);
-            return false;
-        }
+    if (nuwan_swiss_has(s->map, key)) {
+        pthread_mutex_unlock(&s->lock);
+        return false;
     }
     
-    if (s->count >= s->capacity) {
-        s->capacity *= 2;
-        s->data = realloc(s->data, sizeof(SimulationData) * s->capacity);
-    }
+    // Store data. In a real system we'd store a pointer to a struct.
+    // Here we'll pack the float value into the int64_t for simplicity in this demo,
+    // or we could use the Arena to allocate a struct.
+    SimulationData* d = arena_alloc(g_sim_arena, sizeof(SimulationData));
+    d->id = id;
+    d->value = value;
+    strncpy(d->name, name, 63);
     
-    s->data[s->count].id = id;
-    s->data[s->count].value = value;
-    strncpy(s->data[s->count].name, name, 63);
-    s->count++;
+    nuwan_swiss_put(s->map, key, (intptr_t)d);
     
     pthread_mutex_unlock(&s->lock);
     return true;
 }
 
 bool simulation_get(int32_t id, char* out_name, float* out_value) {
+    char key[16];
+    snprintf(key, 16, "%d", id);
+    
     int s_idx = get_shard_idx(id);
     Shard* s = &g_shards[s_idx];
     
     pthread_mutex_lock(&s->lock);
-    for (int i = 0; i < s->count; i++) {
-        if (s->data[i].id == id) {
-            strcpy(out_name, s->data[i].name);
-            *out_value = s->data[i].value;
-            pthread_mutex_unlock(&s->lock);
-            return true;
-        }
+    intptr_t ptr;
+    if (nuwan_swiss_get_opt(s->map, key, &ptr)) {
+        SimulationData* d = (SimulationData*)ptr;
+        strcpy(out_name, d->name);
+        *out_value = d->value;
+        pthread_mutex_unlock(&s->lock);
+        return true;
     }
     pthread_mutex_unlock(&s->lock);
     return false;
 }
 
 bool simulation_update(int32_t id, float delta) {
+    char key[16];
+    snprintf(key, 16, "%d", id);
+    
     int s_idx = get_shard_idx(id);
     Shard* s = &g_shards[s_idx];
     
     pthread_mutex_lock(&s->lock);
-    for (int i = 0; i < s->count; i++) {
-        if (s->data[i].id == id) {
-            s->data[i].value += delta;
-            pthread_mutex_unlock(&s->lock);
-            return true;
-        }
+    intptr_t ptr;
+    if (nuwan_swiss_get_opt(s->map, key, &ptr)) {
+        SimulationData* d = (SimulationData*)ptr;
+        d->value += delta;
+        pthread_mutex_unlock(&s->lock);
+        return true;
     }
     pthread_mutex_unlock(&s->lock);
     return false;
