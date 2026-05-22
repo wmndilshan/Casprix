@@ -125,7 +125,7 @@ typedef struct {
     IRNode* tail;               /* Last instruction                         */
     i32 node_count;             /* Number of active instructions            */
     i32 next_value_id;          /* Next SSA value ID to assign              */
-    Arena* arena;               /* All IR nodes allocated here              */
+    TensorArena* arena;               /* All IR nodes allocated here              */
 
     /* Value tracking */
     IRValue** values;           /* All IRValues indexed by id               */
@@ -138,7 +138,7 @@ typedef struct {
  * ==========================================================================*/
 
 /* Create an empty IR graph */
-IRGraph* ir_graph_create(Arena* arena);
+IRGraph* ir_graph_create(TensorArena* arena);
 
 /* Create an SSA value */
 IRValue* ir_value_create(IRGraph* graph, i32 ndim, const i32* shape);
@@ -168,7 +168,7 @@ IRNode* ir_emit_softmax(IRGraph* graph, IRValue* x, i32 batch, i32 dim);
  * ==========================================================================*/
 
 /* Convert an autograd tape to an IR graph */
-IRGraph* tape_to_ir(Tape* tape, Arena* ir_arena);
+IRGraph* tape_to_ir(Tape* tape, TensorArena* ir_arena);
 
 /* ============================================================================
  * IR Utilities

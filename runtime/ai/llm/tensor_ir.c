@@ -14,8 +14,8 @@
 
 #define IR_INITIAL_VALUES 256
 
-IRGraph* ir_graph_create(Arena* arena) {
-    IRGraph* graph = (IRGraph*)arena_alloc(arena, sizeof(IRGraph), 8);
+IRGraph* ir_graph_create(TensorArena* arena) {
+    IRGraph* graph = (IRGraph*)tensor_arena_alloc(arena, sizeof(IRGraph), 8);
     if (!graph) return NULL;
     memset(graph, 0, sizeof(IRGraph));
 
@@ -26,7 +26,7 @@ IRGraph* ir_graph_create(Arena* arena) {
     graph->next_value_id = 0;
 
     graph->value_capacity = IR_INITIAL_VALUES;
-    graph->values = (IRValue**)arena_alloc(arena,
+    graph->values = (IRValue**)tensor_arena_alloc(arena,
         graph->value_capacity * sizeof(IRValue*), 8);
     graph->value_count = 0;
 
@@ -40,7 +40,7 @@ IRGraph* ir_graph_create(Arena* arena) {
 static void ir_track_value(IRGraph* graph, IRValue* val) {
     if (graph->value_count >= graph->value_capacity) {
         i32 new_cap = graph->value_capacity * 2;
-        IRValue** new_arr = (IRValue**)arena_alloc(graph->arena,
+        IRValue** new_arr = (IRValue**)tensor_arena_alloc(graph->arena,
             new_cap * sizeof(IRValue*), 8);
         if (!new_arr) return;
         memcpy(new_arr, graph->values, graph->value_count * sizeof(IRValue*));
@@ -51,7 +51,7 @@ static void ir_track_value(IRGraph* graph, IRValue* val) {
 }
 
 IRValue* ir_value_create(IRGraph* graph, i32 ndim, const i32* shape) {
-    IRValue* val = (IRValue*)arena_alloc(graph->arena, sizeof(IRValue), 8);
+    IRValue* val = (IRValue*)tensor_arena_alloc(graph->arena, sizeof(IRValue), 8);
     if (!val) return NULL;
     memset(val, 0, sizeof(IRValue));
 
@@ -85,7 +85,7 @@ IRValue* ir_value_external(IRGraph* graph, Tensor* tensor, bool is_param) {
 
 IRNode* ir_emit(IRGraph* graph, IROpCode op, IRValue** inputs, i32 num_inputs,
                 i32 ndim, const i32* out_shape) {
-    IRNode* node = (IRNode*)arena_alloc(graph->arena, sizeof(IRNode), 8);
+    IRNode* node = (IRNode*)tensor_arena_alloc(graph->arena, sizeof(IRNode), 8);
     if (!node) return NULL;
     memset(node, 0, sizeof(IRNode));
 
@@ -194,7 +194,7 @@ IRNode* ir_emit_softmax(IRGraph* graph, IRValue* x, i32 batch, i32 dim) {
  * Tape -> IR Lowering
  * ==========================================================================*/
 
-IRGraph* tape_to_ir(Tape* tape, Arena* ir_arena) {
+IRGraph* tape_to_ir(Tape* tape, TensorArena* ir_arena) {
     if (!tape || tape->count == 0) return NULL;
 
     IRGraph* graph = ir_graph_create(ir_arena);
@@ -205,7 +205,7 @@ IRGraph* tape_to_ir(Tape* tape, Arena* ir_arena) {
      * We use a simple linear scan since tape tensors are small-numbered.
      */
     i32 max_tensors = tape->tensor_count;
-    IRValue** tensor_map = (IRValue**)arena_alloc(ir_arena,
+    IRValue** tensor_map = (IRValue**)tensor_arena_alloc(ir_arena,
         max_tensors * sizeof(IRValue*), 8);
     if (!tensor_map) return NULL;
     memset(tensor_map, 0, max_tensors * sizeof(IRValue*));

@@ -222,11 +222,11 @@ void transformer_forward_checkpointed(TransformerModel* model,
     i32 hidden_dim = model->hidden_dim;
 
     /* Embedding. */
-    Tensor* x = arena_alloc_tensor(mem->activations, 3,
+    Tensor* x = tensor_arena_alloc_tensor(mem->activations, 3,
                                     (i32[]){batch, seq_len, hidden_dim});
     embeddings_forward(model->embeddings, token_ids, batch, seq_len, x);
 
-    Tensor* block_out = arena_alloc_tensor(mem->activations, 3,
+    Tensor* block_out = tensor_arena_alloc_tensor(mem->activations, 3,
                                             (i32[]){batch, seq_len, hidden_dim});
 
     for (i32 i = 0; i < model->num_layers; i++) {
@@ -254,7 +254,7 @@ void transformer_forward_checkpointed(TransformerModel* model,
     }
 
     /* Final LayerNorm. */
-    Tensor* ln_out = arena_alloc_tensor(mem->activations, 3,
+    Tensor* ln_out = tensor_arena_alloc_tensor(mem->activations, 3,
                                          (i32[]){batch, seq_len, hidden_dim});
     layernorm_f32(x->data, model->ln_final_gamma->data, model->ln_final_beta->data,
                   ln_out->data, batch * seq_len, hidden_dim, 1e-5f);
@@ -282,11 +282,11 @@ void grad_checkpoint_recompute(TransformerModel* model,
     i32     seq_len = saved->shape[1];
 
     /* Copy checkpoint input into a scratch activation tensor. */
-    Tensor* x = arena_alloc_tensor(mem->activations, 3,
+    Tensor* x = tensor_arena_alloc_tensor(mem->activations, 3,
                                     (i32[]){batch, seq_len, hidden_dim});
     tensor_copy(saved, x);
 
-    Tensor* tmp_out = arena_alloc_tensor(mem->activations, 3,
+    Tensor* tmp_out = tensor_arena_alloc_tensor(mem->activations, 3,
                                           (i32[]){batch, seq_len, hidden_dim});
 
     /* Re-run layers from layer_start up to (but not including) layer_end. */

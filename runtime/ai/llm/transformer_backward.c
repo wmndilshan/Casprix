@@ -102,29 +102,29 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
     (void)gt_pos_emb;
 
     /* Per-layer parameters */
-    GradTensor** gt_Wq = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_Wq = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_Wk = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_Wk = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_Wv = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_Wv = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_Wo = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_Wo = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_W1 = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_W1 = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_b1 = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_b1 = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_W2 = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_W2 = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_b2 = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_b2 = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_ln1g = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_ln1g = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_ln1b = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_ln1b = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_ln2g = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_ln2g = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_ln2b = (GradTensor**)arena_alloc(mem->grad_cache,
+    GradTensor** gt_ln2b = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
         num_layers * sizeof(GradTensor*), 8);
 
     for (i32 i = 0; i < num_layers; i++) {
@@ -159,7 +159,7 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
     /* Add positional embeddings manually */
     /* pos_embedding is [max_seq_len, hidden_dim], we need [seq_len, hidden_dim] */
     /* Create a view/slice of pos_embedding for current seq_len */
-    Tensor* pos_slice = arena_alloc_tensor(mem->grad_cache, 2,
+    Tensor* pos_slice = tensor_arena_alloc_tensor(mem->grad_cache, 2,
                                             (i32[]){BS, hidden_dim});
     for (i32 b = 0; b < batch; b++) {
         for (i32 s = 0; s < seq_len; s++) {

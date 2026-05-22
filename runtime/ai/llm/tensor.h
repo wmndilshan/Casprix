@@ -37,13 +37,13 @@ typedef struct Tensor {
     bool   owns_memory;       // If true, tensor owns data and will free it
 } Tensor;
 
-// Arena allocator for per-step memory
-typedef struct Arena {
+// TensorArena allocator for per-step memory
+typedef struct TensorArena {
     u8*    buffer;            // Pre-allocated memory pool
     size_t capacity;          // Total size in bytes
     size_t offset;            // Current allocation offset
     size_t peak_usage;        // Peak memory usage (for profiling)
-} Arena;
+} TensorArena;
 
 // Memory pools for training
 typedef struct MemoryPools {
@@ -53,8 +53,8 @@ typedef struct MemoryPools {
     i32      num_params;
     
     // Per-step arenas (reset after each step)
-    Arena*   activations;     // Forward pass activations
-    Arena*   grad_cache;      // Backward pass gradients
+    TensorArena*   activations;     // Forward pass activations
+    TensorArena*   grad_cache;      // Backward pass gradients
     
     // Optimizer state
     Tensor** adam_m;          // First moment
@@ -65,19 +65,19 @@ typedef struct MemoryPools {
 // ===== ARENA ALLOCATOR =====
 
 // Create arena with specified capacity
-Arena* arena_create(size_t capacity);
+TensorArena* tensor_tensor_arena_create(size_t capacity);
 
 // Allocate aligned memory from arena
-void* arena_alloc(Arena* arena, size_t size, size_t alignment);
+void* tensor_tensor_arena_alloc(TensorArena* arena, size_t size, size_t alignment);
 
 // Allocate tensor from arena
-Tensor* arena_alloc_tensor(Arena* arena, i32 ndim, const i32* shape);
+Tensor* tensor_tensor_arena_alloc_tensor(TensorArena* arena, i32 ndim, const i32* shape);
 
 // Reset arena (reuse memory)
-void arena_reset(Arena* arena);
+void tensor_tensor_arena_reset(TensorArena* arena);
 
 // Destroy arena
-void arena_destroy(Arena* arena);
+void tensor_tensor_arena_destroy(TensorArena* arena);
 
 // ===== TENSOR OPERATIONS =====
 

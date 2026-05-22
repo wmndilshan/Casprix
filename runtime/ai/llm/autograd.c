@@ -16,7 +16,7 @@
  * ==========================================================================*/
 
 static GradTensor* tape_alloc_grad_tensor(Tape* tape) {
-    GradTensor* gt = (GradTensor*)arena_alloc(tape->arena, sizeof(GradTensor), 8);
+    GradTensor* gt = (GradTensor*)tensor_arena_alloc(tape->arena, sizeof(GradTensor), 8);
     if (!gt) return NULL;
     memset(gt, 0, sizeof(GradTensor));
     gt->id = tape->next_tensor_id++;
@@ -24,7 +24,7 @@ static GradTensor* tape_alloc_grad_tensor(Tape* tape) {
     /* Track it */
     if (tape->tensor_count >= tape->tensor_capacity) {
         i32 new_cap = tape->tensor_capacity * 2;
-        GradTensor** new_arr = (GradTensor**)arena_alloc(
+        GradTensor** new_arr = (GradTensor**)tensor_arena_alloc(
             tape->arena, new_cap * sizeof(GradTensor*), 8);
         if (!new_arr) return NULL;
         memcpy(new_arr, tape->tensors, tape->tensor_count * sizeof(GradTensor*));
@@ -38,7 +38,7 @@ static GradTensor* tape_alloc_grad_tensor(Tape* tape) {
 static TapeEntry* tape_alloc_entry(Tape* tape) {
     if (tape->count >= tape->capacity) {
         i32 new_cap = tape->capacity * 2;
-        TapeEntry* new_arr = (TapeEntry*)arena_alloc(
+        TapeEntry* new_arr = (TapeEntry*)tensor_arena_alloc(
             tape->arena, new_cap * sizeof(TapeEntry), 8);
         if (!new_arr) return NULL;
         memcpy(new_arr, tape->entries, tape->count * sizeof(TapeEntry));
@@ -52,7 +52,7 @@ static TapeEntry* tape_alloc_entry(Tape* tape) {
 
 /* Allocate a tensor from the tape's arena */
 static Tensor* tape_alloc_tensor(Tape* tape, i32 ndim, const i32* shape) {
-    return arena_alloc_tensor(tape->arena, ndim, shape);
+    return tensor_arena_alloc_tensor(tape->arena, ndim, shape);
 }
 
 /* Clone tensor data into arena (for saving forward values) */
@@ -91,8 +91,8 @@ static void grad_accumulate(f32* dst, const f32* src, i32 n) {
  * Tape Lifecycle
  * ==========================================================================*/
 
-Tape* tape_create(Arena* arena) {
-    Tape* tape = (Tape*)arena_alloc(arena, sizeof(Tape), 8);
+Tape* tape_create(TensorArena* arena) {
+    Tape* tape = (Tape*)tensor_arena_alloc(arena, sizeof(Tape), 8);
     if (!tape) return NULL;
     memset(tape, 0, sizeof(Tape));
 
@@ -102,11 +102,11 @@ Tape* tape_create(Arena* arena) {
 
     /* Pre-allocate entry and tensor arrays */
     tape->capacity = TAPE_INITIAL_CAPACITY;
-    tape->entries = (TapeEntry*)arena_alloc(arena,
+    tape->entries = (TapeEntry*)tensor_arena_alloc(arena,
         tape->capacity * sizeof(TapeEntry), 8);
 
     tape->tensor_capacity = TAPE_INITIAL_TENSORS;
-    tape->tensors = (GradTensor**)arena_alloc(arena,
+    tape->tensors = (GradTensor**)tensor_arena_alloc(arena,
         tape->tensor_capacity * sizeof(GradTensor*), 8);
 
     if (!tape->entries || !tape->tensors) return NULL;
@@ -143,7 +143,7 @@ void tape_reset(Tape* tape) {
     tape->tensor_count = 0;
     tape->next_tensor_id = 0;
     tape->recording = false;
-    /* Arena is reset externally by the caller (arena_reset) */
+    /* TensorArena is reset externally by the caller (tensor_arena_reset) */
 }
 
 /* ============================================================================

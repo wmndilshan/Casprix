@@ -249,7 +249,7 @@ i32 ir_memory_plan(IRGraph* graph) {
     }
 
     /* Build last-use table: for each value id, track the latest using node */
-    i32* last_use = (i32*)arena_alloc(graph->arena,
+    i32* last_use = (i32*)tensor_arena_alloc(graph->arena,
         graph->value_count * sizeof(i32), 4);
     if (!last_use) return 0;
 

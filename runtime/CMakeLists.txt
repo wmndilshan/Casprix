@@ -100,3 +100,5 @@ else()
         C_STANDARD_REQUIRED ON
     )
 endif()
+
+add_subdirectory(net2)

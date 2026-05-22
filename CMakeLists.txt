@@ -246,7 +246,7 @@ endif()
 # ============================================================================
 
 if(BUILD_RUNTIME)
-    set(RUNTIME_SOURCES runtime/runtime.c)
+    set(RUNTIME_SOURCES runtime/runtime.c ${SUPPORT_SOURCES})
 
     # CVM interpreter + JIT bridge (register-based MIR VM)
     foreach(_f cvm_engine jit_bridge)
@@ -385,6 +385,8 @@ if(BUILD_RUNTIME)
 
     install(TARGETS casprix_runtime DESTINATION lib)
 endif()
+
+add_subdirectory(runtime/net2)
 
 # ============================================================================
 # Package manager

@@ -18,8 +18,8 @@
 
 // ===== ARENA ALLOCATOR =====
 
-Arena* arena_create(size_t capacity) {
-    Arena* arena = (Arena*)malloc(sizeof(Arena));
+TensorArena* tensor_arena_create(size_t capacity) {
+    TensorArena* arena = (TensorArena*)malloc(sizeof(TensorArena));
     if (!arena) return NULL;
     
     // Allocate aligned buffer
@@ -36,12 +36,12 @@ Arena* arena_create(size_t capacity) {
     return arena;
 }
 
-void* arena_alloc(Arena* arena, size_t size, size_t alignment) {
+void* tensor_arena_alloc(TensorArena* arena, size_t size, size_t alignment) {
     // Align offset
     size_t aligned_offset = (arena->offset + alignment - 1) & ~(alignment - 1);
     
     if (aligned_offset + size > arena->capacity) {
-        fprintf(stderr, "Arena out of memory: requested %llu bytes, only %llu available\n",
+        fprintf(stderr, "TensorArena out of memory: requested %llu bytes, only %llu available\n",
                 (unsigned long long)size, (unsigned long long)(arena->capacity - aligned_offset));
         return NULL;
     }
@@ -57,11 +57,11 @@ void* arena_alloc(Arena* arena, size_t size, size_t alignment) {
     return ptr;
 }
 
-Tensor* arena_alloc_tensor(Arena* arena, i32 ndim, const i32* shape) {
+Tensor* tensor_arena_alloc_tensor(TensorArena* arena, i32 ndim, const i32* shape) {
     assert(ndim > 0 && ndim <= MAX_TENSOR_DIM);
     
     // Allocate tensor struct from arena
-    Tensor* tensor = (Tensor*)arena_alloc(arena, sizeof(Tensor), 8);
+    Tensor* tensor = (Tensor*)tensor_arena_alloc(arena, sizeof(Tensor), 8);
     if (!tensor) return NULL;
     
     // Calculate total size
@@ -72,7 +72,7 @@ Tensor* arena_alloc_tensor(Arena* arena, i32 ndim, const i32* shape) {
     
     // Allocate data from arena
     size_t byte_size = total_elements * sizeof(f32);
-    tensor->data = (f32*)arena_alloc(arena, byte_size, TENSOR_ALIGNMENT);
+    tensor->data = (f32*)tensor_arena_alloc(arena, byte_size, TENSOR_ALIGNMENT);
     if (!tensor->data) {
         free(tensor);
         return NULL;
@@ -81,7 +81,7 @@ Tensor* arena_alloc_tensor(Arena* arena, i32 ndim, const i32* shape) {
     // Set metadata
     tensor->ndim = ndim;
     tensor->size = total_elements;
-    tensor->owns_memory = false; // Arena owns it
+    tensor->owns_memory = false; // TensorArena owns it
     
     // Copy shape and compute stride (row-major)
     i32 stride = 1;
@@ -94,11 +94,11 @@ Tensor* arena_alloc_tensor(Arena* arena, i32 ndim, const i32* shape) {
     return tensor;
 }
 
-void arena_reset(Arena* arena) {
+void tensor_arena_reset(TensorArena* arena) {
     arena->offset = 0;
 }
 
-void arena_destroy(Arena* arena) {
+void tensor_arena_destroy(TensorArena* arena) {
     if (arena) {
         aligned_free(arena->buffer);
         free(arena);
@@ -218,8 +218,8 @@ MemoryPools* mempool_create(i32 num_params, size_t activation_capacity, size_t g
     pool->adam_t = 0;
     
     // Create arenas
-    pool->activations = arena_create(activation_capacity);
-    pool->grad_cache = arena_create(grad_capacity);
+    pool->activations = tensor_arena_create(activation_capacity);
+    pool->grad_cache = tensor_arena_create(grad_capacity);
     
     bool params_ok = (num_params == 0) || (pool->params && pool->param_grads && pool->adam_m && pool->adam_v);
     
@@ -247,13 +247,13 @@ void mempool_destroy(MemoryPools* pool) {
     free(pool->adam_m);
     free(pool->adam_v);
     
-    arena_destroy(pool->activations);
-    arena_destroy(pool->grad_cache);
+    tensor_arena_destroy(pool->activations);
+    tensor_arena_destroy(pool->grad_cache);
     
     free(pool);
 }
 
 void mempool_reset_step(MemoryPools* pool) {
-    arena_reset(pool->activations);
-    arena_reset(pool->grad_cache);
+    tensor_arena_reset(pool->activations);
+    tensor_arena_reset(pool->grad_cache);
 }

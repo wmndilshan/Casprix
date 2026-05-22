@@ -110,8 +110,8 @@ typedef struct {
     i32 tensor_count;
     i32 tensor_capacity;
 
-    /* Arena for all allocations (zero GC) */
-    Arena* arena;
+    /* TensorArena for all allocations (zero GC) */
+    TensorArena* arena;
 
     /* State */
     bool recording;
@@ -123,7 +123,7 @@ typedef struct {
  * ==========================================================================*/
 
 /* Create a new tape using the given arena for all allocations */
-Tape* tape_create(Arena* arena);
+Tape* tape_create(TensorArena* arena);
 
 /* Begin recording operations */
 void tape_begin(Tape* tape);

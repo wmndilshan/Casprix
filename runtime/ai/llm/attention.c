@@ -5,7 +5,7 @@
  * Better Parallelism and Work Partitioning" (2023).
  *
  * This file implements the tiled forward pass only.  No backward pass.
- * All scratch memory is drawn from the caller-supplied Arena; the caller is
+ * All scratch memory is drawn from the caller-supplied TensorArena; the caller is
  * responsible for resetting the arena between training steps.
  *
  * Layout (row-major):
@@ -57,7 +57,7 @@ void cpx_attention_flash2(
     float*       out,
     int batch, int heads, int seq_len, int head_dim,
     float scale,
-    Arena* arena)
+    TensorArena* arena)
 {
     /* ---- preconditions ---- */
     assert(Q       != NULL);
@@ -80,15 +80,15 @@ void cpx_attention_flash2(
 
                 /* o_tile[Tq, head_dim] – accumulated output, starts at zero */
                 size_t o_bytes = (size_t)Tq * (size_t)head_dim * sizeof(float);
-                float* o_tile  = (float*)arena_alloc(arena, o_bytes, 64);
+                float* o_tile  = (float*)tensor_arena_alloc(arena, o_bytes, 64);
                 memset(o_tile, 0, o_bytes);
 
                 /* l_tile[Tq] – running softmax denominator, starts at zero */
-                float* l_tile = (float*)arena_alloc(arena, (size_t)Tq * sizeof(float), 64);
+                float* l_tile = (float*)tensor_arena_alloc(arena, (size_t)Tq * sizeof(float), 64);
                 for (int i = 0; i < Tq; i++) l_tile[i] = 0.0f;
 
                 /* m_tile[Tq] – running row-wise maximum, starts at -inf */
-                float* m_tile = (float*)arena_alloc(arena, (size_t)Tq * sizeof(float), 64);
+                float* m_tile = (float*)tensor_arena_alloc(arena, (size_t)Tq * sizeof(float), 64);
                 for (int i = 0; i < Tq; i++) m_tile[i] = -1e38f; /* −∞ approx */
 
                 /* Inner loop: tile over key/value positions. */
@@ -99,7 +99,7 @@ void cpx_attention_flash2(
 
                     /* ---- S[Tq, Tkv] = Q_tile × K_tile^T / scale ---- */
                     size_t s_bytes = (size_t)Tq * (size_t)Tkv * sizeof(float);
-                    float* S = (float*)arena_alloc(arena, s_bytes, 64);
+                    float* S = (float*)tensor_arena_alloc(arena, s_bytes, 64);
 
                     /* Compute S = Q_tile * K_tile^T, then divide by scale.
                      * We do this with a plain scalar triple loop to stay
@@ -219,7 +219,7 @@ void cpx_attention_gqa(
     float*       out,
     int batch, int num_q_heads, int num_kv_heads,
     int seq_len, int head_dim, float scale,
-    Arena* arena)
+    TensorArena* arena)
 {
     assert(Q   != NULL);
     assert(K   != NULL);
@@ -243,8 +243,8 @@ void cpx_attention_gqa(
             float*       o_bh = out + ((size_t)(b * num_q_heads  + h_q)  * seq_len * head_dim);
 
             /* Scratch from arena — no malloc. */
-            float* K_T    = (float*)arena_alloc(arena, kt_bytes,     sizeof(float));
-            float* scores = (float*)arena_alloc(arena, scores_bytes, sizeof(float));
+            float* K_T    = (float*)tensor_arena_alloc(arena, kt_bytes,     sizeof(float));
+            float* scores = (float*)tensor_arena_alloc(arena, scores_bytes, sizeof(float));
 
             /* Transpose K_bh [seq_len, head_dim] → K_T [head_dim, seq_len]. */
             for (int s = 0; s < seq_len; s++)

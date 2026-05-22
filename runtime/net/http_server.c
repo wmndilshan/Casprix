@@ -12,6 +12,8 @@
  */
 
 #include "http_server.h"
+#include "../async/scheduler.h"
+#include "../async/coroutine.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -39,6 +41,9 @@ HttpServer* http_server_create(const char* bind_addr, uint16_t port) {
     server->middlewares = NULL;
     server->middleware_count = 0;
     server->running = false;
+    
+    // Create a worker pool with thread count equal to CPU cores
+    server->pool = pool_create(0); 
 
     return server;
 }
@@ -205,10 +210,20 @@ static void free_parsed_request(HttpRequest* req) {
 }
 
 /* ========================================================================
- * Client handler
+ * Client handler (Coroutine Entry)
  * ======================================================================== */
 
-static void handle_client(HttpServer* server, Socket* client) {
+typedef struct {
+    HttpServer* server;
+    Socket* client;
+} ClientContext;
+
+static void handle_client_coro(void* arg) {
+    ClientContext* ctx = (ClientContext*)arg;
+    HttpServer* server = ctx->server;
+    Socket* client = ctx->client;
+    free(ctx);
+
     char buffer[8192];
     int total = 0;
 
@@ -320,6 +335,22 @@ static void handle_client(HttpServer* server, Socket* client) {
     socket_destroy(client);
 }
 
+static void* handle_client_task(void* arg) {
+    ClientContext* ctx = (ClientContext*)arg;
+    
+    // Create a coroutine for this client
+    Coroutine* coro = coro_create(handle_client_coro, ctx, 0);
+    if (coro) {
+        // Run it immediately (in a real system, we'd add it to a run queue)
+        coro_switch(coro_current(), coro);
+        coro_destroy(coro);
+    } else {
+        socket_destroy(ctx->client);
+        free(ctx);
+    }
+    return NULL;
+}
+
 /* ========================================================================
  * Server listen loop
  * ======================================================================== */
@@ -351,13 +382,21 @@ bool http_server_listen(HttpServer* server) {
         return false;
     }
 
-    printf("HTTP Server listening on %s:%d\n", server->bind_addr, server->port);
+    printf("HTTP Server listening on %s:%d (Concurrent)\n", server->bind_addr, server->port);
     server->running = true;
 
     while (server->running) {
         Socket* client = socket_accept(server->listener);
         if (client) {
-            handle_client(server, client);
+            ClientContext* ctx = malloc(sizeof(ClientContext));
+            ctx->server = server;
+            ctx->client = client;
+            
+            // Dispatch to worker pool
+            if (!pool_submit(server->pool, handle_client_task, ctx)) {
+                socket_destroy(client);
+                free(ctx);
+            }
         }
     }
 
