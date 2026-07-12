@@ -954,10 +954,6 @@ int mir_verify_module(MirModule* module, FILE* diag) {
     return errors;
 }
 
-bool mir_validate_function(MirFunction* func) {
-    return mir_verify_function(func, stderr) == 0;
-}
-
 /* Statically detectable ownership-linearity violations: the same SSA value
  * is consumed (RC_DEC, MOVE, FREE, DROP) more than once on a straight-line
  * path within a single basic block. Cross-block flow requires the borrow
@@ -997,8 +993,4 @@ int mir_check_ownership_function(MirFunction* func, FILE* diag) {
         }
     }
     return errors;
-}
-
-bool mir_validate_module(MirModule* module) {
-    return mir_verify_module(module, stderr) == 0;
 }

@@ -44,6 +44,7 @@ const char* mir_output_format_name(MirOutputFormat fmt) {
 
 bool mir_backend_emit_module(MirBackend* backend, MirModule* module) {
     if (!backend || !module) return false;
+    if (!mir_validate_module(module)) return false;
 
     if (!backend->begin_module(backend, module)) {
         fprintf(stderr, "  [ERROR] Backend '%s': begin_module failed\n", backend->name);

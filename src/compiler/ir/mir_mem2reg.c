@@ -771,6 +771,7 @@ static void rename_block(MirFunction* func,
 
 int mir_mem2reg(MirFunction* func, MirMem2RegStats* stats) {
     if (!func || !func->entry_block) return 0;
+    (void)mir_validate_function(func);
 
     MirMem2RegStats local_stats = {0};
     if (!stats) stats = &local_stats;
@@ -904,6 +905,8 @@ int mir_mem2reg(MirFunction* func, MirMem2RegStats* stats) {
         free(promotable[a].def_blocks);
     }
     free(alloca_ctxs);
+
+    (void)mir_validate_function(func);
 
     return n_promotable;
 }

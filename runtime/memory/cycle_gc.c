@@ -8,67 +8,98 @@
 #include <stdio.h>
 
 
-/* ── Atomics for trial deletion ──────────────────────────────────────────────
- * The cycle collector performs a "trial deletion" phase that temporarily
- * decrements ref-counts to detect internal-only references.  This MUST use
- * the same atomic primitives as the mutator's arc_retain/arc_release so that
- * concurrent threads don't observe a torn ref-count.
- *
- * We re-use the ATOMIC_* macros from arc.h.
- * ─────────────────────────────────────────────────────────────────────────── */
+// --- Internal: trial deletion helpers ---
 
+static void cycle_mark_gray(void* obj);
+static void cycle_scan_live(void* obj);
+
+// Decrement trial count during mark phase
 static void cycle_scan_decrement(void* field_ptr) {
-    if (!field_ptr) return;
+    if (!field_ptr || arc_is_deallocating(field_ptr)) return;
     ArcHeader* header = arc_get_header(field_ptr);
     if (!header) return;
+    if (header->color == ARC_COLOR_GREEN) {
+        return;
+    }
 
-    int32_t after = ATOMIC_DEC(&header->strong_count);
-    if (after == 0) {
-        header->color = ARC_COLOR_WHITE;
-        if (header->scanner)
-            header->scanner(field_ptr, cycle_scan_decrement);
-    } else {
-        header->color = ARC_COLOR_GRAY;
+    if (header->strong_count <= 0) {
+        return;
+    }
+    header->strong_count--;
+    cycle_mark_gray(field_ptr);
+}
+
+static void cycle_mark_gray(void* obj) {
+    ArcHeader* header;
+
+    if (!obj || arc_is_deallocating(obj)) return;
+    header = arc_get_header(obj);
+    if (!header) return;
+    if (header->color == ARC_COLOR_GRAY || header->color == ARC_COLOR_GREEN) {
+        return;
+    }
+
+    header->color = ARC_COLOR_GRAY;
+    if (header->scanner) {
+        header->scanner(obj, cycle_scan_decrement);
     }
 }
 
+// Re-increment trial counts for objects that aren't garbage
 static void cycle_scan_restore(void* field_ptr) {
-    if (!field_ptr) return;
+    if (!field_ptr || arc_is_deallocating(field_ptr)) return;
     ArcHeader* header = arc_get_header(field_ptr);
     if (!header) return;
+    if (header->color == ARC_COLOR_BLACK || header->color == ARC_COLOR_GREEN) {
+        return;
+    }
 
-    ATOMIC_INC(&header->strong_count);
-    if (header->color != ARC_COLOR_GREEN) {
-        header->color = ARC_COLOR_BLACK;
-        if (header->scanner)
-            header->scanner(field_ptr, cycle_scan_restore);
+    header->strong_count++;
+    header->color = ARC_COLOR_BLACK;
+    if (header->scanner) {
+        header->scanner(field_ptr, cycle_scan_restore);
     }
 }
 
-/* Accumulator for objects freed by a single cycle_collect_white traversal.
-   Valid only inside cycle_gc_collect, which is non-reentrant (cc->collecting). */
-static int s_white_count;
+static void cycle_scan_live(void* obj) {
+    ArcHeader* header;
 
+    if (!obj || arc_is_deallocating(obj)) return;
+    header = arc_get_header(obj);
+    if (!header || header->color != ARC_COLOR_GRAY) return;
+
+    if (header->strong_count > 0) {
+        cycle_scan_restore(obj);
+        return;
+    }
+
+    header->color = ARC_COLOR_WHITE;
+    if (header->scanner) {
+        header->scanner(obj, cycle_scan_live);
+    }
+}
+
+// Track collected count during cycle collection
+static int g_cycle_collected_count = 0;
+
+// Collect white (garbage) objects found during scan
 static void cycle_collect_white(void* obj) {
     if (!obj) return;
     ArcHeader* header = arc_get_header(obj);
-    if (!header || header->color != ARC_COLOR_WHITE) return;
+    if (!header || arc_is_deallocating(obj)) return;
+    if (header->color != ARC_COLOR_WHITE) return;
 
+    // Mark as black to prevent re-collection
     header->color = ARC_COLOR_BLACK;
-    header->flags &= ~ARC_FLAG_BUFFERED;
 
-    if (header->scanner)
+    // Recurse into children first (collect deepest nodes first)
+    if (header->scanner) {
         header->scanner(obj, cycle_collect_white);
+    }
 
-    if ((header->flags & ARC_FLAG_HAS_DESTRUCTOR) && header->destructor)
-        header->destructor(obj);
-
-    /* Update ARC-level stats so leak reporter stays accurate —
-       cycle_collect_white bypasses arc_release, so we must notify manually. */
-    arc_notify_freed(header->size);
-
-    free(header);
-    s_white_count++;
+    if (arc_cycle_collect(obj)) {
+        g_cycle_collected_count++;
+    }
 }
 
 // --- Lifecycle ---
@@ -117,6 +148,8 @@ void cycle_gc_add_suspect(CycleCollector* cc, void* obj) {
 
     // Skip acyclic objects
     if (header->flags & ARC_FLAG_ACYCLIC) return;
+    if (arc_is_deallocating(obj)) return;
+    if (header->strong_count <= 0) return;
 
     // Skip objects without scanner (they can't form cycles)
     if (!header->scanner) return;
@@ -171,7 +204,8 @@ int cycle_gc_collect(CycleCollector* cc) {
         ArcHeader* header = arc_get_header(obj);
         if (!header) continue;
 
-        if (header->color == ARC_COLOR_PURPLE && header->strong_count > 0) {
+        if (!arc_is_deallocating(obj) &&
+            header->color == ARC_COLOR_PURPLE && header->strong_count > 0) {
             // Trial deletion: decrement reference counts of children
             header->color = ARC_COLOR_GRAY;
             if (header->scanner) {
@@ -196,16 +230,11 @@ int cycle_gc_collect(CycleCollector* cc) {
         ArcHeader* header = arc_get_header(obj);
         if (!header) continue;
 
-        if (header->strong_count > 0) {
-            // Object is reachable from outside the cycle - restore
-            header->color = ARC_COLOR_BLACK;
-            if (header->scanner) {
-                header->scanner(obj, cycle_scan_restore);
-            }
+        cycle_scan_live(obj);
+        if (header->color == ARC_COLOR_BLACK) {
             header->flags &= ~ARC_FLAG_BUFFERED;
             cc->suspects[i] = NULL;
         }
-        // Objects with strong_count == 0 after trial deletion are in cycles
     }
 
     // Phase 3: Collect white (garbage) objects
@@ -218,10 +247,11 @@ int cycle_gc_collect(CycleCollector* cc) {
 
         if (header->color == ARC_COLOR_WHITE || header->strong_count == 0) {
             cc->stats.cycles_found++;
-            s_white_count = 0;
+            g_cycle_collected_count = 0;
+            cc->stats.bytes_collected += header->size;
             cycle_collect_white(obj);
-            total_collected += s_white_count;
-            cc->stats.objects_collected += (size_t)s_white_count;
+            total_collected += g_cycle_collected_count;
+            cc->stats.objects_collected += (size_t)g_cycle_collected_count;
         }
 
         cc->suspects[i] = NULL;
