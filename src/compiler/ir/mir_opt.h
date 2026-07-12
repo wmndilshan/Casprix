@@ -54,4 +54,7 @@ int mir_pass_strength_reduce(MirFunction* func);
 int mir_pass_simplify_cfg(MirFunction* func);
 int mir_pass_arc_elision(MirFunction* func);
 
+/* Async transformation pass */
+int mir_transform_async(MirFunction* func);
+
 #endif /* MIR_OPT_H */

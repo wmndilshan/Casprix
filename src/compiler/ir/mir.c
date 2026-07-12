@@ -6,9 +6,11 @@
  */
 
 #include "mir.h"
+#include "mir_borrow.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <assert.h>
 
 /* ================================================================
@@ -386,7 +388,11 @@ MirFunction* mir_module_add_function(MirModule* module, const char* name,
     func->is_constexpr = false;
     func->is_extern = false;
 
-    /* Value type table — initialize before assigning parameter value IDs. */
+    /* Value type table — initial capacity.  Must be initialised BEFORE
+     * `mir_function_new_value` is ever called for this function (e.g.
+     * for parameter value IDs below); otherwise those entries get
+     * written into a zero-sized table and then silently clobbered when
+     * the table is replaced here. */
     func->value_type_capacity = 64;
     func->value_types = (MirType**)mir_arena_alloc(module->arena,
                          func->value_type_capacity * sizeof(MirType*));
@@ -531,16 +537,11 @@ MirValueId mir_function_new_value(MirFunction* func, MirType* type) {
 
     /* Grow value type table if needed */
     if ((int)id >= func->value_type_capacity) {
-        int new_cap = func->value_type_capacity ? func->value_type_capacity * 2 : 64;
-        while ((int)id >= new_cap) {
-            new_cap *= 2;
-        }
+        int new_cap = func->value_type_capacity * 2;
         MirType** new_types = (MirType**)mir_arena_alloc(func->parent->arena,
                                new_cap * sizeof(MirType*));
-        if (func->value_types && func->value_type_capacity > 0) {
-            memcpy(new_types, func->value_types,
-                   func->value_type_capacity * sizeof(MirType*));
-        }
+        memcpy(new_types, func->value_types,
+               func->value_type_capacity * sizeof(MirType*));
         func->value_types = new_types;
         func->value_type_capacity = new_cap;
     }
@@ -613,4 +614,383 @@ bool mir_block_is_terminated(MirBlock* block) {
         default:
             return false;
     }
+}
+
+/* ================================================================
+ * MIR Verification — contract checks between lowering and codegen
+ * ================================================================ */
+
+static void mir_verror(FILE* diag, const char* fmt, ...) {
+    if (!diag) return;
+    va_list ap;
+    va_start(ap, fmt);
+    fprintf(diag, "MIR_VERIFY: ");
+    vfprintf(diag, fmt, ap);
+    fprintf(diag, "\n");
+    va_end(ap);
+}
+
+static bool mir_vid_defined(MirFunction* func, MirValueId id) {
+    if (id == MIR_VALUE_NONE) return true;
+    return (int)id >= 0 && (int)id < (int)func->next_value_id;
+}
+
+static int mir_verify_value_ids_operand(FILE* diag, MirFunction* func,
+                                         MirValueId id, const char* ctx) {
+    if (id == MIR_VALUE_NONE) return 0;
+    if (!mir_vid_defined(func, id)) {
+        mir_verror(diag, "function @%s: undefined SSA value %%%u (%s)",
+                   func->name ? func->name : "?", (unsigned)id, ctx);
+        return 1;
+    }
+    if (!mir_function_value_type(func, id)) {
+        mir_verror(diag, "function @%s: missing type for value %%%u (%s)",
+                   func->name ? func->name : "?", (unsigned)id, ctx);
+        return 1;
+    }
+    return 0;
+}
+
+static int mir_verify_inst_value_ids(MirFunction* func, MirInst* inst, FILE* diag) {
+    int e = 0;
+    switch (inst->opcode) {
+        case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
+        case MIR_BAND: case MIR_BOR: case MIR_BXOR: case MIR_SHL: case MIR_SHR:
+        case MIR_USHR:
+        case MIR_CMP_EQ: case MIR_CMP_NE: case MIR_CMP_LT: case MIR_CMP_LE:
+        case MIR_CMP_GT: case MIR_CMP_GE:
+        case MIR_LOGIC_AND: case MIR_LOGIC_OR:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.binary.lhs, "binary lhs");
+            e += mir_verify_value_ids_operand(diag, func, inst->as.binary.rhs, "binary rhs");
+            break;
+        case MIR_NEG: case MIR_FNEG: case MIR_BNOT: case MIR_LOGIC_NOT:
+        case MIR_CAST: case MIR_BITCAST: case MIR_TRUNC:
+        case MIR_ZEXT: case MIR_SEXT: case MIR_SITOFP: case MIR_FPTOSI:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.unary.operand, "unary");
+            break;
+        case MIR_LOAD:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.mem.ptr, "load ptr");
+            break;
+        case MIR_STORE:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.mem.ptr, "store ptr");
+            e += mir_verify_value_ids_operand(diag, func, inst->as.mem.value, "store val");
+            break;
+        case MIR_GET_FIELD_PTR:
+        case MIR_GET_ELEM_PTR:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.gep.base, "gep base");
+            e += mir_verify_value_ids_operand(diag, func, inst->as.gep.index, "gep index");
+            break;
+        case MIR_CONDBR:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.condbr.cond, "cond");
+            break;
+        case MIR_RET:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.ret.value, "ret val");
+            break;
+        case MIR_SWITCH:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.sw.discriminant, "switch disc");
+            break;
+        case MIR_CALL:
+        case MIR_CALL_INDIRECT:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.call.callee, "call callee");
+            for (int i = 0; i < inst->as.call.n_args; i++) {
+                e += mir_verify_value_ids_operand(diag, func, inst->as.call.args[i], "call arg");
+            }
+            break;
+        case MIR_CALL_VIRTUAL:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.vcall.self_obj, "vcall self");
+            for (int i = 0; i < inst->as.vcall.n_args; i++) {
+                e += mir_verify_value_ids_operand(diag, func, inst->as.vcall.args[i], "vcall arg");
+            }
+            break;
+        case MIR_PHI:
+            for (int i = 0; i < inst->as.phi.n_edges; i++) {
+                e += mir_verify_value_ids_operand(diag, func, inst->as.phi.edges[i].value, "phi edge");
+            }
+            break;
+        case MIR_COPY: case MIR_BORROW: case MIR_BORROW_MUT: case MIR_MOVE:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.transfer.source, "transfer src");
+            break;
+        case MIR_ARC_RETAIN: case MIR_ARC_RELEASE: case MIR_DROP:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.refop.ptr, "refop ptr");
+            break;
+        case MIR_STRUCT_INIT:
+            for (int i = 0; i < inst->as.struct_init.n_fields; i++) {
+                e += mir_verify_value_ids_operand(diag, func, inst->as.struct_init.fields[i], "struct field");
+            }
+            break;
+        case MIR_EXTRACT:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.field_op.aggregate, "extract agg");
+            break;
+        case MIR_INSERT:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.field_op.aggregate, "insert agg");
+            e += mir_verify_value_ids_operand(diag, func, inst->as.field_op.insert_val, "insert val");
+            break;
+        case MIR_SUSPEND:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.suspend.future, "suspend future");
+            break;
+        case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+        case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+        case MIR_VEC_BROADCAST: case MIR_VEC_REDUCE_SUM:
+        case MIR_VEC_ADD: case MIR_VEC_SUB: case MIR_VEC_MUL: case MIR_VEC_DIV:
+        case MIR_VEC_MIN: case MIR_VEC_MAX:
+        case MIR_VEC_AND: case MIR_VEC_OR:  case MIR_VEC_XOR:
+        case MIR_VEC_FMA: case MIR_VEC_DOT:
+        case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT: case MIR_VEC_CMP_GT:
+        case MIR_VEC_SELECT:
+            e += mir_verify_value_ids_operand(diag, func, inst->as.vec.a, "vec a");
+            e += mir_verify_value_ids_operand(diag, func, inst->as.vec.b, "vec b");
+            e += mir_verify_value_ids_operand(diag, func, inst->as.vec.c, "vec c");
+            break;
+        default:
+            break;
+    }
+    return e;
+}
+
+static int mir_verify_inst_types(MirFunction* func, MirInst* inst, FILE* diag) {
+    int e = 0;
+    switch (inst->opcode) {
+        case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
+        case MIR_BAND: case MIR_BOR: case MIR_BXOR: case MIR_SHL: case MIR_SHR:
+        case MIR_USHR: {
+            MirType* a = mir_function_value_type(func, inst->as.binary.lhs);
+            MirType* b = mir_function_value_type(func, inst->as.binary.rhs);
+            if (a && b && (!mir_type_is_integer(a) || !mir_type_is_integer(b))) {
+                mir_verror(diag, "@%s: integer opcode %d with non-integer operand type",
+                           func->name ? func->name : "?", (int)inst->opcode);
+                e++;
+            }
+            break;
+        }
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: {
+            MirType* a = mir_function_value_type(func, inst->as.binary.lhs);
+            MirType* b = mir_function_value_type(func, inst->as.binary.rhs);
+            if (a && b && (!mir_type_is_float(a) || !mir_type_is_float(b))) {
+                mir_verror(diag, "@%s: float opcode %d with non-float operand type",
+                           func->name ? func->name : "?", (int)inst->opcode);
+                e++;
+            }
+            break;
+        }
+        /* LOAD / STORE pointee vs value typing is not always mirrored 1:1 in
+         * lowered MIR (e.g. method lowering, wide stores).  Operand SSA ids are
+         * still checked in mir_verify_inst_value_ids. */
+        case MIR_LOAD:
+        case MIR_STORE:
+            break;
+        case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+        case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+        case MIR_VEC_BROADCAST: case MIR_VEC_REDUCE_SUM:
+        case MIR_VEC_ADD: case MIR_VEC_SUB: case MIR_VEC_MUL: case MIR_VEC_DIV:
+        case MIR_VEC_MIN: case MIR_VEC_MAX:
+        case MIR_VEC_AND: case MIR_VEC_OR:  case MIR_VEC_XOR:
+        case MIR_VEC_FMA: case MIR_VEC_DOT:
+        case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT: case MIR_VEC_CMP_GT:
+        case MIR_VEC_SELECT: {
+            MirType* lt = inst->as.vec.lane_type;
+            if (!lt || inst->as.vec.width < 0) {
+                mir_verror(diag, "@%s: VEC_* missing lane_type or invalid width",
+                           func->name ? func->name : "?");
+                e++;
+            } else if (!mir_type_is_integer(lt) && !mir_type_is_float(lt)) {
+                mir_verror(diag, "@%s: VEC_* lane_type must be scalar primitive",
+                           func->name ? func->name : "?");
+                e++;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return e;
+}
+
+static void mir_collect_term_succs(MirInst* t, MirBlock** buf, int* n, int cap) {
+    if (!t || *n >= cap) return;
+    switch (t->opcode) {
+        case MIR_BR:
+            if (t->as.br.target) buf[(*n)++] = t->as.br.target;
+            break;
+        case MIR_CONDBR:
+            if (t->as.condbr.true_bb)  buf[(*n)++] = t->as.condbr.true_bb;
+            if (t->as.condbr.false_bb) buf[(*n)++] = t->as.condbr.false_bb;
+            break;
+        case MIR_SWITCH:
+            for (int i = 0; i < t->as.sw.n_cases && *n < cap; i++) {
+                if (t->as.sw.targets[i]) buf[(*n)++] = t->as.sw.targets[i];
+            }
+            if (*n < cap && t->as.sw.default_bb)
+                buf[(*n)++] = t->as.sw.default_bb;
+            break;
+        default:
+            break;
+    }
+}
+
+static int mir_verify_cfg_reachable(MirFunction* func, FILE* diag) {
+    int nbl = func->block_count;
+    if (nbl <= 0) return 0;
+
+    bool* seen = (bool*)calloc((size_t)nbl, sizeof(bool));
+    if (!seen) return 0;
+
+    MirBlock** q = (MirBlock**)malloc((size_t)nbl * sizeof(MirBlock*));
+    if (!q) { free(seen); return 0; }
+
+    int qh = 0, qt = 0;
+    if (func->entry_block) {
+        q[qt++] = func->entry_block;
+        seen[func->entry_block->id] = true;
+    }
+
+    MirBlock* succ_buf[64];
+    while (qh < qt) {
+        MirBlock* cur = q[qh++];
+        MirInst* term = cur->last;
+        int ns = 0;
+        mir_collect_term_succs(term, succ_buf, &ns, 64);
+        for (int i = 0; i < ns; i++) {
+            MirBlock* s = succ_buf[i];
+            if (!s) continue;
+            if (s->id < (uint32_t)nbl && !seen[s->id]) {
+                seen[s->id] = true;
+                q[qt++] = s;
+            }
+        }
+    }
+    free(q);
+
+    int err = 0;
+    for (MirBlock* b = func->block_list; b; b = b->next_block) {
+        if (b->id < (uint32_t)nbl && !seen[b->id]) {
+            mir_verror(diag, "@%s: orphaned basic block bb%u (%s) (not reachable from entry)",
+                       func->name ? func->name : "?", b->id,
+                       b->label ? b->label : "?");
+            err++;
+        }
+    }
+    free(seen);
+    return err;
+}
+
+static int mir_verify_block_shape(MirFunction* func, MirBlock* block, FILE* diag) {
+    int errors = 0;
+    if (!mir_block_is_terminated(block)) {
+        mir_verror(diag, "@%s: bb%u (%s) is not terminated",
+                   func->name ? func->name : "?", block->id,
+                   block->label ? block->label : "?");
+        errors++;
+    }
+    bool past_phis = false;
+    for (MirInst* inst = block->first; inst; inst = inst->next) {
+        if (inst->opcode == MIR_PHI) {
+            if (past_phis) {
+                mir_verror(diag, "@%s: bb%u has PHI after non-PHI instruction",
+                           func->name ? func->name : "?", block->id);
+                errors++;
+            }
+        } else {
+            past_phis = true;
+        }
+        bool is_term = (inst->opcode == MIR_BR || inst->opcode == MIR_CONDBR ||
+                        inst->opcode == MIR_SWITCH || inst->opcode == MIR_RET ||
+                        inst->opcode == MIR_RET_VOID || inst->opcode == MIR_UNREACHABLE);
+        if (is_term && inst->next != NULL) {
+            mir_verror(diag, "@%s: bb%u has instructions after terminator",
+                       func->name ? func->name : "?", block->id);
+            errors++;
+        }
+    }
+    for (MirInst* inst = block->first; inst && inst->opcode == MIR_PHI; inst = inst->next) {
+        if (inst->as.phi.n_edges != block->pred_count) {
+            mir_verror(diag, "@%s: bb%u phi %%%u has %d edges but %d predecessors",
+                       func->name ? func->name : "?", block->id,
+                       inst->result, inst->as.phi.n_edges, block->pred_count);
+            errors++;
+        }
+    }
+    return errors;
+}
+
+int mir_verify_function(MirFunction* func, FILE* diag) {
+    int errors = 0;
+    if (!func || func->is_extern) return 0;
+
+    if (!func->entry_block) {
+        mir_verror(diag, "function @%s has no entry block", func->name ? func->name : "?");
+        return 1;
+    }
+    if (func->entry_block->pred_count > 0) {
+        mir_verror(diag, "function @%s entry block has predecessors", func->name ? func->name : "?");
+        errors++;
+    }
+
+    for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
+        errors += mir_verify_block_shape(func, bb, diag);
+        for (MirInst* inst = bb->first; inst; inst = inst->next) {
+            errors += mir_verify_inst_value_ids(func, inst, diag);
+            errors += mir_verify_inst_types(func, inst, diag);
+        }
+    }
+    errors += mir_verify_cfg_reachable(func, diag);
+    return errors;
+}
+
+int mir_verify_module(MirModule* module, FILE* diag) {
+    if (!module) return 0;
+    int errors = 0;
+    for (MirFunction* f = module->func_list; f; f = f->next_func) {
+        errors += mir_verify_function(f, diag);
+    }
+    MirBorrowChecker bc;
+    mir_borrow_init(&bc, module);
+    int berr = mir_borrow_check_module(&bc, module);
+    if (berr > 0) {
+        if (diag) mir_borrow_print_errors(&bc, diag);
+        errors += berr;
+    }
+    mir_borrow_destroy(&bc);
+    return errors;
+}
+
+/* Statically detectable ownership-linearity violations: the same SSA value
+ * is consumed (RC_DEC, MOVE, FREE, DROP) more than once on a straight-line
+ * path within a single basic block. Cross-block flow requires the borrow
+ * checker; this catches the obvious in-block double-consume that any
+ * optimiser pass might introduce by accident. */
+int mir_check_ownership_function(MirFunction* func, FILE* diag) {
+    int errors = 0;
+    if (!func || func->is_extern) return 0;
+
+    for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
+        for (MirInst* a = bb->first; a; a = a->next) {
+            MirValueId consumed = MIR_VALUE_NONE;
+            switch (a->opcode) {
+                case MIR_ARC_RELEASE: consumed = a->as.unary.operand; break;
+                case MIR_MOVE:        consumed = a->as.unary.operand; break;
+                case MIR_DROP:        consumed = a->as.unary.operand; break;
+                default: break;
+            }
+            if (consumed == MIR_VALUE_NONE) continue;
+
+            for (MirInst* b = a->next; b; b = b->next) {
+                MirValueId other = MIR_VALUE_NONE;
+                switch (b->opcode) {
+                    case MIR_ARC_RELEASE: other = b->as.unary.operand; break;
+                    case MIR_MOVE:        other = b->as.unary.operand; break;
+                    case MIR_DROP:        other = b->as.unary.operand; break;
+                    default: break;
+                }
+                if (other == consumed) {
+                    mir_verror(diag,
+                        "@%s: bb%u value %%%u consumed twice (linearity)",
+                        func->name ? func->name : "?", bb->id, consumed);
+                    errors++;
+                    break;
+                }
+            }
+        }
+    }
+    return errors;
 }

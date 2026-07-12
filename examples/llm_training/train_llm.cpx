@@ -1,0 +1,359 @@
+// =============================================================================
+// Casprix LLM Pre-Training — Main Entry Point
+//
+// This script orchestrates the full pre-training pipeline on TinyStories:
+//
+//   Phase 1: BPE Tokenizer Training
+//     - Train a 32K vocabulary BPE tokenizer from raw TinyStories text
+//     - Save vocab + merge rules to disk
+//
+//   Phase 2: Dataset Preparation
+//     - Encode the TinyStories corpus with the trained tokenizer
+//     - Save binary shards
+//
+//   Phase 3: Model Initialization
+//     - Instantiate a small GPT-2 style transformer (Tiny model: ~15M params)
+//     - Initialize AdamW optimizer with cosine learning rate schedule
+//
+//   Phase 4: Pre-Training Loop
+//     - For each step: load batch -> forward pass -> backward pass -> optimizer step
+//     - Log training loss, val loss, learning rate every N steps
+//     - Save checkpoints periodically
+//
+// Usage (once compiler supports full pipeline):
+//   cpx run examples/llm_training/train_llm.cpx
+//
+// Expected data layout:
+//   data/tinystories_train.txt      - raw training text (download from HuggingFace)
+//   data/tinystories_val.txt        - raw validation text
+//   data/tok32k.bin                 - trained tokenizer (output of Phase 1)
+//   data/train_shard_*.bin          - tokenized training shards (output of Phase 2)
+//   data/val_shard_*.bin            - tokenized val shards
+//   checkpoints/model_step_*.bin    - model checkpoints
+//
+// All syntax follows the CORRECT modern Casprix grammar:
+//   let name: type = value        (immutable)
+//   mut name: type = value        (mutable)
+//   for (i: i32 = 0; i < n; i = i + 1)
+//   class fields: public let / public mut
+//   extern func name(p: type) -> type
+// =============================================================================
+
+import "lib/std/ai/llm"
+
+// ---------------------------------------------------------------------------
+// Additional FFI: timing, printing helpers
+// ---------------------------------------------------------------------------
+
+extern func get_time_ms() -> i32
+extern func print_f32(val: f32) -> void
+extern func print_loss_log(step: i32, loss: f32, lr: f32, dt_ms: i32) -> void
+
+
+
+// ---------------------------------------------------------------------------
+// TrainingConfig: all training hyperparameters
+// ---------------------------------------------------------------------------
+
+class TrainingConfig {
+    // Data
+    public mut train_data_prefix: string
+    public mut val_data_prefix: string
+    public mut raw_train_text: string
+    public mut raw_val_text: string
+    public mut tokenizer_path: string
+    public mut checkpoint_dir: string
+
+    // Tokenizer
+    public mut base_vocab_size: i32
+    public mut target_vocab_size: i32
+
+    // Batching
+    public mut batch_size: i32
+    public mut seq_len: i32
+
+    // Optimization
+    public mut max_lr: f32
+    public mut min_lr: f32
+    public mut warmup_steps: i32
+    public mut total_steps: i32
+    public mut beta1: f32
+    public mut beta2: f32
+    public mut epsilon: f32
+    public mut weight_decay: f32
+    public mut grad_clip: f32
+
+    // Logging / checkpointing
+    public mut log_interval: i32
+    public mut val_interval: i32
+    public mut val_steps: i32
+    public mut save_interval: i32
+
+    public func new() -> void {
+        // Data paths
+        this.raw_train_text = "data/tinystories_train.txt"
+        this.raw_val_text = "data/tinystories_val.txt"
+        this.tokenizer_path = "data/tok32k.bin"
+        this.train_data_prefix = "data/train_shard"
+        this.val_data_prefix = "data/val_shard"
+        this.checkpoint_dir = "checkpoints"
+
+        // Tokenizer: 256 byte base + merges up to 32K
+        this.base_vocab_size = 256
+        this.target_vocab_size = 32000
+
+        // Training batch: 64 sequences of 256 tokens each = 16K tokens/step
+        this.batch_size = 64
+        this.seq_len = 256
+
+        // Learning rate: cosine decay from 3e-4 to 3e-5
+        this.max_lr = 0.0003
+        this.min_lr = 0.00003
+        this.warmup_steps = 100
+        this.total_steps = 1050      // A realistic epoch test scale
+
+        // AdamW hyperparameters (GPT-2 defaults)
+        this.beta1 = 0.9
+        this.beta2 = 0.95
+        this.epsilon = 0.00000001     // 1e-8
+        this.weight_decay = 0.1
+        this.grad_clip = 1.0
+
+        // Logging and checkpointing
+        this.log_interval = 50
+        this.val_interval = 250
+        this.val_steps = 20
+        this.save_interval = 500
+    }
+
+    // Quick config for testing (50 steps)
+    public func make_tiny_run() -> void {
+        this.total_steps = 50
+        this.val_steps = 5
+        this.log_interval = 5
+        this.val_interval = 25
+        this.save_interval = 50
+        this.batch_size = 4
+        this.seq_len = 64
+        print("Using tiny test run config (50 steps).")
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Phase 1: Train BPE Tokenizer
+// ---------------------------------------------------------------------------
+
+func train_tokenizer(cfg: TrainingConfig) -> void {
+    print("")
+    print("=== Phase 1: BPE Tokenizer Training ===")
+
+    let tok: Tokenizer = new Tokenizer(cfg.target_vocab_size)
+    tok.train(cfg.raw_train_text, cfg.target_vocab_size)
+    tok.save(cfg.tokenizer_path)
+    tok.destroy()
+
+    print("Tokenizer training complete.")
+}
+
+
+// ---------------------------------------------------------------------------
+// Phase 2: Tokenize and shard the corpus
+// ---------------------------------------------------------------------------
+
+func prepare_dataset(cfg: TrainingConfig) -> void {
+    print("")
+    print("=== Phase 2: Tokenizing TinyStories Corpus ===")
+
+    let shard_size: i32 = 10000000   // 10M tokens per shard
+
+    print("Encoding training set...")
+    let train_shards: i32 = encode_to_shards(
+        cfg.tokenizer_path,
+        cfg.raw_train_text,
+        cfg.train_data_prefix,
+        shard_size
+    )
+    print("Training shards created:")
+    print(train_shards)
+
+    print("Encoding validation set...")
+    let val_shards: i32 = encode_to_shards(
+        cfg.tokenizer_path,
+        cfg.raw_val_text,
+        cfg.val_data_prefix,
+        shard_size
+    )
+    print("Validation shards created:")
+    print(val_shards)
+
+    print("Dataset preparation complete.")
+}
+
+
+// ---------------------------------------------------------------------------
+// Phase 3 + 4: Model Init + Pre-Training Loop
+// ---------------------------------------------------------------------------
+
+func pretrain(cfg: TrainingConfig) -> void {
+    print("")
+    print("=== Phase 3: Model Initialization ===")
+
+    // Create model
+    let model: Transformer = new Transformer(
+        cfg.target_vocab_size,
+        128,  // hidden
+        4,    // layers
+        4,    // heads
+        512,  // ffn
+        cfg.seq_len
+    )
+    let num_params: i32 = model.get_num_params()
+    print("Model parameters:")
+    print(num_params)
+
+    // Create optimizer
+    let opt: Optimizer = new Optimizer(
+        num_params,
+        cfg.max_lr,
+        cfg.beta1,
+        cfg.beta2
+    )
+
+    // Create data loaders
+    let train_ds: Dataset = Dataset.load(cfg.train_data_prefix)
+    let val_ds: Dataset = Dataset.load(cfg.val_data_prefix)
+
+    let train_loader: DataLoader = new DataLoader(train_ds, cfg.batch_size, true)
+    let val_loader: DataLoader = new DataLoader(val_ds, cfg.batch_size, false)
+
+    print("")
+    print("=== Phase 4: Pre-Training Loop ===")
+    print("Total steps:")
+    print(cfg.total_steps)
+    print("Batch size:")
+    print(cfg.batch_size)
+    print("Sequence length:")
+    print(cfg.seq_len)
+    print("")
+
+    // Training loop
+    for (step: i32 = 0; step < cfg.total_steps; step = step + 1) {
+
+        // ── Validation loss (every val_interval steps) ──────────────────
+        if step % cfg.val_interval == 0 {
+            print("--- Validation ---")
+            val_loader.reset()
+
+            mut val_loss_sum: f32 = 0.0
+            for (v: i32 = 0; v < cfg.val_steps; v = v + 1) {
+                let tokens_ptr = ptr_create_i32()
+                let targets_ptr = ptr_create_i32()
+                val_loader.next_batch(tokens_ptr, targets_ptr)
+                
+                let loss: f32 = model.eval_step(tokens_ptr, targets_ptr, cfg.batch_size, cfg.seq_len)
+                val_loss_sum = val_loss_sum + loss
+                
+                ptr_free(tokens_ptr)
+                ptr_free(targets_ptr)
+            }
+            // Average val loss
+            let avg_val_loss: f32 = val_loss_sum / cfg.val_steps
+            print("  Val loss:")
+            print_f32(avg_val_loss)
+        }
+
+        // ── Checkpoint (every save_interval steps) ───────────────────────
+        if step % cfg.save_interval == 0 && step > 0 {
+            print("--- Saving checkpoint at step:")
+            print(step)
+            model.save("checkpoints/model_step.bin")
+        }
+
+        // ── Training step ────────────────────────────────────────────────
+        let t0: i32 = get_time_ms()
+
+        // Update learning rate (cosine schedule)
+        let lr: f32 = compute_lr(
+            step,
+            cfg.warmup_steps,
+            cfg.total_steps,
+            cfg.max_lr,
+            cfg.min_lr
+        )
+        opt.set_lr(lr)
+
+        // Load next batch
+        let tokens_ptr = ptr_create_i32()
+        let targets_ptr = ptr_create_i32()
+        train_loader.next_batch(tokens_ptr, targets_ptr)
+
+        // Step
+        let loss: f32 = model.train_step(opt.handle, tokens_ptr, targets_ptr, cfg.batch_size, cfg.seq_len)
+
+        ptr_free(tokens_ptr)
+        ptr_free(targets_ptr)
+
+        let t1: i32 = get_time_ms()
+        let dt: i32 = t1 - t0
+
+        // ── Logging ──────────────────────────────────────────────────────
+        if step % cfg.log_interval == 0 {
+            print_loss_log(step, loss, lr, dt)
+        }
+    }
+
+    print("")
+    print("=== Phase 5: Testing Inference (Generation) ===")
+    print("Generating from prompt: Once upon a time...")
+    
+    let tok: Tokenizer = Tokenizer.load(cfg.tokenizer_path)
+    let prompt_tokens: rawptr = tok.encode("Once upon a time")
+    
+    let gen_out: rawptr = model.generate(prompt_tokens, 4, 20, 1.0)
+    print("Generation complete (tokens generated).")
+    
+    print("=== Training Complete ===")
+    print("Saving final model...")
+    model.save("checkpoints/model_final.bin")
+
+    // Cleanup
+    train_loader.destroy()
+    val_loader.destroy()
+    opt.destroy()
+    model.destroy()
+    tok.destroy()
+
+    print("All phases complete.")
+    print("Your model is saved in: checkpoints/model_final.bin")
+    print("Your tokenizer is saved in: data/tok32k.bin")
+}
+
+
+// ---------------------------------------------------------------------------
+// Main Entry Point
+// ---------------------------------------------------------------------------
+
+func main() -> void {
+    print("======================================================")
+    print("  Casprix LLM Pre-Training on TinyStories")
+    print("======================================================")
+
+    let cfg: TrainingConfig = new TrainingConfig()
+    cfg.make_tiny_run()
+
+    // Phase 1: Train BPE tokenizer from raw text
+    train_tokenizer(cfg)
+
+    // Phase 2: Encode corpus into binary shards
+    prepare_dataset(cfg)
+
+    // Phase 3 + 4: Initialize model and run pre-training loop
+    pretrain(cfg)
+
+    print("")
+    print("All phases complete.")
+    print("Your model is saved in: checkpoints/model_final.bin")
+    print("Your tokenizer is saved in: data/tok32k.bin")
+}
+// Top-level entry (if needed) or just the main function

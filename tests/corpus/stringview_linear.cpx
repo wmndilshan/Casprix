@@ -1,0 +1,18 @@
+// Golden corpus: borrowed / linear view — ownership boundaries in MIR.
+class StringView {
+    public let data: int;
+    public let len: int;
+
+    func StringView(src: string) -> void {
+        this.data = 0;
+        this.len = 0;
+    }
+}
+
+func main() -> int {
+    let s: string = "hello";
+    let v: StringView = new StringView(s);
+    return 0;
+}
+
+main()

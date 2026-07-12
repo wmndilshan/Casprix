@@ -494,13 +494,48 @@ static bool inline_call_site(MirModule* module, MirFunction* caller,
     br_to_inline->as.br.target = inline_entry;
     mir_block_append(call_bb, br_to_inline);
 
-    /* Update CFG: remove old successors from call_bb, add new one */
-    call_bb->succ_count = 0;  /* clear old successor list */
+    /* Update CFG.
+     *
+     * Before inlining call_bb had the successors that belonged to whatever
+     * terminator sat after the CALL (those instructions are now in merge_bb).
+     * We must:
+     *   1. Transfer those edges to merge_bb (so its successors' pred lists
+     *      point at merge_bb, not at call_bb).
+     *   2. Clear call_bb's successor list and point it at inline_entry only.
+     */
+    for (int i = 0; i < call_bb->succ_count; i++) {
+        MirBlock* old_succ = call_bb->successors[i];
+        /* Replace call_bb in old_succ's predecessor list with merge_bb. */
+        for (int j = 0; j < old_succ->pred_count; j++) {
+            if (old_succ->predecessors[j] == call_bb) {
+                old_succ->predecessors[j] = merge_bb;
+                break;
+            }
+        }
+        /* Also redirect phi edges: any phi in old_succ that referenced
+         * call_bb should now reference merge_bb. */
+        for (MirInst* phi = old_succ->first;
+             phi && phi->opcode == MIR_PHI;
+             phi = phi->next) {
+            for (int k = 0; k < phi->as.phi.n_edges; k++) {
+                if (phi->as.phi.edges[k].block == call_bb)
+                    phi->as.phi.edges[k].block = merge_bb;
+            }
+        }
+        mir_block_add_successor(merge_bb, old_succ);
+    }
+    call_bb->succ_count = 0;
+
     mir_block_add_successor(call_bb, inline_entry);
     mir_block_add_predecessor(inline_entry, call_bb);
 
-    /* Copy the successor list from the original call_bb tail to merge_bb */
-    /* (the moved instructions have the original terminators) */
+    /* If the return phi ended up with zero edges (callee is a noreturn
+     * function with no RET on any path), lower the call result to
+     * MIR_UNREACHABLE instead of leaving a broken 0-edge phi. */
+    if (ret_phi && ret_phi->as.phi.n_edges == 0) {
+        ret_phi->opcode = MIR_UNREACHABLE;
+        ret_phi->result = MIR_VALUE_NONE;
+    }
 
     if (stats) stats->calls_inlined++;
     return true;

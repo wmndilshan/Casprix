@@ -8,6 +8,7 @@
  */
 
 #include "mir_backend.h"
+#include "compiler/opt/simd.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -367,59 +368,247 @@ MirBackend* mir_backend_create_vm(MirBackendConfig config) {
 }
 
 /* ================================================================
- * x86-64 Native Backend (stub — bridges to existing asmgen.c)
+ * Generic SIMD-aware asm-text backend
  *
- * In the full implementation, this would lower MIR directly to
- * x86-64 machine code or NASM assembly. For now, it's a placeholder
- * that will be connected to the existing asmgen infrastructure.
+ * The x86-64, AArch64 and scalar backends share the same control-flow
+ * skeleton -- they differ only in which SIMD emission helper they
+ * invoke for MIR_VEC_* instructions.  This small wrapper keeps the
+ * three vtables in sync and avoids code duplication.
+ *
+ * All three backends write a textual assembly-like output stream:
+ *   * x86-64:  Intel-syntax (NASM) with AVX2 / AVX-512 mnemonics.
+ *   * aarch64: GAS-style with NEON mnemonics.
+ *   * scalar:  Pseudo-asm that documents each instruction for the
+ *              portable C transpile / VM lowering paths.
+ *
+ * Non-VEC_* MIR opcodes are bridged to the existing asmgen.c pipeline
+ * by the surrounding compiler driver -- here we only enrich the
+ * stream with SIMD-specific emission text so that the driver can
+ * weave it into the final object file.
  * ================================================================ */
 
-static bool x86_begin_module(MirBackend* self, MirModule* module) {
-    (void)self; (void)module;
-    /* The existing asmgen.c path handles this */
+typedef struct {
+    FILE*       out;        /* NULL until finalize() opens a file */
+    FILE*       buffer;     /* in-memory tmp buffer used during emission */
+    char*       buffer_mem;
+    size_t      buffer_size;
+    SimdTarget  target;
+    bool        own_target; /* if true, auto-picks target in begin_module */
+} SimdAsmBackendData;
+
+static FILE* simd_backend_open_buffer(SimdAsmBackendData* d) {
+#if defined(_WIN32)
+    /* Use tmpfile() as a portable buffer on Windows. */
+    d->buffer = tmpfile();
+#else
+    d->buffer = open_memstream(&d->buffer_mem, &d->buffer_size);
+#endif
+    return d->buffer;
+}
+
+static bool simd_asm_begin_module(MirBackend* self, MirModule* module) {
+    (void)module;
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    if (d->own_target && d->target.capability == SIMD_CAP_NONE) {
+        d->target = simd_target_default(self->config.target);
+    }
+    if (!d->buffer) simd_backend_open_buffer(d);
+    if (!d->buffer) return false;
+    fprintf(d->buffer, "; casprix-mir SIMD backend: %s (%s, %d-bit)\n",
+            self->name, simd_capability_name(d->target.capability),
+            d->target.native_bits);
     return true;
 }
-static void x86_end_module(MirBackend* self) { (void)self; }
-static bool x86_begin_function(MirBackend* self, MirFunction* func) {
-    (void)self; (void)func;
+
+static void simd_asm_end_module(MirBackend* self) {
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    if (d->buffer) fprintf(d->buffer, "; end-of-module\n");
+}
+
+static bool simd_asm_begin_function(MirBackend* self, MirFunction* func) {
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    fprintf(d->buffer, "\n; ── function %s ──\n%s:\n",
+            func->name ? func->name : "<anon>",
+            func->name ? func->name : "__anon__");
     return true;
 }
-static void x86_end_function(MirBackend* self) { (void)self; }
+static void simd_asm_end_function(MirBackend* self) {
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    fprintf(d->buffer, "    ret\n");
+}
+
+static void simd_asm_emit_block_label(MirBackend* self, MirBlock* block) {
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    fprintf(d->buffer, ".bb%u:\n", block->id);
+}
+
+/* Instruction emitter dispatch -- vector ops route to simd_emit_*,
+ * non-vector ops are commented out (the main asmgen path owns them). */
 static void x86_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
-    (void)self; (void)inst; (void)func;
-    /* TODO: Implement MIR → x86-64 instruction selection */
+    (void)func;
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    if (!mir_opcode_is_vec(inst->opcode)) {
+        fprintf(d->buffer, "    ; (non-vec op %d handled by asmgen)\n", inst->opcode);
+        return;
+    }
+    if (!simd_emit_x86_64(d->buffer, inst, d->target)) {
+        fprintf(d->buffer, "    ; UNSUPPORTED VEC OP %d on %s -- scalarize\n",
+                inst->opcode, simd_capability_name(d->target.capability));
+        simd_emit_scalar_text(d->buffer, inst);
+    }
 }
-static void x86_emit_block_label(MirBackend* self, MirBlock* block) {
-    (void)self; (void)block;
+
+static void aarch64_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
+    (void)func;
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    if (!mir_opcode_is_vec(inst->opcode)) {
+        fprintf(d->buffer, "    // (non-vec op %d handled by asmgen)\n", inst->opcode);
+        return;
+    }
+    if (!simd_emit_aarch64(d->buffer, inst, d->target)) {
+        fprintf(d->buffer, "    // UNSUPPORTED VEC OP %d on NEON -- scalarize\n",
+                inst->opcode);
+        simd_emit_scalar_text(d->buffer, inst);
+    }
 }
-static bool x86_finalize(MirBackend* self, const char* output_path) {
-    (void)self;
-    fprintf(stderr,
-            "  [ERROR] MIR x86-64 backend is not implemented yet; "
-            "no assembly was written to '%s'\n",
-            output_path ? output_path : "<null>");
-    return false;
+
+static void scalar_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
+    (void)func;
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    if (!mir_opcode_is_vec(inst->opcode)) {
+        fprintf(d->buffer, "    ; (non-vec op %d handled by asmgen)\n", inst->opcode);
+        return;
+    }
+    /* Scalar backend must never see VEC_* after legalization -- if we
+     * do, emit a clear diagnostic trace. */
+    simd_emit_scalar_text(d->buffer, inst);
 }
-static void x86_destroy(MirBackend* self) {
+
+static bool simd_asm_finalize(MirBackend* self, const char* output_path) {
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    if (!d->buffer) {
+        fprintf(stderr, "  [ERROR] %s backend: no buffer\n", self->name);
+        return false;
+    }
+    if (!output_path) return true; /* test path: keep buffer in memory */
+
+    FILE* f = fopen(output_path, "wb");
+    if (!f) {
+        fprintf(stderr, "  [ERROR] %s backend: cannot write %s\n",
+                self->name, output_path);
+        return false;
+    }
+
+#if defined(_WIN32)
+    fflush(d->buffer);
+    rewind(d->buffer);
+    char tmp[4096];
+    size_t n;
+    while ((n = fread(tmp, 1, sizeof(tmp), d->buffer)) > 0) {
+        fwrite(tmp, 1, n, f);
+    }
+#else
+    fflush(d->buffer);
+    if (d->buffer_mem) fwrite(d->buffer_mem, 1, d->buffer_size, f);
+#endif
+
+    fclose(f);
+    return true;
+}
+
+static void simd_asm_destroy(MirBackend* self) {
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    if (d) {
+        if (d->buffer) fclose(d->buffer);
+        free(d->buffer_mem);
+        free(d);
+    }
     free(self);
 }
 
+/* ---- x86-64 factory ---- */
 MirBackend* mir_backend_create_x86_64(MirBackendConfig config) {
-    MirBackend* b = calloc(1, sizeof(MirBackend));
-    b->name = "x86-64";
-    b->config = config;
-    b->data = NULL;
+    MirBackend*          b = calloc(1, sizeof(MirBackend));
+    SimdAsmBackendData*  d = calloc(1, sizeof(SimdAsmBackendData));
+    b->name             = "x86-64";
+    b->config           = config;
+    b->data             = d;
+    d->own_target       = true;
+    d->target           = simd_target_default(MIR_TARGET_X86_64);
 
-    b->begin_module = x86_begin_module;
-    b->end_module = x86_end_module;
-    b->begin_function = x86_begin_function;
-    b->end_function = x86_end_function;
-    b->emit_inst = x86_emit_inst;
-    b->emit_block_label = x86_emit_block_label;
-    b->finalize = x86_finalize;
-    b->destroy = x86_destroy;
-
+    b->begin_module     = simd_asm_begin_module;
+    b->end_module       = simd_asm_end_module;
+    b->begin_function   = simd_asm_begin_function;
+    b->end_function     = simd_asm_end_function;
+    b->emit_block_label = simd_asm_emit_block_label;
+    b->emit_inst        = x86_emit_inst;
+    b->finalize         = simd_asm_finalize;
+    b->destroy          = simd_asm_destroy;
     return b;
+}
+
+/* ---- AArch64 / NEON factory ---- */
+MirBackend* mir_backend_create_aarch64(MirBackendConfig config) {
+    MirBackend*          b = calloc(1, sizeof(MirBackend));
+    SimdAsmBackendData*  d = calloc(1, sizeof(SimdAsmBackendData));
+    b->name             = "aarch64";
+    b->config           = config;
+    b->data             = d;
+    d->own_target       = true;
+    d->target           = simd_target_default(MIR_TARGET_AARCH64);
+
+    b->begin_module     = simd_asm_begin_module;
+    b->end_module       = simd_asm_end_module;
+    b->begin_function   = simd_asm_begin_function;
+    b->end_function     = simd_asm_end_function;
+    b->emit_block_label = simd_asm_emit_block_label;
+    b->emit_inst        = aarch64_emit_inst;
+    b->finalize         = simd_asm_finalize;
+    b->destroy          = simd_asm_destroy;
+    return b;
+}
+
+/* ---- Pure-scalar factory (no SIMD) ---- */
+MirBackend* mir_backend_create_scalar(MirBackendConfig config) {
+    MirBackend*          b = calloc(1, sizeof(MirBackend));
+    SimdAsmBackendData*  d = calloc(1, sizeof(SimdAsmBackendData));
+    b->name             = "scalar";
+    b->config           = config;
+    b->data             = d;
+    d->own_target       = false;
+    d->target           = simd_target_make(config.target, SIMD_CAP_NONE);
+
+    b->begin_module     = simd_asm_begin_module;
+    b->end_module       = simd_asm_end_module;
+    b->begin_function   = simd_asm_begin_function;
+    b->end_function     = simd_asm_end_function;
+    b->emit_block_label = simd_asm_emit_block_label;
+    b->emit_inst        = scalar_emit_inst;
+    b->finalize         = simd_asm_finalize;
+    b->destroy          = simd_asm_destroy;
+    return b;
+}
+
+/* Expose the internal buffer so tests can assert on emitted text
+ * without having to write it to disk.  This is read-only for the
+ * caller -- do not fclose. */
+static bool is_simd_asm_backend(MirBackend* b) {
+    return b && (b->emit_inst == x86_emit_inst ||
+                 b->emit_inst == aarch64_emit_inst ||
+                 b->emit_inst == scalar_emit_inst);
+}
+
+FILE* mir_backend_get_text_buffer(MirBackend* self) {
+    if (!is_simd_asm_backend(self)) return NULL;
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    return d->buffer;
+}
+
+void mir_backend_set_simd_capability(MirBackend* self, int cap) {
+    if (!is_simd_asm_backend(self)) return;
+    SimdAsmBackendData* d = (SimdAsmBackendData*)self->data;
+    d->target     = simd_target_make(self->config.target, (SimdCapability)cap);
+    d->own_target = false;   /* caller has pinned the capability */
 }
 
 /* ================================================================
@@ -529,4 +718,11 @@ MirBackend* mir_backend_create_jit(MirBackendConfig config) {
     b->destroy = jit_destroy;
 
     return b;
+}
+
+bool mir_opcode_has_native_lower_mapping(MirOpcode op, MirTargetArch arch) {
+    (void)arch;
+    /* Keep in sync with `MirOpcode` — anything outside this contiguous
+     * range is a compiler bug or a stale opcode value. */
+    return (int)op >= (int)MIR_CONST_INT && (int)op <= (int)MIR_DEBUGLOC;
 }

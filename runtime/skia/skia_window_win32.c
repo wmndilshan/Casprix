@@ -19,7 +19,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "skia_c.h"
+#include "skia_window_host.h"
 
 /* ========================================================================
  * SkiaWindow Structure
@@ -48,26 +48,11 @@ typedef struct SkiaWindow {
     int dpi_scale;             /* DPI scaling factor (100 = 1x, 200 = 2x) */
 
     /* Callbacks */
-    void (*on_paint)(struct SkiaWindow* win, SkiaCanvas canvas, void* ctx);
-    void (*on_mouse)(struct SkiaWindow* win, int type, int x, int y, int button, void* ctx);
-    void (*on_key)(struct SkiaWindow* win, int type, int keycode, int mods, void* ctx);
-    void (*on_resize)(struct SkiaWindow* win, int width, int height, void* ctx);
-    void (*on_text)(struct SkiaWindow* win, const char* text, void* ctx);
-    void* callback_ctx;
+    SkiaWindowPaintCallback on_paint;
+    SkiaWindowEventCallback on_event;
+    void* paint_ctx;
+    void* event_ctx;
 } SkiaWindow;
-
-/* Event types for callbacks */
-#define SKIA_MOUSE_DOWN  0
-#define SKIA_MOUSE_UP    1
-#define SKIA_MOUSE_MOVE  2
-#define SKIA_MOUSE_SCROLL 3
-#define SKIA_KEY_DOWN    0
-#define SKIA_KEY_UP      1
-
-/* Mouse buttons */
-#define SKIA_BUTTON_LEFT   0
-#define SKIA_BUTTON_RIGHT  1
-#define SKIA_BUTTON_MIDDLE 2
 
 /* Forward declarations */
 static LRESULT CALLBACK skia_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -76,6 +61,37 @@ static void skia_window_recreate_surface(SkiaWindow* win);
 /* Window class name */
 static const char* SKIA_WINDOW_CLASS = "CasperixSkiaWindow";
 static int g_class_registered = 0;
+
+static double skia_host_timestamp(void) {
+    static LARGE_INTEGER freq = { 0 };
+    LARGE_INTEGER now;
+
+    if (freq.QuadPart == 0) {
+        QueryPerformanceFrequency(&freq);
+    }
+
+    QueryPerformanceCounter(&now);
+    return (double)now.QuadPart / (double)freq.QuadPart;
+}
+
+static int skia_host_modifiers(void) {
+    int mods = 0;
+
+    if (GetKeyState(VK_SHIFT) & 0x8000)   mods |= SG_MOD_SHIFT;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= SG_MOD_CTRL;
+    if (GetKeyState(VK_MENU) & 0x8000)    mods |= SG_MOD_ALT;
+    if (GetKeyState(VK_LWIN) & 0x8000 || GetKeyState(VK_RWIN) & 0x8000) {
+        mods |= SG_MOD_SUPER;
+    }
+
+    return mods;
+}
+
+static void skia_window_emit_event(SkiaWindow* win, SGEvent* event) {
+    if (!win || !event || !win->on_event) return;
+    event->timestamp = skia_host_timestamp();
+    win->on_event(win, event, win->event_ctx);
+}
 
 /* ========================================================================
  * Window Creation / Destruction
@@ -277,38 +293,17 @@ int skia_window_needs_redraw(SkiaWindow* win) {
  * ======================================================================== */
 
 void skia_window_set_paint_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, SkiaCanvas, void*), void* ctx) {
+    SkiaWindowPaintCallback cb, void* ctx) {
     if (!win) return;
     win->on_paint = cb;
-    win->callback_ctx = ctx;
+    win->paint_ctx = ctx;
 }
 
-void skia_window_set_mouse_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, int, int, int, int, void*), void* ctx) {
+void skia_window_set_event_callback(SkiaWindow* win,
+    SkiaWindowEventCallback cb, void* ctx) {
     if (!win) return;
-    win->on_mouse = cb;
-    win->callback_ctx = ctx;
-}
-
-void skia_window_set_key_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, int, int, int, void*), void* ctx) {
-    if (!win) return;
-    win->on_key = cb;
-    win->callback_ctx = ctx;
-}
-
-void skia_window_set_resize_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, int, int, void*), void* ctx) {
-    if (!win) return;
-    win->on_resize = cb;
-    win->callback_ctx = ctx;
-}
-
-void skia_window_set_text_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, const char*, void*), void* ctx) {
-    if (!win) return;
-    win->on_text = cb;
-    win->callback_ctx = ctx;
+    win->on_event = cb;
+    win->event_ctx = ctx;
 }
 
 /* ========================================================================
@@ -335,7 +330,7 @@ int skia_window_run(SkiaWindow* win) {
             if (win->needs_redraw) {
                 if (win->on_paint) {
                     SkiaCanvas canvas = skia_window_get_canvas(win);
-                    win->on_paint(win, canvas, win->callback_ctx);
+                    win->on_paint(win, canvas, win->paint_ctx);
                 }
                 skia_window_present(win);
             }
@@ -387,7 +382,7 @@ static LRESULT CALLBACK skia_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                 /* Trigger repaint callback */
                 if (win->on_paint) {
                     SkiaCanvas canvas = skia_window_get_canvas(win);
-                    win->on_paint(win, canvas, win->callback_ctx);
+                    win->on_paint(win, canvas, win->paint_ctx);
                 }
                 skia_window_present(win);
             }
@@ -401,109 +396,134 @@ static LRESULT CALLBACK skia_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             int new_height = HIWORD(lparam);
             if (new_width > 0 && new_height > 0 &&
                 (new_width != win->width || new_height != win->height)) {
+                SGEvent evt = { 0 };
                 win->width = new_width;
                 win->height = new_height;
                 skia_window_recreate_surface(win);
-                if (win->on_resize) {
-                    win->on_resize(win, new_width, new_height, win->callback_ctx);
-                }
+                evt.type = SG_EVENT_RESIZE;
+                evt.data.resize.width = new_width;
+                evt.data.resize.height = new_height;
+                skia_window_emit_event(win, &evt);
             }
             return 0;
         }
 
         case WM_MOUSEMOVE: {
             if (!win) break;
+            SGEvent evt = { 0 };
             int x = GET_X_LPARAM(lparam);
             int y = GET_Y_LPARAM(lparam);
             win->mouse_x = x;
             win->mouse_y = y;
-            if (win->on_mouse) {
-                win->on_mouse(win, SKIA_MOUSE_MOVE, x, y, -1, win->callback_ctx);
-            }
+            evt.type = SG_EVENT_MOUSE_MOVE;
+            evt.mods = skia_host_modifiers();
+            evt.data.mouse.x = (float)x;
+            evt.data.mouse.y = (float)y;
+            skia_window_emit_event(win, &evt);
             return 0;
         }
 
         case WM_LBUTTONDOWN: {
             if (!win) break;
             SetCapture(hwnd);
+            SGEvent evt = { 0 };
             int x = GET_X_LPARAM(lparam);
             int y = GET_Y_LPARAM(lparam);
-            win->mouse_buttons |= (1 << SKIA_BUTTON_LEFT);
-            if (win->on_mouse) {
-                win->on_mouse(win, SKIA_MOUSE_DOWN, x, y, SKIA_BUTTON_LEFT, win->callback_ctx);
-            }
+            win->mouse_buttons |= (1 << SG_BUTTON_LEFT);
+            evt.type = SG_EVENT_MOUSE_DOWN;
+            evt.mods = skia_host_modifiers();
+            evt.data.mouse.x = (float)x;
+            evt.data.mouse.y = (float)y;
+            evt.data.mouse.button = SG_BUTTON_LEFT;
+            skia_window_emit_event(win, &evt);
             return 0;
         }
 
         case WM_LBUTTONUP: {
             if (!win) break;
             ReleaseCapture();
+            SGEvent evt = { 0 };
             int x = GET_X_LPARAM(lparam);
             int y = GET_Y_LPARAM(lparam);
-            win->mouse_buttons &= ~(1 << SKIA_BUTTON_LEFT);
-            if (win->on_mouse) {
-                win->on_mouse(win, SKIA_MOUSE_UP, x, y, SKIA_BUTTON_LEFT, win->callback_ctx);
-            }
+            win->mouse_buttons &= ~(1 << SG_BUTTON_LEFT);
+            evt.type = SG_EVENT_MOUSE_UP;
+            evt.mods = skia_host_modifiers();
+            evt.data.mouse.x = (float)x;
+            evt.data.mouse.y = (float)y;
+            evt.data.mouse.button = SG_BUTTON_LEFT;
+            skia_window_emit_event(win, &evt);
             return 0;
         }
 
         case WM_RBUTTONDOWN: {
             if (!win) break;
+            SGEvent evt = { 0 };
             int x = GET_X_LPARAM(lparam);
             int y = GET_Y_LPARAM(lparam);
-            win->mouse_buttons |= (1 << SKIA_BUTTON_RIGHT);
-            if (win->on_mouse) {
-                win->on_mouse(win, SKIA_MOUSE_DOWN, x, y, SKIA_BUTTON_RIGHT, win->callback_ctx);
-            }
+            win->mouse_buttons |= (1 << SG_BUTTON_RIGHT);
+            evt.type = SG_EVENT_MOUSE_DOWN;
+            evt.mods = skia_host_modifiers();
+            evt.data.mouse.x = (float)x;
+            evt.data.mouse.y = (float)y;
+            evt.data.mouse.button = SG_BUTTON_RIGHT;
+            skia_window_emit_event(win, &evt);
             return 0;
         }
 
         case WM_RBUTTONUP: {
             if (!win) break;
+            SGEvent evt = { 0 };
             int x = GET_X_LPARAM(lparam);
             int y = GET_Y_LPARAM(lparam);
-            win->mouse_buttons &= ~(1 << SKIA_BUTTON_RIGHT);
-            if (win->on_mouse) {
-                win->on_mouse(win, SKIA_MOUSE_UP, x, y, SKIA_BUTTON_RIGHT, win->callback_ctx);
-            }
+            win->mouse_buttons &= ~(1 << SG_BUTTON_RIGHT);
+            evt.type = SG_EVENT_MOUSE_UP;
+            evt.mods = skia_host_modifiers();
+            evt.data.mouse.x = (float)x;
+            evt.data.mouse.y = (float)y;
+            evt.data.mouse.button = SG_BUTTON_RIGHT;
+            skia_window_emit_event(win, &evt);
             return 0;
         }
 
         case WM_MOUSEWHEEL: {
             if (!win) break;
+            SGEvent evt = { 0 };
             int delta = GET_WHEEL_DELTA_WPARAM(wparam);
-            if (win->on_mouse) {
-                win->on_mouse(win, SKIA_MOUSE_SCROLL, win->mouse_x, win->mouse_y,
-                              delta, win->callback_ctx);
-            }
+            evt.type = SG_EVENT_MOUSE_SCROLL;
+            evt.mods = skia_host_modifiers();
+            evt.data.scroll.x = (float)win->mouse_x;
+            evt.data.scroll.y = (float)win->mouse_y;
+            evt.data.scroll.dx = 0.0f;
+            evt.data.scroll.dy = (float)delta;
+            skia_window_emit_event(win, &evt);
             return 0;
         }
 
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {
             if (!win) break;
+            SGEvent evt = { 0 };
             int keycode = (int)wparam;
-            int mods = 0;
-            if (GetKeyState(VK_SHIFT) & 0x8000) mods |= 1;
-            if (GetKeyState(VK_CONTROL) & 0x8000) mods |= 2;
-            if (GetKeyState(VK_MENU) & 0x8000) mods |= 4;
-            if (win->on_key) {
-                win->on_key(win, SKIA_KEY_DOWN, keycode, mods, win->callback_ctx);
-            }
+            evt.type = SG_EVENT_KEY_DOWN;
+            evt.mods = skia_host_modifiers();
+            evt.data.key.keycode = keycode;
+            evt.data.key.scancode = (int)((lparam >> 16) & 0xFF);
+            evt.data.key.repeat = (lparam & 0x40000000) ? 1 : 0;
+            skia_window_emit_event(win, &evt);
             return 0;
         }
 
         case WM_KEYUP:
         case WM_SYSKEYUP: {
             if (!win) break;
+            SGEvent evt = { 0 };
             int keycode = (int)wparam;
-            int mods = 0;
-            if (GetKeyState(VK_SHIFT) & 0x8000) mods |= 1;
-            if (GetKeyState(VK_CONTROL) & 0x8000) mods |= 2;
-            if (GetKeyState(VK_MENU) & 0x8000) mods |= 4;
-            if (win->on_key) {
-                win->on_key(win, SKIA_KEY_UP, keycode, mods, win->callback_ctx);
-            }
+            evt.type = SG_EVENT_KEY_UP;
+            evt.mods = skia_host_modifiers();
+            evt.data.key.keycode = keycode;
+            evt.data.key.scancode = (int)((lparam >> 16) & 0xFF);
+            evt.data.key.repeat = 0;
+            skia_window_emit_event(win, &evt);
             return 0;
         }
 
@@ -513,14 +533,23 @@ static LRESULT CALLBACK skia_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             wchar_t wch = (wchar_t)wparam;
             char utf8[8] = {0};
             WideCharToMultiByte(CP_UTF8, 0, &wch, 1, utf8, sizeof(utf8) - 1, NULL, NULL);
-            if (win->on_text && utf8[0] >= 32) {  /* Skip control characters */
-                win->on_text(win, utf8, win->callback_ctx);
+            if (utf8[0] >= 32) {  /* Skip control characters */
+                SGEvent evt = { 0 };
+                evt.type = SG_EVENT_TEXT_INPUT;
+                evt.mods = skia_host_modifiers();
+                memcpy(evt.data.text_input.text, utf8, sizeof(evt.data.text_input.text) - 1);
+                skia_window_emit_event(win, &evt);
             }
             return 0;
         }
 
         case WM_CLOSE:
-            if (win) win->running = 0;
+            if (win) {
+                SGEvent evt = { 0 };
+                win->running = 0;
+                evt.type = SG_EVENT_CLOSE;
+                skia_window_emit_event(win, &evt);
+            }
             PostQuitMessage(0);
             return 0;
 
@@ -533,6 +562,42 @@ static LRESULT CALLBACK skia_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
     }
 
     return DefWindowProcA(hwnd, msg, wparam, lparam);
+}
+
+#else
+
+#include "skia_window_host.h"
+#include <stdlib.h>
+
+struct SkiaWindow {
+    int unsupported_platform;
+};
+
+SkiaWindow* skia_window_create(const char* title, int width, int height) {
+    (void)title;
+    (void)width;
+    (void)height;
+    return NULL;
+}
+
+void skia_window_destroy(SkiaWindow* win) { (void)win; }
+void skia_window_show(SkiaWindow* win) { (void)win; }
+void skia_window_hide(SkiaWindow* win) { (void)win; }
+void skia_window_present(SkiaWindow* win) { (void)win; }
+SkiaCanvas skia_window_get_canvas(SkiaWindow* win) { (void)win; return NULL; }
+int skia_window_get_width(SkiaWindow* win) { (void)win; return 0; }
+int skia_window_get_height(SkiaWindow* win) { (void)win; return 0; }
+void skia_window_set_title(SkiaWindow* win, const char* title) { (void)win; (void)title; }
+void skia_window_invalidate(SkiaWindow* win) { (void)win; }
+int skia_window_needs_redraw(SkiaWindow* win) { (void)win; return 0; }
+int skia_window_run(SkiaWindow* win) { (void)win; return -1; }
+int skia_window_poll(SkiaWindow* win) { (void)win; return -1; }
+void skia_window_quit(SkiaWindow* win) { (void)win; }
+void skia_window_set_paint_callback(SkiaWindow* win, SkiaWindowPaintCallback cb, void* ctx) {
+    (void)win; (void)cb; (void)ctx;
+}
+void skia_window_set_event_callback(SkiaWindow* win, SkiaWindowEventCallback cb, void* ctx) {
+    (void)win; (void)cb; (void)ctx;
 }
 
 #endif /* _WIN32 */

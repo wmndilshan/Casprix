@@ -29,7 +29,7 @@ RANLIB  = ranlib
 # Flags
 # ============================================================================
 
-CFLAGS_BASE = -Wall -Wextra -Wno-unused-parameter -std=c11
+CFLAGS_BASE = -Wall -Wextra -Wno-unused-parameter -std=c11 -D_POSIX_C_SOURCE=200809L
 
 ifdef DEBUG
     CFLAGS = $(CFLAGS_BASE) -g -O0 -DDEBUG
@@ -42,9 +42,11 @@ HAS_AVX2 ?= 1
 ifeq ($(HAS_AVX2),1)
     CFLAGS       += -mavx2 -mfma -DHAS_AVX2
     SIMD_ASM      = $(RUNTIME_DIR)/math/simd_kernels.asm \
-                    $(RUNTIME_DIR)/ai/llm/ops_avx2.asm
+                    $(RUNTIME_DIR)/ai/llm/ops_avx2.asm \
+                    $(RUNTIME_DIR)/async/coro_context.asm
     SIMD_OBJ      = $(OBJ_DIR)/simd_math_kernels.o \
-                    $(OBJ_DIR)/simd_llm_avx2.o
+                    $(OBJ_DIR)/simd_llm_avx2.o \
+                    $(OBJ_DIR)/coro_context.o
 endif
 
 # ============================================================================
@@ -118,7 +120,8 @@ SEMA_SOURCES = \
     $(SRC_DIR)/compiler/sema/symtable.c \
     $(SRC_DIR)/compiler/sema/ownership_check.c \
     $(SRC_DIR)/compiler/sema/escape_analysis.c \
-    $(SRC_DIR)/compiler/sema/drop_planner.c
+    $(SRC_DIR)/compiler/sema/drop_planner.c \
+    $(SRC_DIR)/compiler/sema/linear_view.c
 
 # Data layout
 LAYOUT_SOURCES = \
@@ -143,7 +146,8 @@ MIR_SOURCES = \
     $(SRC_DIR)/compiler/ir/mir_backend.c \
     $(SRC_DIR)/compiler/ir/mir_c_backend.c \
     $(SRC_DIR)/compiler/ir/mir_mem2reg.c \
-    $(SRC_DIR)/compiler/ir/mir_inline.c
+    $(SRC_DIR)/compiler/ir/mir_inline.c \
+    $(SRC_DIR)/compiler/ir/mir_async.c
 
 # Code generation (x86-64)
 CODEGEN_SOURCES = \
@@ -203,14 +207,21 @@ RUNTIME_MEMORY = \
     $(RUNTIME_DIR)/memory/refcount.c \
     $(RUNTIME_DIR)/memory/tlocal_heap.c
 
+ifeq ($(OS),Windows_NT)
+    COROUTINE_SRC = $(wildcard $(RUNTIME_DIR)/async/coroutine_win32.c)
+else
+    COROUTINE_SRC = $(wildcard $(RUNTIME_DIR)/async/coroutine_posix.c)
+endif
+
 # Optional runtime subsystems (included only if files exist)
 RUNTIME_EXT = \
     $(wildcard $(RUNTIME_DIR)/async/future.c) \
     $(wildcard $(RUNTIME_DIR)/async/task.c) \
     $(wildcard $(RUNTIME_DIR)/async/scheduler.c) \
-    $(wildcard $(RUNTIME_DIR)/async/coroutine_win32.c) \
+    $(COROUTINE_SRC) \
     $(wildcard $(RUNTIME_DIR)/concurrent/channel.c) \
     $(wildcard $(RUNTIME_DIR)/sync/lockfree_deque.c) \
+    $(wildcard $(RUNTIME_DIR)/sync/atomic.c) \
     $(wildcard $(RUNTIME_DIR)/net/socket.c) \
     $(wildcard $(RUNTIME_DIR)/net/http.c) \
     $(wildcard $(RUNTIME_DIR)/net/http_server.c) \
@@ -220,7 +231,8 @@ RUNTIME_EXT = \
     $(wildcard $(RUNTIME_DIR)/binding/lang_abi.c) \
     $(wildcard $(RUNTIME_DIR)/math/math_lib_runtime.c) \
     $(wildcard $(RUNTIME_DIR)/math/linalg_runtime.c) \
-    $(wildcard $(RUNTIME_DIR)/math/stats_runtime.c)
+    $(wildcard $(RUNTIME_DIR)/math/stats_runtime.c) \
+    $(wildcard $(RUNTIME_DIR)/ai/llm/*.c)
 
 ALL_RUNTIME_SOURCES = $(RUNTIME_CORE) $(RUNTIME_MEMORY) $(RUNTIME_EXT)
 RUNTIME_OBJECTS     = $(patsubst $(RUNTIME_DIR)/%.c,$(OBJ_DIR)/runtime/%.o,$(ALL_RUNTIME_SOURCES))
@@ -286,6 +298,10 @@ $(OBJ_DIR)/simd_math_kernels.o: $(RUNTIME_DIR)/math/simd_kernels.asm | $(OBJ_DIR
 	$(ASM) $(ASMFLAGS) $< -o $@
 
 $(OBJ_DIR)/simd_llm_avx2.o: $(RUNTIME_DIR)/ai/llm/ops_avx2.asm | $(OBJ_DIR)
+	@echo "[ASM]  $<"
+	$(ASM) $(ASMFLAGS) $< -o $@
+
+$(OBJ_DIR)/coro_context.o: $(RUNTIME_DIR)/async/coro_context.asm | $(OBJ_DIR)
 	@echo "[ASM]  $<"
 	$(ASM) $(ASMFLAGS) $< -o $@
 endif

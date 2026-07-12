@@ -14,6 +14,8 @@ static void report_unsupported_surface(Parser* parser, Token token, const char* 
 
 // Forward declarations
 static Expr* expression(Parser* parser);
+static Expr* unary(Parser* parser);
+static Expr* primary(Parser* parser);
 static Expr* postfix(Parser* parser);
 static Expr* postfix_with_expr(Parser* parser, Expr* expr);
 static Stmt* statement(Parser* parser);
@@ -1065,11 +1067,10 @@ static Expr* primary(Parser* parser) {
         return lambda_expression(parser);
     }
 
-    if (check(parser, TOKEN_AWAIT)) {
-        Token token = parser->current;
-        report_unsupported_surface(parser, token,
-            "'await' is not implemented yet; use a synchronous call");
-        return error_expression(token.line, token.column);
+    if (match(parser, TOKEN_AWAIT)) {
+        Token op = parser->previous;
+        Expr* expression = unary(parser);
+        return create_await_expr(expression, op.line, op.column);
     }
 
     error_at_current(parser, "Expected expression");
@@ -2214,11 +2215,9 @@ static Stmt* declaration(Parser* parser) {
         is_abstract_class = true;
     }
 
-    if (check(parser, TOKEN_ASYNC)) {
-        Token token = parser->current;
-        report_unsupported_surface(parser, token,
-            "'async' functions are not implemented yet; use a regular 'func' declaration");
-        return NULL;
+    bool is_async = false;
+    if (match(parser, TOKEN_ASYNC)) {
+        is_async = true;
     }
 
     if (check(parser, TOKEN_IMPLEMENTS)) {
@@ -2240,7 +2239,9 @@ static Stmt* declaration(Parser* parser) {
     }
 
     if (match(parser, TOKEN_FUNC)) {
-        return function_declaration(parser);
+        Stmt* s = function_declaration(parser);
+        if (s) s->as.function.is_async = is_async;
+        return s;
     }
 
     if (match(parser, TOKEN_INCLUDE) || match(parser, TOKEN_IMPORT)) {

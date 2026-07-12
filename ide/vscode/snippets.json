@@ -18,20 +18,11 @@
         ],
         "description": "Define a function with return"
     },
-    "async_func": {
-        "prefix": "afunc",
-        "body": [
-            "async func ${1:name}(${2:params}) -> ${3:void} {",
-            "\t$0",
-            "}"
-        ],
-        "description": "Define an async function"
-    },
     "class": {
         "prefix": "class",
         "body": [
             "class ${1:Name} {",
-            "\t${2:let field: int;}",
+            "\t${2:public let field: int = 0;}",
             "",
             "\tfunc ${3:method}() -> ${4:void} {",
             "\t\t$0",
@@ -53,7 +44,7 @@
         "prefix": "struct",
         "body": [
             "struct ${1:Name} {",
-            "\t${2:field}: ${3:int},",
+            "\t${2:field}: ${3:int};",
             "\t$0",
             "}"
         ],
@@ -94,16 +85,30 @@
     "let": {
         "prefix": "let",
         "body": [
-            "let ${1:name}: ${2:int} = ${3:0}"
+            "let ${1:name}: ${2:int} = ${3:0};"
         ],
         "description": "Declare an immutable variable"
     },
-    "letmut": {
-        "prefix": "letm",
+    "mut": {
+        "prefix": "mut",
         "body": [
-            "let mut ${1:name}: ${2:int} = ${3:0}"
+            "mut ${1:name}: ${2:int} = ${3:0};"
         ],
         "description": "Declare a mutable variable"
+    },
+    "inferred_mut": {
+        "prefix": ":=",
+        "body": [
+            "${1:name} := ${2:value};"
+        ],
+        "description": "Declare an inferred mutable variable"
+    },
+    "const": {
+        "prefix": "const",
+        "body": [
+            "const ${1:NAME}: ${2:int} = ${3:0};"
+        ],
+        "description": "Declare a compile-time constant"
     },
     "if": {
         "prefix": "if",
@@ -134,14 +139,21 @@
         ],
         "description": "For-in range loop"
     },
-    "foreach": {
-        "prefix": "each",
+    "lambda": {
+        "prefix": "lambda",
         "body": [
-            "each ${1:item} in ${2:collection} {",
+            "|${1:params}| => $0"
+        ],
+        "description": "Expression lambda"
+    },
+    "lambda_block": {
+        "prefix": "lambdab",
+        "body": [
+            "|${1:params}| -> ${2:void} {",
             "\t$0",
             "}"
         ],
-        "description": "For-each loop over a collection"
+        "description": "Block lambda"
     },
     "while": {
         "prefix": "while",
@@ -176,37 +188,37 @@
     "print": {
         "prefix": "print",
         "body": [
-            "print(\"${1:message}\")"
+            "print(\"${1:message}\");"
         ],
         "description": "Print a message"
-    },
-    "println": {
-        "prefix": "println",
-        "body": [
-            "println(\"${1:message}\")"
-        ],
-        "description": "Print a message with newline"
-    },
-    "printf": {
-        "prefix": "printf",
-        "body": [
-            "printf(\"${1:%s}\\n\", ${2:value})"
-        ],
-        "description": "Formatted print"
     },
     "import": {
         "prefix": "import",
         "body": [
-            "import ${1:module}"
+            "import \"${1:lib/module}\";"
         ],
         "description": "Import a module"
     },
-    "import_from": {
-        "prefix": "importf",
+    "extern_func": {
+        "prefix": "extern",
         "body": [
-            "import ${2:item} from ${1:module}"
+            "extern func ${1:name}(${2:params}) -> ${3:void};"
         ],
-        "description": "Import specific items from a module"
+        "description": "Declare an external function"
+    },
+    "borrow_param": {
+        "prefix": "&param",
+        "body": [
+            "${1:name}: &${2:Type}"
+        ],
+        "description": "Shared borrow parameter"
+    },
+    "borrow_mut_param": {
+        "prefix": "&mutparam",
+        "body": [
+            "${1:name}: &mut ${2:Type}"
+        ],
+        "description": "Mutable borrow parameter"
     },
     "todo": {
         "prefix": "todo",

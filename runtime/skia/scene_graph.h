@@ -15,6 +15,7 @@
 
 #include "skia_c.h"
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -132,6 +133,9 @@ typedef struct {
 #define SG_MAX_HANDLERS 8
 
 typedef struct SGNode SGNode;
+typedef struct SGScene SGScene;
+typedef struct SGArena SGArena;
+typedef struct SGStyleRef SGStyleRef;
 
 typedef void (*SGEventHandler)(SGNode* node, int event_type, void* event_data, void* user_data);
 
@@ -141,13 +145,70 @@ typedef struct {
     void* user_data;
 } SGHandlerSlot;
 
+typedef void (*SGNodeCleanupFn)(SGNode* node);
+
+/* ========================================================================
+ * Modern Lifecycle + Arena API
+ * ======================================================================== */
+
+typedef struct {
+    float min_w;
+    float max_w;
+    float min_h;
+    float max_h;
+} SGMeasureConstraints;
+
+struct SGArena {
+    uint8_t* base;
+    size_t   capacity;
+    size_t   offset;
+};
+
+typedef struct SGWidgetVTable {
+    void (*init)(SGScene* scene, SGNode* node);
+    void (*measure_layout)(SGScene* scene, SGNode* node,
+                           const SGMeasureConstraints* constraints,
+                           float* out_w, float* out_h);
+    void (*paint)(SGScene* scene, SGNode* node, SkiaCanvas canvas, SGRect clip);
+    void (*destroy)(SGScene* scene, SGNode* node);
+} SGWidgetVTable;
+
+typedef struct {
+    SGNode* root;
+    SGRect  dirty_rects[1024];
+    uint32_t dirty_count;
+    uint32_t frame_id;
+} SGFrameState;
+
+struct SGScene {
+    SGArena arena;
+    SGFrameState frame;
+    SGNode* root;
+
+    /* Reusable paints to avoid per-frame allocations. */
+    SkiaPaint fill_paint;
+    SkiaPaint stroke_paint;
+    SkiaPaint text_paint;
+    SkiaPaint shadow_paint;
+};
+
 /* ========================================================================
  * Scene Graph Node
  * ======================================================================== */
 
+#define SG_NODE_OWNER_RUNTIME     0x0001u
+#define SG_NODE_OWNER_PARENT      0x0002u
+#define SG_NODE_OWNER_APP         0x0004u
+#define SG_NODE_OWNS_FONT         0x0010u
+#define SG_NODE_OWNS_IMAGE        0x0020u
+#define SG_NODE_OWNS_PATH         0x0040u
+#define SG_NODE_OWNS_GRADIENT     0x0080u
+
 struct SGNode {
     SGNodeType type;
     uint32_t id;                  /* Unique node ID */
+    uint32_t ref_count;           /* Shared lifetime across wrappers/parents/app */
+    uint32_t ownership_flags;     /* SG_NODE_OWNER_* | SG_NODE_OWNS_* */
 
     /* Geometry */
     SGRect bounds;                /* Computed bounds (set by layout) */
@@ -201,6 +262,10 @@ struct SGNode {
     float min_width, min_height;  /* Minimum size constraints */
     float max_width, max_height;  /* Maximum size constraints (-1 = none) */
 
+    uint32_t layout_version;      /* Bumped when this node is layout-dirtied */
+    int      dirty_rect_valid;
+    SGRect   dirty_rect;          /* Unioned invalid rect in local space */
+
     /* State */
     uint32_t flags;               /* SG_DIRTY_* | SG_VISIBLE | ... */
     int z_index;                  /* Rendering order (higher = on top) */
@@ -211,6 +276,21 @@ struct SGNode {
 
     /* User data pointer (for widget state, etc.) */
     void* user_data;
+    SGNodeCleanupFn cleanup;
+
+    /* Optional modern lifecycle hooks (kept additive for compatibility). */
+    const SGWidgetVTable* lifecycle;
+    uint32_t              state_flags;
+    SGStyleRef*           style_ref;
+    SGScene*              scene_owner;
+};
+
+enum {
+    SG_STATE_HOVER    = 1u << 0,
+    SG_STATE_ACTIVE   = 1u << 1,
+    SG_STATE_FOCUSED  = 1u << 2,
+    SG_STATE_DISABLED = 1u << 3,
+    SG_STATE_CHECKED  = 1u << 4
 };
 
 /* ========================================================================
@@ -218,8 +298,12 @@ struct SGNode {
  * ======================================================================== */
 
 SGNode* sg_node_create(SGNodeType type);
-void    sg_node_destroy(SGNode* node);              /* Recursive destroy */
+SGNode* sg_node_create_in_scene(SGScene* scene, SGNodeType type);
+void    sg_node_destroy(SGNode* node);              /* Release one owner/reference */
+void    sg_node_destroy_tree(SGNode* node);         /* Release root of subtree */
 void    sg_node_destroy_single(SGNode* node);       /* Destroy only this node */
+void    sg_node_retain(SGNode* node);
+void    sg_node_set_cleanup(SGNode* node, SGNodeCleanupFn cleanup);
 
 /* ========================================================================
  * Tree Operations
@@ -248,6 +332,17 @@ void sg_node_mark_paint_dirty(SGNode* node);
 void sg_node_clear_dirty(SGNode* node);
 int  sg_node_is_dirty(SGNode* node, uint32_t flags);
 
+/* Aliases / helpers for dirty-region workflow */
+void     sg_mark_dirty(SGNode* node);
+void     sg_mark_dirty_rect(SGNode* node, SGRect rect);
+int      sg_is_subtree_dirty(const SGNode* node);
+void     sg_clear_dirty(SGNode* node);
+void     sg_clear_dirty_recursive(SGNode* root);
+
+/* Debug: number of nodes that executed paint body in last sg_render_dirty_only */
+uint32_t sg_debug_paint_node_count(void);
+void     sg_debug_reset_paint_node_count(void);
+
 /* ========================================================================
  * Style Helpers
  * ======================================================================== */
@@ -264,6 +359,27 @@ void sg_style_set_opacity(SGNode* node, double opacity);
 void sg_style_set_gradient(SGNode* node, SkiaShader gradient);
 
 /* ========================================================================
+ * Modern Scene Lifecycle Helpers
+ * ======================================================================== */
+
+SGScene* sg_scene_create(void* arena_memory, size_t arena_capacity);
+void     sg_scene_destroy(SGScene* scene);
+void     sg_scene_begin_frame(SGScene* scene);
+void     sg_scene_register_root(SGScene* scene, SGNode* root);
+
+void* sg_scene_alloc(SGScene* scene, size_t size, size_t align);
+int   sg_node_set_lifecycle(SGNode* node, const SGWidgetVTable* lifecycle);
+void  sg_node_set_style_ref(SGNode* node, SGStyleRef* style_ref);
+void  sg_node_run_init(SGNode* node);
+void  sg_node_run_destroy(SGNode* node);
+void  sg_node_run_measure(SGNode* node, const SGMeasureConstraints* constraints,
+                          float* out_w, float* out_h);
+void  sg_node_run_paint(SGNode* node, SkiaCanvas canvas, SGRect clip);
+
+void sg_scene_mark_dirty_rect(SGScene* scene, SGRect rect);
+void sg_scene_mark_node_dirty(SGNode* node);
+
+/* ========================================================================
  * Rendering
  * ======================================================================== */
 
@@ -273,12 +389,19 @@ void sg_render(SGNode* root, SkiaCanvas canvas);
 /* Render only dirty nodes (partial redraw) */
 void sg_render_dirty(SGNode* root, SkiaCanvas canvas);
 
+/* Selective repaint: counts painted nodes via sg_debug_paint_node_count */
+void sg_render_dirty_only(SGNode* root, SkiaCanvas canvas);
+
 /* ========================================================================
  * Hit Testing
  * ======================================================================== */
 
 /* Find deepest interactive node at (x,y) in window coordinates */
 SGNode* sg_hit_test(SGNode* root, float x, float y);
+
+/* Convert a window-space point into coordinates relative to node bounds. */
+int sg_node_world_to_local(SGNode* node, float world_x, float world_y,
+                           float* local_x, float* local_y);
 
 /* Check if a point is inside a node's bounds */
 int sg_point_in_node(SGNode* node, float x, float y);

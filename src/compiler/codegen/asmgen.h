@@ -5,6 +5,7 @@
 #include "compiler/frontend/ast.h"
 #include "support/log.h"
 #include "compiler/sema/symtable.h"
+#include "compiler/sema/drop_planner.h"
 
 typedef struct {
     FILE* output;
@@ -26,6 +27,9 @@ typedef struct {
     int    local_count;
     int    local_capacity;
     int    frame_size;       /* Total bytes allocated for locals (rounded up to 16) */
+    
+    /* Codegen-time Drop Planner for emitting ARC releases */
+    DropPlanner drop_ctx;
 } AssemblyGenerator;
 
 /* Logger parameter is deprecated - uses global nd_logger */

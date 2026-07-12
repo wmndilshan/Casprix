@@ -112,52 +112,6 @@ static bool is_moved(MirBorrowChecker* bc, MirValueId id) {
 }
 
 /* ================================================================
- * Check if a value is used in an instruction
- * ================================================================ */
-
-static bool inst_uses_value(MirInst* inst, MirValueId val) __attribute__((unused));
-static bool inst_uses_value(MirInst* inst, MirValueId val) {
-    switch (inst->opcode) {
-        case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
-        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
-        case MIR_BAND: case MIR_BOR: case MIR_BXOR: case MIR_SHL: case MIR_SHR:
-        case MIR_CMP_EQ: case MIR_CMP_NE: case MIR_CMP_LT: case MIR_CMP_LE:
-        case MIR_CMP_GT: case MIR_CMP_GE:
-            return inst->as.binary.lhs == val || inst->as.binary.rhs == val;
-
-        case MIR_NEG: case MIR_FNEG: case MIR_BNOT: case MIR_LOGIC_NOT:
-        case MIR_CAST: case MIR_ZEXT: case MIR_SEXT: case MIR_TRUNC:
-        case MIR_SITOFP: case MIR_FPTOSI:
-            return inst->as.unary.operand == val;
-
-        case MIR_LOAD:
-            return inst->as.mem.ptr == val;
-        case MIR_STORE:
-            return inst->as.mem.ptr == val || inst->as.mem.value == val;
-
-        case MIR_CONDBR:
-            return inst->as.condbr.cond == val;
-        case MIR_RET:
-            return inst->as.ret.value == val;
-
-        case MIR_CALL:
-        case MIR_CALL_INDIRECT:
-            for (int i = 0; i < inst->as.call.n_args; i++)
-                if (inst->as.call.args[i] == val) return true;
-            return inst->opcode == MIR_CALL_INDIRECT && inst->as.call.callee == val;
-
-        case MIR_COPY: case MIR_BORROW: case MIR_BORROW_MUT: case MIR_MOVE:
-            return inst->as.transfer.source == val;
-
-        case MIR_ARC_RETAIN: case MIR_ARC_RELEASE: case MIR_DROP:
-            return inst->as.refop.ptr == val;
-
-        default:
-            return false;
-    }
-}
-
-/* ================================================================
  * Track borrow
  * ================================================================ */
 
@@ -211,6 +165,123 @@ static void check_borrow_conflicts(MirBorrowChecker* bc, MirValueId source,
  * Check a single function
  * ================================================================ */
 
+static void borrow_operand_moved(MirBorrowChecker* bc, MirInst* inst,
+                                  MirValueId id, const char* ctx) {
+    if (id == MIR_VALUE_NONE) return;
+    if (is_moved(bc, id)) {
+        emit_error(bc, MIR_BERR_USE_AFTER_MOVE, ctx,
+                   inst->src_line, inst->src_col, id, MIR_VALUE_NONE);
+    }
+}
+
+/* Use-after-move for every SSA operand (mirrors mir_opt.c's walker). */
+static void borrow_check_inst_operands(MirBorrowChecker* bc, MirInst* inst) {
+    if (inst->opcode == MIR_MOVE) return;
+
+    switch (inst->opcode) {
+        case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
+        case MIR_BAND: case MIR_BOR: case MIR_BXOR: case MIR_SHL: case MIR_SHR:
+        case MIR_USHR:
+        case MIR_CMP_EQ: case MIR_CMP_NE: case MIR_CMP_LT: case MIR_CMP_LE:
+        case MIR_CMP_GT: case MIR_CMP_GE:
+        case MIR_LOGIC_AND: case MIR_LOGIC_OR:
+            borrow_operand_moved(bc, inst, inst->as.binary.lhs, "value used after move (lhs)");
+            borrow_operand_moved(bc, inst, inst->as.binary.rhs, "value used after move (rhs)");
+            break;
+
+        case MIR_NEG: case MIR_FNEG: case MIR_BNOT: case MIR_LOGIC_NOT:
+        case MIR_CAST: case MIR_BITCAST: case MIR_TRUNC:
+        case MIR_ZEXT: case MIR_SEXT: case MIR_SITOFP: case MIR_FPTOSI:
+            borrow_operand_moved(bc, inst, inst->as.unary.operand, "value used after move (operand)");
+            break;
+
+        case MIR_LOAD:
+            borrow_operand_moved(bc, inst, inst->as.mem.ptr, "value used after move (load ptr)");
+            break;
+        case MIR_STORE:
+            borrow_operand_moved(bc, inst, inst->as.mem.ptr, "value used after move (store ptr)");
+            borrow_operand_moved(bc, inst, inst->as.mem.value, "value used after move (store val)");
+            break;
+        case MIR_GET_FIELD_PTR:
+        case MIR_GET_ELEM_PTR:
+            borrow_operand_moved(bc, inst, inst->as.gep.base, "value used after move (gep base)");
+            borrow_operand_moved(bc, inst, inst->as.gep.index, "value used after move (gep index)");
+            break;
+
+        case MIR_CONDBR:
+            borrow_operand_moved(bc, inst, inst->as.condbr.cond, "value used after move (cond)");
+            break;
+        case MIR_RET:
+            borrow_operand_moved(bc, inst, inst->as.ret.value, "value used after move (ret)");
+            break;
+        case MIR_SWITCH:
+            borrow_operand_moved(bc, inst, inst->as.sw.discriminant, "value used after move (switch)");
+            break;
+
+        case MIR_CALL:
+        case MIR_CALL_INDIRECT:
+            if (inst->opcode == MIR_CALL_INDIRECT)
+                borrow_operand_moved(bc, inst, inst->as.call.callee, "call target used after move");
+            for (int i = 0; i < inst->as.call.n_args; i++)
+                borrow_operand_moved(bc, inst, inst->as.call.args[i], "call argument used after move");
+            break;
+
+        case MIR_CALL_VIRTUAL:
+            borrow_operand_moved(bc, inst, inst->as.vcall.self_obj, "vcall self used after move");
+            for (int i = 0; i < inst->as.vcall.n_args; i++)
+                borrow_operand_moved(bc, inst, inst->as.vcall.args[i], "vcall arg used after move");
+            break;
+
+        case MIR_PHI:
+            for (int i = 0; i < inst->as.phi.n_edges; i++)
+                borrow_operand_moved(bc, inst, inst->as.phi.edges[i].value, "phi operand used after move");
+            break;
+
+        case MIR_COPY: case MIR_BORROW: case MIR_BORROW_MUT:
+            borrow_operand_moved(bc, inst, inst->as.transfer.source, "transfer source used after move");
+            break;
+
+        case MIR_ARC_RETAIN: case MIR_ARC_RELEASE: case MIR_DROP:
+            borrow_operand_moved(bc, inst, inst->as.refop.ptr, "ref op ptr used after move");
+            break;
+
+        case MIR_STRUCT_INIT:
+            for (int i = 0; i < inst->as.struct_init.n_fields; i++)
+                borrow_operand_moved(bc, inst, inst->as.struct_init.fields[i], "struct field used after move");
+            break;
+
+        case MIR_EXTRACT:
+            borrow_operand_moved(bc, inst, inst->as.field_op.aggregate, "extract agg used after move");
+            break;
+        case MIR_INSERT:
+            borrow_operand_moved(bc, inst, inst->as.field_op.aggregate, "insert agg used after move");
+            borrow_operand_moved(bc, inst, inst->as.field_op.insert_val, "insert val used after move");
+            break;
+
+        case MIR_SUSPEND:
+            borrow_operand_moved(bc, inst, inst->as.suspend.future, "suspend future used after move");
+            break;
+
+        case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+        case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+        case MIR_VEC_BROADCAST: case MIR_VEC_REDUCE_SUM:
+        case MIR_VEC_ADD: case MIR_VEC_SUB: case MIR_VEC_MUL: case MIR_VEC_DIV:
+        case MIR_VEC_MIN: case MIR_VEC_MAX:
+        case MIR_VEC_AND: case MIR_VEC_OR:  case MIR_VEC_XOR:
+        case MIR_VEC_FMA: case MIR_VEC_DOT:
+        case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT: case MIR_VEC_CMP_GT:
+        case MIR_VEC_SELECT:
+            borrow_operand_moved(bc, inst, inst->as.vec.a, "vec operand a used after move");
+            borrow_operand_moved(bc, inst, inst->as.vec.b, "vec operand b used after move");
+            borrow_operand_moved(bc, inst, inst->as.vec.c, "vec operand c used after move");
+            break;
+
+        default:
+            break;
+    }
+}
+
 int mir_borrow_check_function(MirBorrowChecker* bc, MirFunction* func) {
     if (func->is_extern) return 0;
 
@@ -220,64 +291,7 @@ int mir_borrow_check_function(MirBorrowChecker* bc, MirFunction* func) {
     /* Walk all blocks and instructions */
     for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
         for (MirInst* inst = bb->first; inst; inst = inst->next) {
-
-            /* Check use-after-move for all operands */
-            switch (inst->opcode) {
-                case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
-                case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
-                case MIR_BAND: case MIR_BOR: case MIR_BXOR: case MIR_SHL: case MIR_SHR:
-                case MIR_CMP_EQ: case MIR_CMP_NE: case MIR_CMP_LT: case MIR_CMP_LE:
-                case MIR_CMP_GT: case MIR_CMP_GE: {
-                    if (is_moved(bc, inst->as.binary.lhs)) {
-                        emit_error(bc, MIR_BERR_USE_AFTER_MOVE,
-                                   "value used after move (lhs)",
-                                   inst->src_line, inst->src_col,
-                                   inst->as.binary.lhs, MIR_VALUE_NONE);
-                    }
-                    if (is_moved(bc, inst->as.binary.rhs)) {
-                        emit_error(bc, MIR_BERR_USE_AFTER_MOVE,
-                                   "value used after move (rhs)",
-                                   inst->src_line, inst->src_col,
-                                   inst->as.binary.rhs, MIR_VALUE_NONE);
-                    }
-                    break;
-                }
-
-                case MIR_NEG: case MIR_FNEG: case MIR_BNOT: case MIR_LOGIC_NOT:
-                case MIR_CAST: case MIR_ZEXT: case MIR_SEXT: case MIR_TRUNC:
-                case MIR_SITOFP: case MIR_FPTOSI: {
-                    if (is_moved(bc, inst->as.unary.operand)) {
-                        emit_error(bc, MIR_BERR_USE_AFTER_MOVE,
-                                   "value used after move (operand)",
-                                   inst->src_line, inst->src_col,
-                                   inst->as.unary.operand, MIR_VALUE_NONE);
-                    }
-                    break;
-                }
-
-                case MIR_CALL:
-                case MIR_CALL_INDIRECT: {
-                    if (inst->opcode == MIR_CALL_INDIRECT &&
-                        is_moved(bc, inst->as.call.callee)) {
-                        emit_error(bc, MIR_BERR_USE_AFTER_MOVE,
-                                   "call target used after move",
-                                   inst->src_line, inst->src_col,
-                                   inst->as.call.callee, MIR_VALUE_NONE);
-                    }
-                    for (int i = 0; i < inst->as.call.n_args; i++) {
-                        if (is_moved(bc, inst->as.call.args[i])) {
-                            emit_error(bc, MIR_BERR_USE_AFTER_MOVE,
-                                       "call argument used after move",
-                                       inst->src_line, inst->src_col,
-                                       inst->as.call.args[i], MIR_VALUE_NONE);
-                        }
-                    }
-                    break;
-                }
-
-                default:
-                    break;
-            }
+            borrow_check_inst_operands(bc, inst);
 
             /* Track move instructions */
             if (inst->opcode == MIR_MOVE) {
@@ -294,12 +308,6 @@ int mir_borrow_check_function(MirBorrowChecker* bc, MirFunction* func) {
             /* Track borrows and check conflicts */
             if (inst->opcode == MIR_BORROW) {
                 MirValueId src = inst->as.transfer.source;
-                if (is_moved(bc, src)) {
-                    emit_error(bc, MIR_BERR_USE_AFTER_MOVE,
-                               "cannot borrow a moved value",
-                               inst->src_line, inst->src_col,
-                               src, MIR_VALUE_NONE);
-                }
                 check_borrow_conflicts(bc, src, MIR_BK_SHARED,
                                        inst->src_line, inst->src_col, inst->result);
                 track_borrow(bc, inst, MIR_BK_SHARED);
@@ -307,26 +315,9 @@ int mir_borrow_check_function(MirBorrowChecker* bc, MirFunction* func) {
 
             if (inst->opcode == MIR_BORROW_MUT) {
                 MirValueId src = inst->as.transfer.source;
-                if (is_moved(bc, src)) {
-                    emit_error(bc, MIR_BERR_USE_AFTER_MOVE,
-                               "cannot mutably borrow a moved value",
-                               inst->src_line, inst->src_col,
-                               src, MIR_VALUE_NONE);
-                }
                 check_borrow_conflicts(bc, src, MIR_BK_MUTABLE,
                                        inst->src_line, inst->src_col, inst->result);
                 track_borrow(bc, inst, MIR_BK_MUTABLE);
-            }
-
-            /* Track drops */
-            if (inst->opcode == MIR_DROP) {
-                MirValueId ptr = inst->as.refop.ptr;
-                if (is_moved(bc, ptr)) {
-                    emit_error(bc, MIR_BERR_USE_AFTER_MOVE,
-                               "cannot drop a moved value",
-                               inst->src_line, inst->src_col,
-                               ptr, MIR_VALUE_NONE);
-                }
             }
         }
     }

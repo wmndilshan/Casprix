@@ -1,0 +1,33 @@
+---
+description: Scope for agent/cursor-gui-net — runtime GUI + network
+globs:
+  - runtime/gui/**
+  - runtime/net/**
+---
+
+# Cursor agent scope (gui + net)
+
+## Allowed paths (read + write)
+
+- `runtime/gui/**`
+- `runtime/net/**`
+
+## Read-only reference
+
+- `runtime/core/*.h`
+- `include/casprix.h`
+
+## Do not edit
+
+- `src/**`
+- `runtime/ml/**`
+- `runtime/ai/**`
+- `runtime/android/**` (except coordinated JNI contracts documented in `runtime/gui/gui_bridge.h`)
+- Root `CMakeLists.txt` unless explicitly required to register new `runtime/gui` / `runtime/net` sources
+- `.github/**`
+- Unrelated `include/**` headers
+
+## Cross-scope contracts
+
+- Keep `cpx_gui_surface_attach` signature in `runtime/gui/gui_bridge.h` stable for Android JNI.
+- Implement `cpx_gui_training_progress` as a safe no-op unless a HUD backend is registered.

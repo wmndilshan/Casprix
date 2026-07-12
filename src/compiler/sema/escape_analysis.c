@@ -8,6 +8,7 @@
 
 #include "escape_analysis.h"
 #include "support/log.h"
+#include "support/error.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -42,11 +43,23 @@ EscapeInfo* escape_register_var(EscapeAnalyzer* ea, const char* name,
     if (ea->count >= MAX_ESCAPE_ENTRIES) return NULL;
 
     EscapeInfo* info = &ea->entries[ea->count++];
-    info->var_name     = name;
-    info->scope_level  = ea->current_scope;
-    info->flags        = ESCAPE_NONE;
-    info->is_parameter = is_parameter;
-    info->analyzed     = false;
+    info->var_name      = name;
+    info->scope_level   = ea->current_scope;
+    info->flags         = ESCAPE_NONE;
+    info->is_parameter  = is_parameter;
+    info->analyzed      = false;
+    info->is_string_view = false;
+    info->parent_name    = NULL;
+    return info;
+}
+
+EscapeInfo* escape_register_string_view(EscapeAnalyzer* ea,
+                                         const char* name,
+                                         const char* parent_name) {
+    EscapeInfo* info = escape_register_var(ea, name, false);
+    if (!info) return NULL;
+    info->is_string_view = true;
+    info->parent_name    = parent_name;
     return info;
 }
 
@@ -153,20 +166,26 @@ void escape_analyze_expr(EscapeAnalyzer* ea, Expr* expr,
     }
 
     case EXPR_NEW: {
-        /* `new Foo()` — the resulting object is allocated on the heap.
-           We don't mark anything here; the *assignment target* determines
-           whether the new object escapes. */
+        /* `new Foo(args)` — constructor may capture arguments in heap fields,
+           so treat every argument as a potential non-borrow call argument. */
         for (int i = 0; i < expr->as.new_expr.arg_count; i++) {
             escape_analyze_expr(ea, expr->as.new_expr.arguments[i],
-                                 enclosing_func, ESCAPE_NONE);
+                                 enclosing_func, ESCAPE_CALL_ARG);
         }
         break;
     }
 
     case EXPR_MEMBER_ACCESS: {
-        /* obj.field — reading a field does not cause escape by itself */
+        /* obj.field read — object itself does not escape */
         escape_analyze_expr(ea, expr->as.member.object,
                              enclosing_func, ESCAPE_NONE);
+        /* obj.method(args) — method may capture arguments */
+        if (expr->as.member.is_method_call) {
+            for (int i = 0; i < expr->as.member.arg_count; i++) {
+                escape_analyze_expr(ea, expr->as.member.arguments[i],
+                                     enclosing_func, ESCAPE_CALL_ARG);
+            }
+        }
         break;
     }
 
@@ -396,14 +415,100 @@ void escape_analyze_function(EscapeAnalyzer* ea, Stmt* func_stmt) {
     for (int i = 0; i < ea->count; i++) {
         ea->entries[i].analyzed = true;
     }
+
+    /* NOTE: `escape_propagate_view_links` is NOT called here.  The escape
+     * analyser does not know which entries correspond to `StringView`
+     * bindings until the linear-view module promotes them from the
+     * ownership-checker state (see `linear_view_promote_escape_entries`
+     * and the driver sequence in sema/semantic.c).  Calling the propagator
+     * before promotion would silently no-op. */
+}
+
+/* ─── Linear-view escape propagation ─────────────────────────────────────
+ *
+ * Run as a fixpoint after the AST walk completes.  Two propagation
+ * directions:
+ *
+ *   1. parent → view : any escape path the parent has becomes legal for
+ *                      the view (the view can be returned wherever the
+ *                      parent is).  This is the "lifting" rule.
+ *
+ *   2. view → parent : if the view escapes via RETURN/CLOSURE/GLOBAL/FIELD
+ *                      and the parent does NOT, that is a borrow that
+ *                      outlives its referent — emit a diagnostic.
+ *
+ * The function returns the number of diagnostics emitted.
+ * ──────────────────────────────────────────────────────────────────────── */
+#define LINEAR_VIEW_OUTLIVING_FLAGS \
+    (ESCAPE_RETURN | ESCAPE_CLOSURE | ESCAPE_GLOBAL | ESCAPE_FIELD)
+
+int escape_propagate_view_links(EscapeAnalyzer* ea, int line_for_diag) {
+    if (!ea) return 0;
+    int diagnostics = 0;
+
+    /* Iterate to fixpoint — at most ea->count rounds since each round
+     * monotonically grows at least one EscapeInfo's flag set.            */
+    bool changed = true;
+    int  rounds  = 0;
+    while (changed && rounds++ < ea->count + 1) {
+        changed = false;
+        for (int i = 0; i < ea->count; i++) {
+            EscapeInfo* v = &ea->entries[i];
+            if (!v->is_string_view || !v->parent_name) continue;
+
+            EscapeInfo* p = escape_lookup(ea, v->parent_name);
+            if (!p) continue;
+
+            EscapeFlags new_v = (EscapeFlags)(v->flags | p->flags);
+            if (new_v != v->flags) {
+                v->flags = new_v;
+                changed  = true;
+            }
+        }
+    }
+
+    /* Now check: any view escape path NOT covered by parent is illegal. */
+    for (int i = 0; i < ea->count; i++) {
+        EscapeInfo* v = &ea->entries[i];
+        if (!v->is_string_view) continue;
+
+        if (!v->parent_name) {
+            /* Already diagnosed by the linear-view registrar; skip here  */
+            continue;
+        }
+
+        EscapeInfo* p = escape_lookup(ea, v->parent_name);
+        if (!p) continue;
+
+        EscapeFlags view_only = (EscapeFlags)(v->flags &
+                                              LINEAR_VIEW_OUTLIVING_FLAGS &
+                                              ~p->flags);
+        if (view_only != 0) {
+            char msg[320];
+            const char* via =
+                (view_only & ESCAPE_RETURN)  ? "return"             :
+                (view_only & ESCAPE_CLOSURE) ? "closure capture"    :
+                (view_only & ESCAPE_GLOBAL)  ? "global store"       :
+                (view_only & ESCAPE_FIELD)   ? "heap field store"   :
+                                                "unknown escape";
+            snprintf(msg, sizeof(msg),
+                     "Linear StringView '%s' escapes via %s, but its parent "
+                     "String '%s' does not -- the borrowed pointer would "
+                     "outlive its storage",
+                     v->var_name, via, v->parent_name);
+            report_semantic_error(line_for_diag, 0, msg);
+            diagnostics++;
+        }
+    }
+
+    return diagnostics;
 }
 
 /* ─── Debug ─── */
 
-static const char* flags_to_str(EscapeFlags f) {
-    static char buf[256];
+static const char* flags_to_str(EscapeFlags f, char* buf, size_t size) {
     buf[0] = '\0';
-    if (f == ESCAPE_NONE)       return "NONE (stack-eligible)";
+    if (f == ESCAPE_NONE) return "NONE (stack-eligible)";
     if (f & ESCAPE_RETURN)      strcat(buf, "RETURN ");
     if (f & ESCAPE_CLOSURE)     strcat(buf, "CLOSURE ");
     if (f & ESCAPE_GLOBAL)      strcat(buf, "GLOBAL ");
@@ -422,11 +527,12 @@ void escape_print_report(EscapeAnalyzer* ea) {
     int stack_eligible = 0;
     for (int i = 0; i < ea->count; i++) {
         EscapeInfo* info = &ea->entries[i];
+        char flag_buf[128];
         printf("%-20s %-6d %-8s %s\n",
                info->var_name ? info->var_name : "<anon>",
                info->scope_level,
                info->is_parameter ? "yes" : "no",
-               flags_to_str(info->flags));
+               flags_to_str(info->flags, flag_buf, sizeof(flag_buf)));
         if (info->flags == ESCAPE_NONE) stack_eligible++;
     }
 

@@ -326,6 +326,17 @@ void mir_build_ret_void(MirBuilder* b) {
     emit_void(b, inst);
 }
 
+MirValueId mir_build_suspend(MirBuilder* b, MirBlock* resume_bb, MirValueId future) {
+    MirType* ret_type = mir_function_value_type(b->func, future);
+    // Result of suspend is the result of the future once resumed
+    MirInst* inst = alloc_inst(b, MIR_SUSPEND, ret_type);
+    inst->as.suspend.resume_bb = resume_bb;
+    inst->as.suspend.future = future;
+    emit(b, inst);
+    link_cfg(b->current_block, resume_bb);
+    return inst->result;
+}
+
 /* ================================================================
  * Function calls
  * ================================================================ */
@@ -532,4 +543,149 @@ MirValueId mir_build_insert(MirBuilder* b, MirValueId agg,
     inst->as.field_op.field_idx = field_idx;
     inst->as.field_op.insert_val = val;
     return emit(b, inst);
+}
+
+/* ================================================================
+ * Generic vector builders (SIMD virtualization layer)
+ *
+ * Every VEC_* instruction shares the `vec` operand variant which
+ * carries up to three SSA sources, a *logical* lane count, and a
+ * lane element type.  The SIMD virtualization/legalization pass
+ * (src/compiler/opt/simd.c) later rewrites each logical op into a
+ * sequence of target-native ops (AVX2 / NEON / scalar) before the
+ * backends lower them to machine code.
+ * ================================================================ */
+
+/* A vector-typed SSA value is represented at the MIR level by the
+ * same scalar lane type — the lane-count metadata lives on the
+ * instruction itself (inst->as.vec.width).  This keeps the MIR type
+ * system simple and avoids a combinatorial explosion of "vec<T,N>"
+ * types while still giving the backends and the optimiser enough
+ * information to reason about each op. */
+static MirInst* alloc_vec_inst(MirBuilder* b, MirOpcode op, MirType* lane_type,
+                                int width,
+                                MirValueId a, MirValueId bsrc, MirValueId c) {
+    MirInst* inst = alloc_inst(b, op, lane_type);
+    inst->as.vec.a         = a;
+    inst->as.vec.b         = bsrc;
+    inst->as.vec.c         = c;
+    inst->as.vec.width     = width;
+    inst->as.vec.lane_type = lane_type;
+    return inst;
+}
+
+MirValueId mir_build_vec_load(MirBuilder* b, MirValueId ptr,
+                               MirType* lane_type, int width, bool aligned) {
+    MirOpcode op = aligned ? MIR_VEC_LOAD : MIR_VEC_LOAD_UNALIGNED;
+    MirInst* inst = alloc_vec_inst(b, op, lane_type, width,
+                                    ptr, MIR_VALUE_NONE, MIR_VALUE_NONE);
+    return emit(b, inst);
+}
+
+void mir_build_vec_store(MirBuilder* b, MirValueId ptr, MirValueId value,
+                          MirType* lane_type, int width, bool aligned) {
+    MirOpcode op = aligned ? MIR_VEC_STORE : MIR_VEC_STORE_UNALIGNED;
+    MirInst* inst = alloc_inst(b, op, mir_type_void(b->module));
+    inst->as.vec.a         = ptr;
+    inst->as.vec.b         = value;
+    inst->as.vec.c         = MIR_VALUE_NONE;
+    inst->as.vec.width     = width;
+    inst->as.vec.lane_type = lane_type;
+    emit_void(b, inst);
+}
+
+MirValueId mir_build_vec_broadcast(MirBuilder* b, MirValueId scalar,
+                                    MirType* lane_type, int width) {
+    MirInst* inst = alloc_vec_inst(b, MIR_VEC_BROADCAST, lane_type, width,
+                                    scalar, MIR_VALUE_NONE, MIR_VALUE_NONE);
+    return emit(b, inst);
+}
+
+MirValueId mir_build_vec_binop(MirBuilder* b, MirOpcode op,
+                                MirValueId a, MirValueId b_src,
+                                MirType* lane_type, int width) {
+    assert(op == MIR_VEC_ADD || op == MIR_VEC_SUB || op == MIR_VEC_MUL ||
+           op == MIR_VEC_DIV || op == MIR_VEC_MIN || op == MIR_VEC_MAX ||
+           op == MIR_VEC_AND || op == MIR_VEC_OR  || op == MIR_VEC_XOR);
+    MirInst* inst = alloc_vec_inst(b, op, lane_type, width,
+                                    a, b_src, MIR_VALUE_NONE);
+    return emit(b, inst);
+}
+
+MirValueId mir_build_vec_fma(MirBuilder* b,
+                              MirValueId a, MirValueId bsrc, MirValueId c,
+                              MirType* lane_type, int width) {
+    MirInst* inst = alloc_vec_inst(b, MIR_VEC_FMA, lane_type, width,
+                                    a, bsrc, c);
+    return emit(b, inst);
+}
+
+MirValueId mir_build_vec_reduce_sum(MirBuilder* b, MirValueId v,
+                                     MirType* lane_type, int width) {
+    /* Reduction returns a scalar of the same lane type. */
+    MirInst* inst = alloc_vec_inst(b, MIR_VEC_REDUCE_SUM, lane_type, width,
+                                    v, MIR_VALUE_NONE, MIR_VALUE_NONE);
+    return emit(b, inst);
+}
+
+MirValueId mir_build_vec_dot(MirBuilder* b, MirValueId a, MirValueId bsrc,
+                              MirType* lane_type, int width) {
+    MirInst* inst = alloc_vec_inst(b, MIR_VEC_DOT, lane_type, width,
+                                    a, bsrc, MIR_VALUE_NONE);
+    return emit(b, inst);
+}
+
+MirValueId mir_build_vec_cmp(MirBuilder* b, MirOpcode op,
+                              MirValueId a, MirValueId bsrc,
+                              MirType* lane_type, int width) {
+    assert(op == MIR_VEC_CMP_EQ || op == MIR_VEC_CMP_LT || op == MIR_VEC_CMP_GT);
+    /* Comparison yields a mask: one bit / byte per lane. We represent
+     * the mask with the same lane_type — lowering knows to produce
+     * an all-ones-per-matching-lane mask. */
+    MirInst* inst = alloc_vec_inst(b, op, lane_type, width,
+                                    a, bsrc, MIR_VALUE_NONE);
+    return emit(b, inst);
+}
+
+MirValueId mir_build_vec_select(MirBuilder* b, MirValueId mask,
+                                 MirValueId a, MirValueId bsrc,
+                                 MirType* lane_type, int width) {
+    MirInst* inst = alloc_vec_inst(b, MIR_VEC_SELECT, lane_type, width,
+                                    mask, a, bsrc);
+    return emit(b, inst);
+}
+
+/* ================================================================
+ * Opcode introspection
+ * ================================================================ */
+
+bool mir_opcode_is_vec(MirOpcode op) {
+    return op >= MIR_VEC_LOAD && op <= MIR_VEC_SELECT;
+}
+
+const char* mir_opcode_name(MirOpcode op) {
+    switch (op) {
+        case MIR_VEC_LOAD:            return "vec.load";
+        case MIR_VEC_LOAD_UNALIGNED:  return "vec.load.u";
+        case MIR_VEC_STORE:           return "vec.store";
+        case MIR_VEC_STORE_UNALIGNED: return "vec.store.u";
+        case MIR_VEC_BROADCAST:       return "vec.broadcast";
+        case MIR_VEC_ADD:             return "vec.add";
+        case MIR_VEC_SUB:             return "vec.sub";
+        case MIR_VEC_MUL:             return "vec.mul";
+        case MIR_VEC_DIV:             return "vec.div";
+        case MIR_VEC_MIN:             return "vec.min";
+        case MIR_VEC_MAX:             return "vec.max";
+        case MIR_VEC_AND:             return "vec.and";
+        case MIR_VEC_OR:              return "vec.or";
+        case MIR_VEC_XOR:             return "vec.xor";
+        case MIR_VEC_FMA:             return "vec.fma";
+        case MIR_VEC_REDUCE_SUM:      return "vec.reduce_sum";
+        case MIR_VEC_DOT:             return "vec.dot";
+        case MIR_VEC_CMP_EQ:          return "vec.cmp.eq";
+        case MIR_VEC_CMP_LT:          return "vec.cmp.lt";
+        case MIR_VEC_CMP_GT:          return "vec.cmp.gt";
+        case MIR_VEC_SELECT:          return "vec.select";
+        default:                      return "?";
+    }
 }

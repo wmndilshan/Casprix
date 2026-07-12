@@ -10,6 +10,7 @@ typedef struct {
     int scope_depth;
     DataType current_function_return_type;
     bool in_function;
+    bool in_async_function;
     ClassSymbol* current_class;  // NULL when not in a class method
     MethodSymbol* current_method;  // NULL when not in a method
     int loop_depth;  // Track loop nesting for break/continue validation

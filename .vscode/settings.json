@@ -17,7 +17,7 @@
     "string_view": "cpp",
     "span": "cpp"
   },
-  "casprix.compilerPath": "${workspaceFolder}/build/casprix.exe",
+  "casprix.compilerPath": "${workspaceFolder}/bin/casprix",
   "casprix.checkOnSave": true,
   "casprix.checkOnType": false,
   "editor.bracketPairColorization.enabled": true,

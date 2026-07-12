@@ -1,6 +1,6 @@
-# Casprix Language — VS Code Extension
+# Casprix 👻 Language — VS Code Extension
 
-Full language support for the [Casprix programming language](https://github.com/user/casprix) inside Visual Studio Code.
+Full language support for the [Casprix programming language](https://github.com/wmndilshan/casprix) inside Visual Studio Code.
 
 ## Features
 
@@ -40,11 +40,12 @@ Type a prefix and press `Tab`:
 | `impl`  | Impl block        |
 | `enum`  | Enum definition   |
 | `let`   | Let binding       |
-| `letm`  | Mutable binding   |
+| `mut`   | Mutable binding   |
 | `if`    | If statement      |
 | `ife`   | If-else           |
 | `for`   | For-in range loop |
-| `each`  | For-each loop     |
+| `alloc` | Alloc region      |
+| `lambda`| Lambda expression |
 | `while` | While loop        |
 | `match` | Match expression  |
 | `try`   | Try-catch block   |
@@ -76,11 +77,11 @@ The extension uses the Casprix compiler for error checking. Set the path in your
 **`.vscode/settings.json`**:
 ```json
 {
-    "casprix.compilerPath": "D:/Projects/ND/build/casprix.exe"
+    "casprix.compilerPath": "C:/path/to/casprix/build/Release/casprix.exe"
 }
 ```
 
-Or add `build/` to your system `PATH` and leave the default `"casprix"`.
+Use the path to your built `casprix` or `casprix.exe`, or add that directory to `PATH` and keep the default `"casprix"`.
 
 ## Configuration
 

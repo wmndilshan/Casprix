@@ -1,87 +1,270 @@
-// Hello Skia UI — Demo application for Casprix Skia framework
-// // Creates a window with a column layout containing:
-//   - Title text
-//   - Description text
-//   - Text input field
-//   - Row of buttons
-//   - Checkbox and slider
-
 import "lib/skia/ui"
 
 func main() -> int {
-    // Create application window
-    let app = new App("Hello Casperix", 800, 600)
+    let app = new App("Casprix FX Studio", 1280, 820)
     let font = app.get_font()
-    let title_font = skia_font_create("Segoe UI", 28.0)
+    let title_font = create_font("Segoe UI", 30.0)
     skia_font_set_bold(title_font, 1)
+    let heading_font = create_font("Segoe UI", 20.0)
+    skia_font_set_bold(heading_font, 1)
+    let metric_font = create_font("Segoe UI", 26.0)
+    skia_font_set_bold(metric_font, 1)
+    let caption_font = create_font("Segoe UI", 12.0)
+    skia_font_set_bold(caption_font, 1)
 
-    // Build UI tree
-    let root = new Column(16.0)
-    root.set_padding(32.0)
-    root.set_background(0xFFF5F5F5)
+    let root = new Row(24.0)
+    javafx_style_root(root.handle)
 
-    // Title
-    let title = new Text("Hello, Casperix!", title_font, 0xFF212121)
-    root.add(title.handle)
+    let sidebar = new Column(14.0)
+    sidebar.set_min_size(248.0, 760.0)
+    javafx_style_sidebar(sidebar.handle)
 
-    // Subtitle
-    let subtitle = new Text("A Skia-rendered UI framework for Casprix", font, 0xFF757575)
-    root.add(subtitle.handle)
+    let brand_mark = new Text("CASPRIX FX", caption_font, 0xFF93C5FD)
+    sidebar.add(brand_mark.handle)
+    let brand_title = new Text("Studio Console", title_font, 0xFFF8FAFC)
+    sidebar.add(brand_title.handle)
+    let brand_copy = new Text("A JavaFX-inspired shell built on the Skia retained-mode runtime.", font, 0xFFCBD5E1)
+    sidebar.add(brand_copy.handle)
 
-    // Separator
-    let sep = new Separator(1, 0xFFBDBDBD, 1.0)
-    root.add(sep.handle)
+    let side_sep = new Separator(true, 0xFF334155, 1.0)
+    javafx_style_separator(side_sep.handle)
+    sidebar.add(side_sep.handle)
 
-    // Card with form inputs
-    let card = new Card()
-    let form = new Column(12.0)
+    let nav_overview = new Button("Overview", font)
+    javafx_style_primary_button(nav_overview.handle)
+    sidebar.add(nav_overview.handle)
 
-    let name_label = new Text("Name:", font, 0xFF333333)
-    form.add(name_label.handle)
+    let nav_projects = new Button("Projects", font)
+    javafx_style_sidebar_button(nav_projects.handle)
+    sidebar.add(nav_projects.handle)
 
-    let name_input = new TextInput("Enter your name...", font)
-    form.add(name_input.handle)
+    let nav_automations = new Button("Automations", font)
+    javafx_style_sidebar_button(nav_automations.handle)
+    sidebar.add(nav_automations.handle)
 
-    let email_label = new Text("Email:", font, 0xFF333333)
-    form.add(email_label.handle)
+    let nav_deploy = new Button("Deployments", font)
+    javafx_style_sidebar_button(nav_deploy.handle)
+    sidebar.add(nav_deploy.handle)
 
-    let email_input = new TextInput("user@example.com", font)
-    form.add(email_input.handle)
+    let nav_settings = new Button("Preferences", font)
+    javafx_style_sidebar_button(nav_settings.handle)
+    sidebar.add(nav_settings.handle)
 
-    card.add(form.handle)
-    root.add(card.handle)
+    let side_spacer = new Spacer(1.0)
+    sidebar.add(side_spacer.handle)
 
-    // Button row
-    let buttons = new Row(12.0)
+    let side_card = new Card()
+    side_card.set_padding(18.0)
+    side_card.set_background(0xFF273244)
+    side_card.set_border(0xFF3B475A, 1.0, 18.0)
+    side_card.set_shadow(0.0, 12.0, 28.0, 0x16000000)
+    let side_card_body = new Column(8.0)
+    let side_card_title = new Text("Live status", font, 0xFFF8FAFC)
+    side_card_body.add(side_card_title.handle)
+    let side_card_copy = new Text("Renderer healthy, theme loaded, and scene graph updates are flowing at desktop cadence.", font, 0xFFCBD5E1)
+    side_card_body.add(side_card_copy.handle)
+    let side_progress = new ProgressBar(0.0, 100.0, 92.0)
+    side_progress.set_colors(0xFF60A5FA, 0xFF334155)
+    side_card_body.add(side_progress.handle)
+    side_card.add(side_card_body.handle)
+    sidebar.add(side_card.handle)
 
-    let submit_btn = new Button("Submit", font)
-    submit_btn.set_background(0xFF4285F4)
-    submit_btn.set_border(0xFF3367D6, 1.0, 6.0)
-    buttons.add(submit_btn.handle)
+    root.add(sidebar.handle)
 
-    let cancel_btn = new Button("Cancel", font)
-    cancel_btn.set_background(0xFF757575)
-    cancel_btn.set_border(0xFF616161, 1.0, 6.0)
-    buttons.add(cancel_btn.handle)
+    let content = new Column(20.0)
+    content.set_flex_grow(1.0)
 
-    root.add(buttons.handle)
+    let toolbar = new Row(16.0)
+    javafx_style_toolbar(toolbar.handle)
 
-    // Checkbox
-    let checkbox = new Checkbox("I agree to the terms", font, 0)
-    root.add(checkbox.handle)
+    let toolbar_title = new Column(4.0)
+    let toolbar_heading = new Text("JavaFX-style application shell", heading_font, JAVAFX_TEXT)
+    toolbar_title.add(toolbar_heading.handle)
+    let toolbar_copy = new Text("Modern panels, toolbar actions, cards, tabs, and form controls driven by the Casprix Skia framework.", font, JAVAFX_TEXT_MUTED)
+    toolbar_title.add(toolbar_copy.handle)
+    toolbar.add(toolbar_title.handle)
 
-    // Slider
-    let slider_label = new Text("Volume:", font, 0xFF333333)
-    root.add(slider_label.handle)
+    let toolbar_spacer = new Spacer(1.0)
+    toolbar.add(toolbar_spacer.handle)
 
-    let volume = new Slider(0.0, 100.0, 50.0)
-    root.add(volume.handle)
+    let search = new TextInput("Search scenes, deploys, dashboards", font)
+    search.set_min_size(280.0, 46.0)
+    javafx_style_input(search.handle)
+    toolbar.add(search.handle)
 
-    // Set root and run
+    let export_btn = new Button("Export", font)
+    javafx_style_secondary_button(export_btn.handle)
+    toolbar.add(export_btn.handle)
+
+    let publish_btn = new Button("Publish", font)
+    javafx_style_primary_button(publish_btn.handle)
+    toolbar.add(publish_btn.handle)
+
+    content.add(toolbar.handle)
+
+    let metrics = new Row(18.0)
+
+    let metric_a = new Card()
+    metric_a.set_padding(22.0)
+    javafx_style_card(metric_a.handle)
+    let metric_a_body = new Column(6.0)
+    javafx_add_text(metric_a_body.handle, "Active workflows", caption_font, JAVAFX_TEXT_MUTED)
+    javafx_add_text(metric_a_body.handle, "128", metric_font, JAVAFX_TEXT)
+    javafx_add_text(metric_a_body.handle, "+18% compared with last week", font, 0xFF10B981)
+    metric_a.add(metric_a_body.handle)
+    metrics.add(metric_a.handle)
+
+    let metric_b = new Card()
+    metric_b.set_padding(22.0)
+    javafx_style_card(metric_b.handle)
+    let metric_b_body = new Column(6.0)
+    javafx_add_text(metric_b_body.handle, "Build latency", caption_font, JAVAFX_TEXT_MUTED)
+    javafx_add_text(metric_b_body.handle, "214 ms", metric_font, JAVAFX_TEXT)
+    javafx_add_text(metric_b_body.handle, "JavaFX-like chrome with retained-mode rendering", font, JAVAFX_TEXT_MUTED)
+    metric_b.add(metric_b_body.handle)
+    metrics.add(metric_b.handle)
+
+    let metric_c = new Card()
+    metric_c.set_padding(22.0)
+    javafx_style_card_alt(metric_c.handle)
+    let metric_c_body = new Column(6.0)
+    javafx_add_text(metric_c_body.handle, "Theme coverage", caption_font, JAVAFX_TEXT_MUTED)
+    javafx_add_text(metric_c_body.handle, "94%", metric_font, JAVAFX_TEXT)
+    let metric_progress = new ProgressBar(0.0, 100.0, 94.0)
+    javafx_style_progress(metric_progress.handle)
+    metric_c_body.add(metric_progress.handle)
+    metric_c.add(metric_c_body.handle)
+    metrics.add(metric_c.handle)
+
+    content.add(metrics.handle)
+
+    let dashboard_tab = new Column(18.0)
+
+    let dashboard_row = new Row(18.0)
+
+    let pipeline_card = new Card()
+    pipeline_card.set_padding(22.0)
+    javafx_style_card(pipeline_card.handle)
+    let pipeline_body = new Column(12.0)
+    javafx_add_text(pipeline_body.handle, "Pipeline monitor", heading_font, JAVAFX_TEXT)
+    javafx_add_text(pipeline_body.handle, "A dashboard card layout inspired by JavaFX desktop admin tools.", font, JAVAFX_TEXT_MUTED)
+    let pipeline_progress = new ProgressBar(0.0, 100.0, 76.0)
+    javafx_style_progress(pipeline_progress.handle)
+    pipeline_body.add(pipeline_progress.handle)
+    let pipeline_actions = new Row(10.0)
+    let inspect_btn = new Button("Inspect", font)
+    javafx_style_secondary_button(inspect_btn.handle)
+    pipeline_actions.add(inspect_btn.handle)
+    let resume_btn = new Button("Resume", font)
+    javafx_style_primary_button(resume_btn.handle)
+    pipeline_actions.add(resume_btn.handle)
+    pipeline_body.add(pipeline_actions.handle)
+    pipeline_card.add(pipeline_body.handle)
+    dashboard_row.add(pipeline_card.handle)
+
+    let schedule_card = new Card()
+    schedule_card.set_padding(22.0)
+    javafx_style_card_alt(schedule_card.handle)
+    let schedule_body = new Column(10.0)
+    javafx_add_text(schedule_body.handle, "Schedule", heading_font, JAVAFX_TEXT)
+    javafx_add_text(schedule_body.handle, "Daily sync at 09:30", font, JAVAFX_TEXT)
+    javafx_add_text(schedule_body.handle, "Nightly deploy at 23:45", font, JAVAFX_TEXT)
+    javafx_add_text(schedule_body.handle, "Backup retention 30 days", font, JAVAFX_TEXT_MUTED)
+    schedule_card.add(schedule_body.handle)
+    dashboard_row.add(schedule_card.handle)
+
+    dashboard_tab.add(dashboard_row.handle)
+
+    let activity_card = new Card()
+    activity_card.set_padding(22.0)
+    javafx_style_card(activity_card.handle)
+    let activity_body = new Column(12.0)
+    javafx_add_text(activity_body.handle, "Activity stream", heading_font, JAVAFX_TEXT)
+    javafx_add_text(activity_body.handle, "09:20  Theme bundle applied to workspace shell", font, JAVAFX_TEXT_MUTED)
+    javafx_add_text(activity_body.handle, "09:42  Renderer health check passed on all panels", font, JAVAFX_TEXT_MUTED)
+    javafx_add_text(activity_body.handle, "10:05  Interaction model synced with text input polish", font, JAVAFX_TEXT_MUTED)
+    javafx_add_text(activity_body.handle, "10:18  Build agent produced fresh GUI demo artifacts", font, JAVAFX_TEXT_MUTED)
+    activity_card.add(activity_body.handle)
+    dashboard_tab.add(activity_card.handle)
+
+    let workflow_tab = new Column(18.0)
+
+    let workflow_card = new Card()
+    workflow_card.set_padding(22.0)
+    javafx_style_card(workflow_card.handle)
+    let workflow_body = new Column(14.0)
+    javafx_add_text(workflow_body.handle, "Create workflow", heading_font, JAVAFX_TEXT)
+    javafx_add_text(workflow_body.handle, "The form below uses the themed input, action, checkbox, slider, and progress components.", font, JAVAFX_TEXT_MUTED)
+    javafx_add_text(workflow_body.handle, "Workflow name", font, JAVAFX_TEXT_MUTED)
+    let workflow_name = new TextInput("Nightly media pipeline", font)
+    javafx_style_input(workflow_name.handle)
+    workflow_body.add(workflow_name.handle)
+    javafx_add_text(workflow_body.handle, "Owner email", font, JAVAFX_TEXT_MUTED)
+    let workflow_owner = new TextInput("studio@casprix.dev", font)
+    javafx_style_input(workflow_owner.handle)
+    workflow_body.add(workflow_owner.handle)
+    let workflow_checks = new Checkbox("Enable live preview during render", font, true)
+    workflow_body.add(workflow_checks.handle)
+    javafx_add_text(workflow_body.handle, "Throughput profile", font, JAVAFX_TEXT_MUTED)
+    let throughput = new Slider(0.0, 100.0, 72.0)
+    workflow_body.add(throughput.handle)
+    let workflow_actions = new Row(10.0)
+    let save_draft = new Button("Save draft", font)
+    javafx_style_secondary_button(save_draft.handle)
+    workflow_actions.add(save_draft.handle)
+    let launch_flow = new Button("Launch workflow", font)
+    javafx_style_primary_button(launch_flow.handle)
+    workflow_actions.add(launch_flow.handle)
+    workflow_body.add(workflow_actions.handle)
+    workflow_card.add(workflow_body.handle)
+    workflow_tab.add(workflow_card.handle)
+
+    let settings_tab = new Column(18.0)
+
+    let settings_row = new Row(18.0)
+
+    let appearance_card = new Card()
+    appearance_card.set_padding(22.0)
+    javafx_style_card(appearance_card.handle)
+    let appearance_body = new Column(12.0)
+    javafx_add_text(appearance_body.handle, "Appearance", heading_font, JAVAFX_TEXT)
+    let motion_check = new Checkbox("Enable motion and hover transitions", font, true)
+    appearance_body.add(motion_check.handle)
+    let contrast_check = new Checkbox("Use elevated contrast for tooling panes", font, true)
+    appearance_body.add(contrast_check.handle)
+    javafx_add_text(appearance_body.handle, "Density", font, JAVAFX_TEXT_MUTED)
+    let density = new Slider(0.0, 100.0, 62.0)
+    appearance_body.add(density.handle)
+    appearance_card.add(appearance_body.handle)
+    settings_row.add(appearance_card.handle)
+
+    let release_card = new Card()
+    release_card.set_padding(22.0)
+    javafx_style_card_alt(release_card.handle)
+    let release_body = new Column(12.0)
+    javafx_add_text(release_body.handle, "Release readiness", heading_font, JAVAFX_TEXT)
+    javafx_add_text(release_body.handle, "Desktop shell theme", font, JAVAFX_TEXT_MUTED)
+    let ready_theme = new ProgressBar(0.0, 100.0, 96.0)
+    javafx_style_progress(ready_theme.handle)
+    release_body.add(ready_theme.handle)
+    javafx_add_text(release_body.handle, "Framework polish", font, JAVAFX_TEXT_MUTED)
+    let ready_framework = new ProgressBar(0.0, 100.0, 88.0)
+    ready_framework.set_colors(JAVAFX_BG_SUCCESS, 0xFFE5ECF5)
+    release_body.add(ready_framework.handle)
+    release_card.add(release_body.handle)
+    settings_row.add(release_card.handle)
+
+    settings_tab.add(settings_row.handle)
+
+    let tabs = new TabPanel()
+    tabs.new3("Dashboard", dashboard_tab.handle, "Workflow", workflow_tab.handle, "Settings", settings_tab.handle)
+    tabs.set_min_size(720.0, 420.0)
+    content.add(tabs.handle)
+
+    root.add(content.handle)
+
     app.set_root(root.handle)
     app.run()
-
-    // Cleanup
     app.destroy()
     return 0
 }

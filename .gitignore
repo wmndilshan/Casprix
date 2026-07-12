@@ -9,9 +9,21 @@
 /bin/
 /obj/
 /out/
+# Any out-of-tree CMake/Ninja build directory (build-codex-verify,
+# build-codex-android, build-release, etc.).  These are per-developer
+# scratch dirs and must never be tracked.
+build-*/
 
 # CMake artifacts
 CMakeCache.txt
+# CMake writes `<file>.tmp<hex>` siblings during atomic-rename updates;
+# these regularly litter `git status` on Windows when a build is racing
+# a status check.  Match the hex-suffixed form explicitly.
+CMakeCache.txt.tmp*
+cmake_install.cmake.tmp*
+compile_commands.json.tmp*
+CTestTestfile.cmake.tmp*
+build.ninja.tmp*
 CMakeFiles/
 cmake_install.cmake
 install_manifest.txt
@@ -20,6 +32,13 @@ CTestTestfile.cmake
 _deps/
 *.cmake
 !CMakeLists.txt
+
+# Ninja state files (generator output, per-build)
+.ninja_log
+.ninja_log.restat
+.ninja_deps
+build.ninja
+build.ninja.touch
 
 # Compiled object code & libraries
 *.o
@@ -190,6 +209,8 @@ android-demo-app/local.properties
 # -------------------------------------------------------------
 *.log
 *.tmp
+# Matches `foo.tmp1234ab` style atomic-write temp files (CMake, editors).
+*.tmp[0-9a-fA-F]*
 *.bak
 *.backup
 *.orig
@@ -210,3 +231,18 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# -------------------------------------------------------------
+# Local scratch files (test sources and binaries)
+# -------------------------------------------------------------
+/first
+/hello.c
+/hello_c_output.c
+/hello_c_output_bin
+/hello_core
+/my_hello.c*
+/test_args.c
+/test_print*
+/test_wrapper.c
+/train_llm*
+/examples/llm_training/train_llm

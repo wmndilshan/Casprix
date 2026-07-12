@@ -17,11 +17,13 @@ typedef struct {
     Module* modules;
     int count;
     int capacity;
+    char* entry_path;
 } ModuleRegistry;
 
 // Module system
 void init_module_registry(ModuleRegistry* registry);
 void free_module_registry(ModuleRegistry* registry);
+void module_registry_set_entry_path(ModuleRegistry* registry, const char* entry_path);
 
 /* Load a module from file (logger parameter deprecated - uses global) */
 Module* load_module(ModuleRegistry* registry, const char* module_name, void* unused);
@@ -33,6 +35,5 @@ bool resolve_modules(ModuleRegistry* registry, Stmt** statements, int count, voi
 Module* get_module(ModuleRegistry* registry, const char* name);
 
 #endif // MODULE_H
-
 
 

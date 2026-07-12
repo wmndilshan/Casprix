@@ -32,6 +32,22 @@
 extern "C" {
 #endif
 
+typedef enum {
+    APK_OK                   = 0,
+    APK_ERR_INVALID_CONFIG   = 1,
+    APK_ERR_COMPILE_FAILED   = 2,
+    APK_ERR_MANIFEST_FAILED  = 3,
+    APK_ERR_RESOURCE_FAILED  = 4,
+    APK_ERR_ZIP_FAILED       = 5,
+    APK_ERR_SIGN_FAILED      = 6,
+    APK_ERR_ALIGN_FAILED     = 7,
+    APK_ERR_NDK_NOT_FOUND    = 8,
+    APK_ERR_SDK_NOT_FOUND    = 9,
+    APK_ERR_IO               = 10,
+} ApkError;
+
+typedef ApkError (*ApkZipVerifyFn)(const char* apk_path, void* user_data);
+
 /* ========================================================================
  * Build Configuration
  * ======================================================================== */
@@ -94,6 +110,8 @@ typedef struct {
     int  debug_build;         /* 1 = debug signing + debuggable manifest */
     int  verbose;             /* Print detailed build steps */
     int  keep_intermediates;  /* Don't delete build/ temp directory */
+    ApkZipVerifyFn zip_verify; /* Optional ZIP verification hook */
+    void* zip_verify_user_data;
 } ApkBuildConfig;
 
 /* ========================================================================
@@ -101,23 +119,26 @@ typedef struct {
  * ======================================================================== */
 
 typedef enum {
-    APK_OK                   = 0,
-    APK_ERR_INVALID_CONFIG   = 1,
-    APK_ERR_COMPILE_FAILED   = 2,
-    APK_ERR_MANIFEST_FAILED  = 3,
-    APK_ERR_RESOURCE_FAILED  = 4,
-    APK_ERR_ZIP_FAILED       = 5,
-    APK_ERR_SIGN_FAILED      = 6,
-    APK_ERR_ALIGN_FAILED     = 7,
-    APK_ERR_NDK_NOT_FOUND    = 8,
-    APK_ERR_SDK_NOT_FOUND    = 9,
-    APK_ERR_IO               = 10,
-} ApkError;
+    APK_STAGE_NONE = 0,
+    APK_STAGE_VALIDATE,
+    APK_STAGE_COMPILE,
+    APK_STAGE_MANIFEST,
+    APK_STAGE_RESOURCES,
+    APK_STAGE_PACKAGE,
+    APK_STAGE_VERIFY,
+    APK_STAGE_ALIGN,
+    APK_STAGE_SIGN,
+    APK_STAGE_PUBLISH,
+    APK_STAGE_CLEANUP,
+} ApkStage;
 
 typedef struct {
     ApkError    code;
+    ApkStage    stage;
+    char        stage_name[32];
     char        message[512];
     char        output_path[512];   /* Populated on success */
+    char        temp_path[512];     /* Last temp artifact touched */
     int         apk_size_bytes;
     long long   build_time_ms;
 } ApkBuildResult;

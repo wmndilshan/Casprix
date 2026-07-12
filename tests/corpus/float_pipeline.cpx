@@ -1,0 +1,16 @@
+// Golden corpus: floating-point pipeline (feeds f32/f64 lowering paths used by SIMD stacks).
+func sum2(a: float, b: float) -> float {
+    return a + b
+}
+
+func main() -> int {
+    let x: float = 1.5
+    let y: float = 2.25
+    let z: float = sum2(x, y)
+    if z > 3.0 {
+        return 1
+    }
+    return 0
+}
+
+main()

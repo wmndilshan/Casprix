@@ -345,6 +345,7 @@ void perf_set_items(PerfTracer* pt, int count);
 void perf_end(PerfTracer* pt);
 void perf_print_report(PerfTracer* pt, FILE* out, bool use_colors);
 void perf_print_json(PerfTracer* pt, FILE* out);
+void perf_print_compact(PerfTracer* pt, FILE* out, const char* filename, bool use_colors);
 
 /* ════════════════════════════════════════════════════════════════════
  * 10. DIAGNOSTIC ENGINE — central coordinator

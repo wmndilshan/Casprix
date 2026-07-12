@@ -146,13 +146,13 @@ class ExceptionHandler {
     // static utility methods for exception handling
 
     // Throw an exception (in full implementation)
-    func throw(ex: Exception) -> void {
+    func raiseException(ex: Exception) -> void {
         // C binding: nuwan_throw_exception(ex)
         // This will unwind the stack and jump to nearest catch block
     }
 
     // Rethrow current exception
-    func rethrow() -> void {
+    func raiseCurrent() -> void {
         // C binding: nuwan_rethrow_exception()
     }
 
@@ -169,67 +169,5 @@ class ExceptionHandler {
     }
 }
 
-// Example usage (pseudo-code showing syntax):
-/*
-
-// Try-Catch
-Try {
-    // Risky operation
-    result: int = riskyOperation();
-
-    if (result < 0) {
-        Throw new IllegalArgumentException("Invalid result");
-    }
-
-} Catch (ex: IllegalArgumentException) {
-    print("Caught illegal argument: ");
-    print(ex.getMessage());
-
-} Catch (ex: Exception) {
-    print("Caught general exception: ");
-    print(ex.getMessage());
-}
-
-// Try-Catch-Finally
-Try {
-    file: File = openFile("data.txt");
-    content: string = file.read();
-
-} Catch (ex: IOException) {
-    print("IO Error: ");
-    print(ex.getMessage());
-
-} Finally {
-    // Always executed, even if exception thrown
-    if (file != null) {
-        file.close();
-    }
-}
-
-// Nested Try-Catch
-Try {
-    Try {
-        dangerousOperation();
-    } Catch (ex: NullPointerException) {
-        print("Null pointer in inner try");
-        Throw ex;  // Rethrow to outer
-    }
-} Catch (ex: Exception) {
-    print("Caught in outer: ");
-    print(ex.getMessage());
-}
-
-// Multiple exception types
-Try {
-    processData();
-} Catch (ex: IndexOutOfBoundsException) {
-    print("Index error");
-} Catch (ex: NullPointerException) {
-    print("Null pointer");
-} Catch (ex: IOException) {
-    print("IO error");
-} Finally {
-    cleanup();
-}
-
-*/
+// Example usage intentionally omitted here because some older compiler
+// configurations still stumble on large pseudo-code comment blocks.

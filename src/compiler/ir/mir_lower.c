@@ -913,6 +913,13 @@ static MirValueId lower_expr(MirLowerCtx* ctx, Expr* expr) {
             }
             return mir_build_const_int(&ctx->builder, 0, mir_type_i64(ctx->module));
         }
+        case EXPR_AWAIT: {
+            MirValueId future = lower_expr(ctx, expr->as.await_expr.expression);
+            MirBlock* resume_bb = mir_function_add_block(ctx->builder.func, "await.resume");
+            MirValueId result = mir_build_suspend(&ctx->builder, resume_bb, future);
+            mir_builder_set_block(&ctx->builder, resume_bb);
+            return result;
+        }
         case EXPR_SUPER:
         case EXPR_GENERIC_INST:
         default:
@@ -1159,7 +1166,15 @@ static void lower_print(MirLowerCtx* ctx, Stmt* stmt) {
     PrintStmt* p = &stmt->as.print;
     MirValueId val = lower_expr(ctx, p->expression);
     MirValueId args[1] = { val };
-    mir_build_call(&ctx->builder, "nuwan_print", args, 1, mir_type_void(ctx->module));
+    const char* print_fn = "nuwan_print_str";
+    if (p->expression->data_type == TYPE_INT || p->expression->data_type == TYPE_I32 || p->expression->data_type == TYPE_I64) {
+        print_fn = "nuwan_print_int";
+    } else if (p->expression->data_type == TYPE_FLOAT || p->expression->data_type == TYPE_F32 || p->expression->data_type == TYPE_F64) {
+        print_fn = "nuwan_print_float";
+    } else if (p->expression->data_type == TYPE_BOOL) {
+        print_fn = "nuwan_print_bool";
+    }
+    mir_build_call(&ctx->builder, print_fn, args, 1, mir_type_void(ctx->module));
 }
 
 static void lower_block(MirLowerCtx* ctx, Stmt* stmt) {
@@ -1267,6 +1282,7 @@ MirFunction* mir_lower_function(MirLowerCtx* ctx, Stmt* func_stmt) {
 
     MirBlock* entry = mir_function_add_block(mir_func, "entry");
     mir_builder_init(&ctx->builder, ctx->module, mir_func);
+    mir_func->is_async = f->is_async;
     mir_builder_set_block(&ctx->builder, entry);
 
     /* Bind parameters to alloca slots */

@@ -13,21 +13,25 @@
 
 #include "apk_builder.h"
 #include "manifest.h"
+#include "ndk_utils.h"
 #include "zip_writer.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #  include <windows.h>
 #  include <direct.h>
+#  include <io.h>
 #  define PATH_SEP "\\"
 #  define MKDIR(p)          _mkdir(p)
 #  define SNPRINTF          _snprintf
 #else
-#  include <sys/stat.h>
+#  include <dirent.h>
 #  include <unistd.h>
 #  define PATH_SEP "/"
 #  define MKDIR(p)          mkdir(p, 0755)
@@ -37,6 +41,9 @@
 /* ========================================================================
  * Internal helpers
  * ======================================================================== */
+
+static void mkdir_p(const char* path);
+static int copy_file_binary(const char* src, const char* dst);
 
 static void log_step(const ApkBuildConfig* cfg, const char* msg) {
     if (cfg->verbose) printf("[apk-builder] %s\n", msg);
@@ -68,6 +75,11 @@ static int dir_exists(const char* path) {
 #endif
 }
 
+static int file_size_bytes(const char* path) {
+    struct stat st;
+    return (stat(path, &st) == 0 && S_ISREG(st.st_mode)) ? (int)st.st_size : -1;
+}
+
 static void make_absolute_path(const char* input, char* output, size_t output_size) {
     if (!output || output_size == 0) return;
     if (!input || !input[0]) {
@@ -95,6 +107,187 @@ static void make_absolute_path(const char* input, char* output, size_t output_si
         }
     }
 #endif
+}
+
+static const char* apk_stage_name(ApkStage stage) {
+    switch (stage) {
+        case APK_STAGE_VALIDATE: return "validate";
+        case APK_STAGE_COMPILE:  return "compile";
+        case APK_STAGE_MANIFEST: return "manifest";
+        case APK_STAGE_RESOURCES:return "resources";
+        case APK_STAGE_PACKAGE:  return "package";
+        case APK_STAGE_VERIFY:   return "verify";
+        case APK_STAGE_ALIGN:    return "align";
+        case APK_STAGE_SIGN:     return "sign";
+        case APK_STAGE_PUBLISH:  return "publish";
+        case APK_STAGE_CLEANUP:  return "cleanup";
+        case APK_STAGE_NONE:
+        default:                 return "none";
+    }
+}
+
+static void apk_result_begin_stage(ApkBuildResult* result, ApkStage stage, const char* temp_path) {
+    if (!result) return;
+    result->stage = stage;
+    snprintf(result->stage_name, sizeof(result->stage_name), "%s", apk_stage_name(stage));
+    if (temp_path) {
+        snprintf(result->temp_path, sizeof(result->temp_path), "%s", temp_path);
+    }
+}
+
+static void apk_result_fail(ApkBuildResult* result, ApkStage stage, ApkError code,
+                            const char* temp_path, const char* message) {
+    if (!result) return;
+    result->code = code;
+    result->stage = stage;
+    snprintf(result->stage_name, sizeof(result->stage_name), "%s", apk_stage_name(stage));
+    if (temp_path) {
+        snprintf(result->temp_path, sizeof(result->temp_path), "%s", temp_path);
+    }
+    snprintf(result->message, sizeof(result->message), "%s (stage: %s)",
+             message ? message : "Build failed", result->stage_name);
+}
+
+static void path_parent_dir(const char* path, char* out, size_t out_size) {
+    size_t len;
+    const char* sep;
+
+    if (!out || out_size == 0) return;
+    out[0] = '\0';
+    if (!path || !path[0]) return;
+
+    sep = strrchr(path, '/');
+#ifdef _WIN32
+    {
+        const char* back = strrchr(path, '\\');
+        if (!sep || (back && back > sep)) sep = back;
+    }
+#endif
+    if (!sep) return;
+
+    len = (size_t)(sep - path);
+    if (len >= out_size) len = out_size - 1;
+    memcpy(out, path, len);
+    out[len] = '\0';
+}
+
+static int remove_path_recursive(const char* path) {
+    if (!path || !path[0]) return 0;
+
+#ifdef _WIN32
+    {
+        DWORD attrs = GetFileAttributesA(path);
+        if (attrs == INVALID_FILE_ATTRIBUTES) return 0;
+        if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            return DeleteFileA(path) ? 0 : -1;
+        }
+
+        char pattern[1024];
+        WIN32_FIND_DATAA find_data;
+        HANDLE handle;
+
+        snprintf(pattern, sizeof(pattern), "%s\\*", path);
+        handle = FindFirstFileA(pattern, &find_data);
+        if (handle != INVALID_HANDLE_VALUE) {
+            do {
+                if (strcmp(find_data.cFileName, ".") == 0 ||
+                    strcmp(find_data.cFileName, "..") == 0) {
+                    continue;
+                }
+
+                {
+                    char child[1024];
+                    snprintf(child, sizeof(child), "%s\\%s", path, find_data.cFileName);
+                    if (remove_path_recursive(child) != 0) {
+                        FindClose(handle);
+                        return -1;
+                    }
+                }
+            } while (FindNextFileA(handle, &find_data));
+            FindClose(handle);
+        }
+
+        return RemoveDirectoryA(path) ? 0 : -1;
+    }
+#else
+    {
+        struct stat st;
+        DIR* dir;
+        struct dirent* entry;
+
+        if (stat(path, &st) != 0) return 0;
+        if (!S_ISDIR(st.st_mode)) {
+            return remove(path);
+        }
+
+        dir = opendir(path);
+        if (!dir) return -1;
+
+        while ((entry = readdir(dir)) != NULL) {
+            char child[1024];
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            if (remove_path_recursive(child) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        }
+
+        closedir(dir);
+        return rmdir(path);
+    }
+#endif
+}
+
+static int publish_file_atomic(const char* src, const char* dst) {
+    char parent[1024];
+    char temp_dst[1024];
+
+    if (!src || !src[0] || !dst || !dst[0]) return -1;
+    path_parent_dir(dst, parent, sizeof(parent));
+    if (parent[0]) mkdir_p(parent);
+    snprintf(temp_dst, sizeof(temp_dst), "%s.tmp", dst);
+
+#ifdef _WIN32
+    if (MoveFileExA(src, dst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        return 0;
+    }
+#endif
+    if (rename(src, dst) == 0) {
+        return 0;
+    }
+
+    (void)remove(temp_dst);
+    if (copy_file_binary(src, temp_dst) == 0) {
+#ifdef _WIN32
+        if (MoveFileExA(temp_dst, dst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            (void)remove(src);
+            return 0;
+        }
+#endif
+        if (rename(temp_dst, dst) == 0) {
+            (void)remove(src);
+            return 0;
+        }
+        (void)remove(temp_dst);
+    }
+
+    return -1;
+}
+
+static ApkError apk_default_zip_verify(const char* apk_path, void* user_data) {
+    CpxZipError zip_err;
+
+    (void)user_data;
+    zip_err = cpx_zip_verify(apk_path);
+    if (zip_err != CPX_ZIP_OK) {
+        fprintf(stderr, "[apk-builder] ZIP verification failed: %s\n",
+                cpx_zip_error_string(zip_err));
+        return APK_ERR_ZIP_FAILED;
+    }
+    return APK_OK;
 }
 
 static void normalize_cmake_path(char* path) {
@@ -359,48 +552,11 @@ static void resolve_paths(ApkBuildConfig* cfg_copy) {
             snprintf(cfg_copy->android_sdk, sizeof(cfg_copy->android_sdk), "%s", env);
     }
 
-    /* ?????? NDK ?????? */
     if (!cfg_copy->android_ndk[0]) {
-        const char* env = getenv("ANDROID_NDK_HOME");
-        if (!env) env = getenv("ANDROID_NDK");
-        if (!env) env = getenv("NDK_HOME");
-
-        /* Try to find newest NDK inside the SDK we just resolved */
-        if (!env && cfg_copy->android_sdk[0]) {
-            /* SDK/ndk/<version> ??? grab highest version directory */
-            char ndk_base[600];
-            snprintf(ndk_base, sizeof(ndk_base), "%s\\ndk", cfg_copy->android_sdk);
-
-            /* Use a glob-style search via dir command on Windows */
-            char cmd[800];
-            snprintf(cmd, sizeof(cmd),
-                     "for /d %%v in (\"%s\\*\") do @echo %%v", ndk_base);
-
-            /* Try a known common NDK version subfolder naming */
-            /* We read the first line from dir output ??? best effort */
-#ifdef _WIN32
-            static char ndk_found[512];
-            char dir_cmd[800];
-            snprintf(dir_cmd, sizeof(dir_cmd),
-                     "FOR /D %%G IN (\"%s\\*\") DO @SET \"_NDK_LATEST=%%G\"&& ECHO %%G",
-                     ndk_base);
-            FILE* pipe = _popen(dir_cmd, "r");
-            if (pipe) {
-                if (fgets(ndk_found, sizeof(ndk_found), pipe)) {
-                    /* Strip trailing \n */
-                    size_t len = strlen(ndk_found);
-                    while (len > 0 && (ndk_found[len-1] == '\n' ||
-                                       ndk_found[len-1] == '\r' ||
-                                       ndk_found[len-1] == ' '))
-                        ndk_found[--len] = '\0';
-                    env = ndk_found;
-                }
-                _pclose(pipe);
-            }
-#endif
+        char detected_ndk[sizeof(cfg_copy->android_ndk)];
+        if (cpx_ndk_detect(detected_ndk, sizeof(detected_ndk))) {
+            snprintf(cfg_copy->android_ndk, sizeof(cfg_copy->android_ndk), "%s", detected_ndk);
         }
-        if (env)
-            snprintf(cfg_copy->android_ndk, sizeof(cfg_copy->android_ndk), "%s", env);
     }
 
     if (cfg_copy->android_sdk[0])
@@ -467,6 +623,8 @@ void apk_config_init(ApkBuildConfig* cfg) {
     cfg->abi_count    = 1;
     cfg->debug_build  = 1;
     cfg->verbose      = 1;
+    cfg->zip_verify   = apk_default_zip_verify;
+    cfg->zip_verify_user_data = NULL;
 }
 
 /* ========================================================================
@@ -719,7 +877,7 @@ ApkError apk_stage_resources(const ApkBuildConfig* cfg, const char* build_dir) {
  *   lib/arm64-v8a/lib<Activity>.so
  *   res/values/strings.xml
  *   res/drawable/ic_launcher.xml  (or .png)
- *   assets/**   (optional)
+ *   assets directory    (optional)
  * ======================================================================== */
 
 ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
@@ -819,7 +977,10 @@ ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
         ZipWriter* zw = zip_writer_open(unsigned_apk);
         if (!zw) return APK_ERR_ZIP_FAILED;
 
-        zip_writer_add_file(zw, "AndroidManifest.xml", manifest_path, 1);
+        if (zip_writer_add_file(zw, "AndroidManifest.xml", manifest_path, 1) != 0) {
+            zip_writer_close(zw);
+            return APK_ERR_ZIP_FAILED;
+        }
 
         {
             const char* act = cfg->main_activity[0] ? cfg->main_activity : "MainActivity";
@@ -833,14 +994,20 @@ ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
                          "%s/lib/%s/lib%s.so", build_dir, abi_names[abi_idx], act);
                 snprintf(so_archive, sizeof(so_archive),
                          "lib/%s/lib%s.so", abi_names[abi_idx], act);
-                zip_writer_add_file(zw, so_archive, so_path, 0);
+                if (zip_writer_add_file(zw, so_archive, so_path, 0) != 0) {
+                    zip_writer_close(zw);
+                    return APK_ERR_ZIP_FAILED;
+                }
             }
         }
 
         {
             char str_path[1024];
             snprintf(str_path, sizeof(str_path), "%s/res/values/strings.xml", build_dir);
-            zip_writer_add_file(zw, "res/values/strings.xml", str_path, 1);
+            if (zip_writer_add_file(zw, "res/values/strings.xml", str_path, 1) != 0) {
+                zip_writer_close(zw);
+                return APK_ERR_ZIP_FAILED;
+            }
         }
 
         {
@@ -856,17 +1023,25 @@ ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
             test = fopen(icon_png, "rb");
             if (test) {
                 fclose(test);
-                zip_writer_add_file(zw, "res/drawable/ic_launcher.png", icon_png, 0);
+                if (zip_writer_add_file(zw, "res/drawable/ic_launcher.png", icon_png, 0) != 0) {
+                    zip_writer_close(zw);
+                    return APK_ERR_ZIP_FAILED;
+                }
             } else {
                 test = fopen(icon_xml, "rb");
                 if (test) {
                     fclose(test);
-                    zip_writer_add_file(zw, "res/drawable/ic_launcher.xml", icon_xml, 1);
+                    if (zip_writer_add_file(zw, "res/drawable/ic_launcher.xml", icon_xml, 1) != 0) {
+                        zip_writer_close(zw);
+                        return APK_ERR_ZIP_FAILED;
+                    }
                 }
             }
         }
 
-        zip_writer_close(zw);
+        if (zip_writer_close(zw) != 0) {
+            return APK_ERR_ZIP_FAILED;
+        }
     }
 
     printf("[apk-builder]   Packaged -> %s\n", unsigned_apk);
@@ -988,24 +1163,50 @@ ApkError apk_stage_align(const ApkBuildConfig* cfg, const char* signed_apk,
 ApkBuildResult apk_build(const ApkBuildConfig* config) {
     ApkBuildResult result;
     memset(&result, 0, sizeof(result));
+    result.stage = APK_STAGE_NONE;
+    snprintf(result.stage_name, sizeof(result.stage_name), "%s", apk_stage_name(APK_STAGE_NONE));
 
     clock_t t_start = clock();
+    ApkError err = APK_OK;
+
+    if (!config) {
+        result.code = APK_ERR_INVALID_CONFIG;
+        result.stage = APK_STAGE_VALIDATE;
+        snprintf(result.stage_name, sizeof(result.stage_name), "%s", apk_stage_name(APK_STAGE_VALIDATE));
+        snprintf(result.message, sizeof(result.message), "config is required (stage: %s)", result.stage_name);
+        return result;
+    }
 
     /* Validate */
     if (!config->input_file[0] || !config->package_name[0] || !config->app_name[0]) {
         result.code = APK_ERR_INVALID_CONFIG;
+        result.stage = APK_STAGE_VALIDATE;
+        snprintf(result.stage_name, sizeof(result.stage_name), "%s", apk_stage_name(APK_STAGE_VALIDATE));
         snprintf(result.message, sizeof(result.message),
-                 "input_file, package_name, and app_name are required");
+                 "input_file, package_name, and app_name are required (stage: %s)",
+                 result.stage_name);
         return result;
     }
 
     /* Work on a mutable copy so we can resolve env vars */
     ApkBuildConfig cfg = *config;
     resolve_paths(&cfg);
+    if (!cfg.zip_verify) {
+        cfg.zip_verify = apk_default_zip_verify;
+    }
 
-    /* Create build directory: build/<package_name>/ */
+    /* Create build directory: build-apk/<package_name>/ */
     char build_dir[1024];
+    char unsigned_apk[1024];
+    char aligned_apk[1024];
+    char signed_apk[1024];
+    char final_apk[1024];
+
     snprintf(build_dir, sizeof(build_dir), "build-apk/%s", cfg.package_name);
+    snprintf(unsigned_apk, sizeof(unsigned_apk), "%s/app-unsigned.apk", build_dir);
+    snprintf(aligned_apk, sizeof(aligned_apk), "%s/app-aligned.apk", build_dir);
+    snprintf(signed_apk, sizeof(signed_apk), "%s/app-signed.apk", build_dir);
+    snprintf(final_apk, sizeof(final_apk), "%s", cfg.output_apk[0] ? cfg.output_apk : "app-release.apk");
     mkdir_p(build_dir);
 
     printf("[apk-builder] ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????\n");
@@ -1014,60 +1215,85 @@ ApkBuildResult apk_build(const ApkBuildConfig* config) {
     printf("[apk-builder]   Version:  %s (%d)\n", cfg.version_name, cfg.version_code);
     printf("[apk-builder] ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????\n");
 
-    ApkError err;
-
     /* Stage 1: Compile */
+    apk_result_begin_stage(&result, APK_STAGE_COMPILE, build_dir);
     log_step(&cfg, "Stage 1/6 ??? Compile .cpx ??? native .so");
     err = apk_stage_compile(&cfg, build_dir);
     if (err != APK_OK) goto fail;
 
     /* Stage 2: Manifest */
+    apk_result_begin_stage(&result, APK_STAGE_MANIFEST, build_dir);
     log_step(&cfg, "Stage 2/6 ??? Generate AndroidManifest.xml");
     err = apk_stage_manifest(&cfg, build_dir);
     if (err != APK_OK) goto fail;
 
     /* Stage 3: Resources */
+    apk_result_begin_stage(&result, APK_STAGE_RESOURCES, build_dir);
     log_step(&cfg, "Stage 3/6 ??? Pack resources");
     err = apk_stage_resources(&cfg, build_dir);
     if (err != APK_OK) goto fail;
 
     /* Stage 4: Package */
+    apk_result_begin_stage(&result, APK_STAGE_PACKAGE, unsigned_apk);
     log_step(&cfg, "Stage 4/6 ??? Package ??? unsigned.apk");
     err = apk_stage_package(&cfg, build_dir);
     if (err != APK_OK) goto fail;
 
-    /* Stage 5: Align, then Stage 6: Sign */
-    {
-        char unsigned_apk[2048], aligned_apk[2048];
-        const char* out = cfg.output_apk[0] ? cfg.output_apk : "app-release.apk";
-        snprintf(unsigned_apk, sizeof(unsigned_apk), "%s/app-unsigned.apk", build_dir);
-        snprintf(aligned_apk,  sizeof(aligned_apk),  "%s/app-aligned.apk",  build_dir);
-
-        log_step(&cfg, "Stage 5/6 ??? zipalign");
-        err = apk_stage_align(&cfg, unsigned_apk, aligned_apk);
+    /* Stage 4.5: Optional ZIP verification hook */
+    if (cfg.zip_verify) {
+        apk_result_begin_stage(&result, APK_STAGE_VERIFY, unsigned_apk);
+        log_step(&cfg, "Stage 4.5/6 ??? Verify ZIP integrity");
+        err = cfg.zip_verify(unsigned_apk, cfg.zip_verify_user_data);
         if (err != APK_OK) goto fail;
-
-        log_step(&cfg, "Stage 6/6 ??? Sign APK");
-        err = apk_stage_sign(&cfg, build_dir, aligned_apk, out);
-        if (err != APK_OK) goto fail;
-
-        snprintf(result.output_path, sizeof(result.output_path), "%s", out);
     }
 
+    /* Stage 5: Align, then Stage 6: Sign */
+    apk_result_begin_stage(&result, APK_STAGE_ALIGN, aligned_apk);
+    log_step(&cfg, "Stage 5/6 ??? zipalign");
+    err = apk_stage_align(&cfg, unsigned_apk, aligned_apk);
+    if (err != APK_OK) goto fail;
+
+    apk_result_begin_stage(&result, APK_STAGE_SIGN, signed_apk);
+    log_step(&cfg, "Stage 6/6 ??? Sign APK");
+    err = apk_stage_sign(&cfg, build_dir, aligned_apk, signed_apk);
+    if (err != APK_OK) goto fail;
+
+    apk_result_begin_stage(&result, APK_STAGE_PUBLISH, final_apk);
+    if (publish_file_atomic(signed_apk, final_apk) != 0) {
+        err = APK_ERR_IO;
+        goto fail;
+    }
+
+    snprintf(result.output_path, sizeof(result.output_path), "%s", final_apk);
+    result.apk_size_bytes = file_size_bytes(final_apk);
+
     if (!cfg.keep_intermediates) {
-        /* Optional cleanup of build dir */
+        (void)remove_path_recursive(build_dir);
     }
 
     result.code = APK_OK;
+    result.stage = APK_STAGE_PUBLISH;
+    snprintf(result.stage_name, sizeof(result.stage_name), "%s", apk_stage_name(APK_STAGE_PUBLISH));
     result.build_time_ms = (long long)((clock() - t_start) * 1000 / CLOCKS_PER_SEC);
     printf("[apk-builder] ??? Build complete in %lldms ??? %s\n",
            result.build_time_ms, result.output_path);
     return result;
 
 fail:
-    result.code = err;
-    snprintf(result.message, sizeof(result.message),
-             "Build failed at stage with error: %s", apk_error_string(err));
+    if (result.stage == APK_STAGE_NONE) {
+        apk_result_begin_stage(&result, APK_STAGE_CLEANUP, build_dir);
+    }
+    if (remove_path_recursive(build_dir) != 0) {
+        fprintf(stderr, "[apk-builder] cleanup warning: failed to remove %s\n", build_dir);
+    }
+    if (result.code == APK_OK) {
+        result.code = err;
+    }
+    if (result.message[0] == '\0') {
+        snprintf(result.message, sizeof(result.message),
+                 "%s failed: %s (stage: %s)",
+                 result.stage_name, apk_error_string(err), result.stage_name);
+    }
     fprintf(stderr, "[apk-builder] ??? %s\n", result.message);
     return result;
 }
@@ -1106,7 +1332,3 @@ void apk_config_print(const ApkBuildConfig* cfg) {
     printf("  output_apk:    %s\n",  cfg->output_apk[0]  ? cfg->output_apk  : "app-release.apk");
     printf("}\n");
 }
-
-
-
-

@@ -34,6 +34,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_mir_validation.c")
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
     )
     target_include_directories(test_mir_validation PRIVATE
         ${CMAKE_SOURCE_DIR}
@@ -46,6 +47,36 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_mir_validation.c")
     )
     add_test(NAME test_mir_validation COMMAND test_mir_validation)
 endif()
+
+find_package(ZLIB QUIET)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/test_manifest_gen.c")
+    add_executable(android_test_manifest_gen
+        android/test_manifest_gen.c
+        ${CMAKE_SOURCE_DIR}/tools/apk_builder/manifest.c
+    )
+    target_include_directories(android_test_manifest_gen PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/apk_builder
+    )
+    add_test(NAME android_test_manifest_gen COMMAND android_test_manifest_gen)
+endif()
+
+foreach(_android_zip_test test_apk_pack test_zip_writer)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/${_android_zip_test}.c")
+        add_executable(android_${_android_zip_test}
+            android/${_android_zip_test}.c
+            ${CMAKE_SOURCE_DIR}/tools/apk_builder/zip_writer.c
+        )
+        target_include_directories(android_${_android_zip_test} PRIVATE
+            ${CMAKE_SOURCE_DIR}/tools/apk_builder
+        )
+        if(ZLIB_FOUND)
+            target_link_libraries(android_${_android_zip_test} PRIVATE ZLIB::ZLIB)
+            target_compile_definitions(android_${_android_zip_test} PRIVATE HAVE_ZLIB)
+        endif()
+        add_test(NAME android_${_android_zip_test} COMMAND android_${_android_zip_test})
+    endif()
+endforeach()
 
 # ── Benchmarks (built but not CTest cases) ───────────────────────────────────
 foreach(_bench bench_simd)
@@ -67,6 +98,115 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/demo_http_server.c")
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/runtime
     )
+endif()
+
+# ── MIR regex compiler test ─────────────────────────────────────────────────
+# Links only the MIR subsystem (no lexer/parser/sema) to keep the test focused
+# on the regex-to-MIR pipeline. See tests/compiler/test_mir_regex.c.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_mir_regex.c")
+    add_executable(test_mir_regex
+        compiler/test_mir_regex.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_regex.c
+    )
+    target_include_directories(test_mir_regex PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(NAME test_mir_regex COMMAND test_mir_regex)
+endif()
+
+# ── MIR SIMD virtualization test ────────────────────────────────────────────
+# Exercises VEC_* opcode construction, the simd.c legalizer, and the
+# textual output of the x86-64 / AArch64 / scalar backends.  The test
+# links only the MIR subsystem (no lexer/parser/sema) plus the opt and
+# backend shim so it can run without the full compiler pipeline.
+# See tests/compiler/test_simd_virt.c.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_simd_virt.c")
+    add_executable(test_simd_virt
+        compiler/test_simd_virt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/opt/simd.c
+    )
+    target_include_directories(test_simd_virt PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(NAME test_simd_virt COMMAND test_simd_virt)
+endif()
+
+# ── MIR corpus verification (golden .cpx + builder SIMD fixture) ─────────────
+if(BUILD_COMPILER AND BUILD_TESTS AND TARGET casprix_compiler)
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/ctest/mir_verify")
+    add_executable(test_mir_corpus_verify compiler/test_mir_corpus_verify.c)
+    target_link_libraries(test_mir_corpus_verify PRIVATE
+        casprix_compiler
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    add_test(NAME MIR_VERIFY_corpus COMMAND test_mir_corpus_verify)
+    set_tests_properties(MIR_VERIFY_corpus PROPERTIES
+        ENVIRONMENT "CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR};MIR_VERIFY_OUT=${CMAKE_BINARY_DIR}/ctest/mir_verify")
+endif()
+
+# ── CVM + JIT tier-up test ───────────────────────────────────────────────────
+# Tests the register-based MIR interpreter and the JIT bridge (mmap/VirtualAlloc).
+# Links the minimal MIR subsystem (builder + printer + module) plus the new
+# runtime/vm sources.  No lexer/parser/sema needed.
+if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_vm_jit.c")
+    add_executable(test_vm_jit
+        test_vm_jit.c
+        # CVM interpreter + JIT bridge
+        ${CMAKE_SOURCE_DIR}/runtime/vm/cvm_engine.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+        # MIR subsystem (builder, printer, optimizer, borrow checker)
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/opt/simd.c
+    )
+    target_include_directories(test_vm_jit PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(test_vm_jit PRIVATE
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    # Win32 needs no extra libs for VirtualAlloc (already in kernel32)
+    add_test(NAME CVM_JIT_tierup COMMAND test_vm_jit)
+    set_tests_properties(CVM_JIT_tierup PROPERTIES
+        TIMEOUT 120
+        LABELS "vm;jit")
 endif()
 
 # ── Compiler integration tests ───────────────────────────────────────────────

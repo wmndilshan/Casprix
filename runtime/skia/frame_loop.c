@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /*
  * Frame Loop — Main application run loop
  *
@@ -8,8 +9,10 @@
 #include "frame_loop.h"
 #include "layout.h"
 #include "style.h"
+#include "widgets.h"
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -17,33 +20,6 @@
 #endif
 #include <windows.h>
 #endif
-
-/* ========================================================================
- * Win32 Window API (from skia_window_win32.c)
- * ======================================================================== */
-
-/* These are defined in skia_window_win32.c */
-extern SkiaWindow* skia_window_create(const char* title, int width, int height);
-extern void        skia_window_destroy(SkiaWindow* win);
-extern void        skia_window_show(SkiaWindow* win);
-extern void        skia_window_present(SkiaWindow* win);
-extern SkiaCanvas  skia_window_get_canvas(SkiaWindow* win);
-extern int         skia_window_get_width(SkiaWindow* win);
-extern int         skia_window_get_height(SkiaWindow* win);
-extern void        skia_window_invalidate(SkiaWindow* win);
-extern int         skia_window_needs_redraw(SkiaWindow* win);
-extern int         skia_window_poll(SkiaWindow* win);
-extern void        skia_window_quit(SkiaWindow* win);
-extern void        skia_window_set_paint_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, SkiaCanvas, void*), void* ctx);
-extern void        skia_window_set_mouse_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, int, int, int, int, void*), void* ctx);
-extern void        skia_window_set_key_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, int, int, int, void*), void* ctx);
-extern void        skia_window_set_resize_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, int, int, void*), void* ctx);
-extern void        skia_window_set_text_callback(SkiaWindow* win,
-    void (*cb)(SkiaWindow*, const char*, void*), void* ctx);
 
 /* ========================================================================
  * High-Resolution Timer
@@ -66,78 +42,38 @@ static double get_time_seconds(void) {
 }
 
 /* ========================================================================
- * Window Event Callbacks → SGEvent dispatch
+ * Host Event Callback → SGEvent dispatch
  * ======================================================================== */
 
-static void on_mouse_callback(SkiaWindow* win, int type, int x, int y,
-                                int button, void* ctx) {
+static void on_window_event_callback(SkiaWindow* win, const SGEvent* event, void* ctx) {
     SGApp* app = (SGApp*)ctx;
-    if (!app || !app->events) return;
+    if (!app || !event) return;
     (void)win;
 
-    int mods = 0;
-#ifdef _WIN32
-    if (GetKeyState(VK_SHIFT) & 0x8000)   mods |= SG_MOD_SHIFT;
-    if (GetKeyState(VK_CONTROL) & 0x8000)  mods |= SG_MOD_CTRL;
-    if (GetKeyState(VK_MENU) & 0x8000)     mods |= SG_MOD_ALT;
-#endif
+    switch (event->type) {
+        case SG_EVENT_RESIZE:
+            app->width = event->data.resize.width;
+            app->height = event->data.resize.height;
+            app->needs_layout = 1;
+            app->needs_repaint = 1;
+            if (app->events) {
+                SGEvent forwarded = *event;
+                sg_dispatch_event(app->events, &forwarded);
+            }
+            break;
 
-    switch (type) {
-        case 0: /* SKIA_MOUSE_DOWN */
-            sg_dispatch_mouse_down(app->events, (float)x, (float)y, button, mods);
+        case SG_EVENT_CLOSE:
+            app->running = 0;
             break;
-        case 1: /* SKIA_MOUSE_UP */
-            sg_dispatch_mouse_up(app->events, (float)x, (float)y, button, mods);
-            break;
-        case 2: /* SKIA_MOUSE_MOVE */
-            sg_dispatch_mouse_move(app->events, (float)x, (float)y, mods);
-            break;
-        case 3: /* SKIA_MOUSE_SCROLL */
-            sg_dispatch_mouse_scroll(app->events, (float)x, (float)y,
-                                      0, (float)button, mods); /* button = scroll delta */
+
+        default:
+            if (app->events) {
+                SGEvent forwarded = *event;
+                sg_dispatch_event(app->events, &forwarded);
+            }
+            app->needs_repaint = 1;
             break;
     }
-
-    app->needs_repaint = 1;
-}
-
-static void on_key_callback(SkiaWindow* win, int type, int keycode,
-                              int mods, void* ctx) {
-    SGApp* app = (SGApp*)ctx;
-    if (!app || !app->events) return;
-    (void)win;
-
-    if (type == 0) { /* SKIA_KEY_DOWN */
-        sg_dispatch_key_down(app->events, keycode, 0, mods);
-    } else { /* SKIA_KEY_UP */
-        sg_dispatch_key_up(app->events, keycode, 0, mods);
-    }
-
-    app->needs_repaint = 1;
-}
-
-static void on_resize_callback(SkiaWindow* win, int width, int height, void* ctx) {
-    SGApp* app = (SGApp*)ctx;
-    if (!app) return;
-    (void)win;
-
-    app->width = width;
-    app->height = height;
-    app->needs_layout = 1;
-    app->needs_repaint = 1;
-
-    if (app->events) {
-        sg_dispatch_resize(app->events, width, height);
-    }
-}
-
-static void on_text_callback(SkiaWindow* win, const char* text, void* ctx) {
-    SGApp* app = (SGApp*)ctx;
-    if (!app || !app->events) return;
-    (void)win;
-
-    sg_dispatch_text_input(app->events, text);
-    app->needs_repaint = 1;
 }
 
 /* ========================================================================
@@ -167,10 +103,7 @@ SGApp* sg_app_create(const char* title, int width, int height) {
     app->text_cache = text_cache_create();
 
     /* Wire up window callbacks */
-    skia_window_set_mouse_callback(app->window, on_mouse_callback, app);
-    skia_window_set_key_callback(app->window, on_key_callback, app);
-    skia_window_set_resize_callback(app->window, on_resize_callback, app);
-    skia_window_set_text_callback(app->window, on_text_callback, app);
+    skia_window_set_event_callback(app->window, on_window_event_callback, app);
 
     return app;
 }
@@ -182,7 +115,10 @@ void sg_app_destroy(SGApp* app) {
         app->on_cleanup(app->user_data);
     }
 
-    if (app->root) sg_node_destroy(app->root);
+    if (app->root) {
+        app->root->ownership_flags &= ~SG_NODE_OWNER_APP;
+        sg_node_destroy(app->root);
+    }
     if (app->events) sg_event_manager_destroy(app->events);
     if (app->animations) sg_animation_pool_destroy(app->animations);
     if (app->fonts) font_manager_destroy(app->fonts);
@@ -202,11 +138,21 @@ void sg_app_set_root(SGApp* app, SGNode* root) {
     /* Clean up old event manager */
     if (app->events) {
         sg_event_manager_destroy(app->events);
+        app->events = NULL;
+    }
+
+    if (app->root) {
+        app->root->ownership_flags &= ~SG_NODE_OWNER_APP;
+        sg_node_destroy(app->root);
     }
 
     app->root = root;
-    app->events = sg_event_manager_create(root);
-    sg_focus_rebuild_tab_order(app->events);
+    if (root) {
+        sg_node_retain(root);
+        root->ownership_flags |= SG_NODE_OWNER_APP;
+        app->events = sg_event_manager_create(root);
+        sg_focus_rebuild_tab_order(app->events);
+    }
     app->needs_layout = 1;
     app->needs_repaint = 1;
 }
@@ -274,6 +220,11 @@ void sg_app_run(SGApp* app) {
             app->on_frame(app->user_data, (float)app->dt);
         }
 
+        /* 3.5. Tick widget-local state such as caret blinking. */
+        if (app->root && widget_tick_tree(app->root, (float)app->dt)) {
+            app->needs_repaint = 1;
+        }
+
         /* 4. Layout if needed */
         if (app->root && (app->needs_layout || sg_layout_needs_update(app->root))) {
             sg_layout_compute(app->root, (float)app->width, (float)app->height);
@@ -291,7 +242,7 @@ void sg_app_run(SGApp* app) {
             SkiaCanvas canvas = skia_window_get_canvas(app->window);
             if (canvas) {
                 /* Clear background */
-                skia_canvas_clear(canvas, 0xFFF5F5F5); /* Light gray */
+                skia_canvas_clear(canvas, SG_COLOR_BACKGROUND);
 
                 /* Render scene graph */
                 if (app->root) {

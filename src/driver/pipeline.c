@@ -8,6 +8,7 @@
 #include "driver/pipeline.h"
 #include "driver/cli.h"
 #include "driver/io.h"
+#include "compiler/middle/async.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,8 +60,12 @@ typedef struct {
     bool              analyzer_init;
     ModuleRegistry    module_registry;
     bool              registry_init;
+    AsyncContext      async_ctx;
+    bool              async_init;
     MirModule*        mir_module;
 } CompileCtx;
+
+static bool g_link_needs_skia = false;
 
 static void compile_ctx_init(CompileCtx* ctx) {
     memset(ctx, 0, sizeof(*ctx));
@@ -70,6 +75,7 @@ static void compile_ctx_destroy(CompileCtx* ctx) {
     if (ctx->mir_module)    { mir_module_destroy(ctx->mir_module);    ctx->mir_module = NULL; }
     if (ctx->analyzer_init) { free_semantic_analyzer(&ctx->analyzer); ctx->analyzer_init = false; }
     if (ctx->registry_init) { free_module_registry(&ctx->module_registry); ctx->registry_init = false; }
+    if (ctx->async_init)    { free_async(&ctx->async_ctx); ctx->async_init = false; }
     /* Skip per-stmt free: merged module+user stmts array causes crash in free_stmt.
      * Leaking AST nodes is acceptable for a short-lived compiler process. */
     free(ctx->statements); ctx->statements = NULL;
@@ -91,6 +97,19 @@ static bool uses_mir_codegen_backend(void) {
     if (g_config.output_kind != OUTPUT_NATIVE) return true;
     return g_config.native_codegen == NATIVE_CODEGEN_MIR &&
            !g_config.allow_legacy_backend_fallback;
+}
+
+static bool str_starts_with(const char* value, const char* prefix) {
+    if (!value || !prefix) return false;
+    while (*prefix) {
+        if (*value++ != *prefix++) return false;
+    }
+    return true;
+}
+
+static bool module_requires_skia_runtime(const char* module_name) {
+    if (!module_name || !*module_name) return false;
+    return str_starts_with(module_name, "lib/skia/");
 }
 
 static MirBackendConfig make_mir_backend_config(const char* output_path) {
@@ -141,19 +160,24 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     CompileCtx ctx;
     compile_ctx_init(&ctx);
     int result = 0;
+    g_link_needs_skia = false;
 
     ctx.source = driver_read_file(source_path);
     source_map_add_file(&g_diag.source_map, source_path,
                         ctx.source, (uint32_t)strlen(ctx.source));
 
-    printf("\n");
-    printf("================================================================================\n");
-    printf("  Casprix \xF0\x9F\x91\xBB - High Performance Ghost Language  Version 1.0.0\n");
-    printf("================================================================================\n");
-    printf("  Source: %s\n", source_path);
-    if (!g_config.parse_only && !g_config.check_only)
-        printf("  Output: %s\n", output_file_path);
-    printf("================================================================================\n\n");
+    g_diag.perf.enabled = true;
+
+    if (!g_config.compact_output) {
+        cpx_log_init(g_config.verbose ? CPX_LOG_DEBUG : CPX_LOG_INFO);
+        cpx_log_set_timestamp(false);
+        cpx_log_set_show_category(true);
+
+        CPX_INFO("Casprix \xF0\x9F\x91\xBB v1.0.0");
+        CPX_INFO("Source: %s", source_path);
+        if (!g_config.parse_only && !g_config.check_only)
+            CPX_INFO("Output: %s", output_file_path);
+    }
 
     /* --- Debug config --- */
     debug_init();
@@ -164,48 +188,81 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     g_debug_config.verbose      = g_config.verbose;
 
     /* --- Phase 1: Lexical Analysis --- */
-    debug_phase_start("LEXICAL ANALYSIS");
+    perf_start(&g_diag.perf, "Lexical Analysis", STAGE_LEX);
+    if (!g_config.compact_output) debug_phase_start("LEXICAL ANALYSIS");
     if (g_debug_config.dump_tokens) debug_dump_tokens(ctx.source);
+    
+    /* Token count for compact report */
+    {
+        Lexer l;
+        init_lexer(&l, ctx.source);
+        int count = 0;
+        Token t;
+        do { t = scan_token(&l); count++; } while (t.type != TOKEN_EOF);
+        perf_set_items(&g_diag.perf, count);
+    }
+
     Lexer lexer;
     init_lexer(&lexer, ctx.source);
-    debug_phase_end("Lexical Analysis");
+    perf_end(&g_diag.perf);
+    if (!g_config.compact_output) debug_phase_end("Lexical Analysis");
     debug_step_wait();
 
     /* --- Phase 2: Parsing --- */
-    debug_phase_start("SYNTAX ANALYSIS (PARSING)");
+    perf_start(&g_diag.perf, "Syntax Analysis", STAGE_PARSE);
+    if (!g_config.compact_output) debug_phase_start("SYNTAX ANALYSIS (PARSING)");
     Parser parser;
     init_parser(&parser, &lexer);
     ctx.statements = parse(&parser, &ctx.stmt_count);
     if (had_error) {
-        printf("\n  [ERROR] Parsing failed.\n");
+        if (!g_config.compact_output) CPX_ERROR("Parsing failed.");
         result = 65; goto done;
     }
-    printf("  Parsed %d top-level statement(s)\n", ctx.stmt_count);
-    if (g_debug_config.dump_ast) debug_dump_ast(ctx.statements, ctx.stmt_count);
-    debug_phase_end("Syntax Analysis");
+    perf_set_items(&g_diag.perf, ctx.stmt_count);
+    perf_end(&g_diag.perf);
+    if (!g_config.compact_output) {
+        CPX_INFO("Parsed %d top-level statement(s)", ctx.stmt_count);
+        if (g_debug_config.dump_ast) debug_dump_ast(ctx.statements, ctx.stmt_count);
+        debug_phase_end("Syntax Analysis");
+    }
     debug_step_wait();
 
     if (g_config.parse_only) { result = 0; goto done; }
 
     /* --- Phase 3: Module Resolution --- */
-    debug_phase_start("MODULE RESOLUTION");
+    if (!g_config.compact_output) debug_phase_start("MODULE RESOLUTION");
     init_module_registry(&ctx.module_registry);
+    module_registry_set_entry_path(&ctx.module_registry, source_path);
     ctx.registry_init = true;
     {
         int modules_loaded = 0;
+        CPX_INFO("Analyzing %d statements for modules", ctx.stmt_count);
         for (int i = 0; i < ctx.stmt_count; i++) {
-            if (ctx.statements[i] && ctx.statements[i]->type == STMT_INCLUDE) {
-                IncludeStmt* incl = &ctx.statements[i]->as.include;
-                Module* mod = load_module(&ctx.module_registry, incl->module_name, NULL);
-                if (mod) {
-                    modules_loaded++;
-                    printf("  Loaded module: %s\n", incl->module_name);
-                } else if (!incl->is_import) {
-                    printf("  [WARN] Module not found: %s\n", incl->module_name);
+            if (ctx.statements[i]) {
+                CPX_DEBUG("Stmt %d: type %d", i, ctx.statements[i]->type);
+                if (ctx.statements[i]->type == STMT_INCLUDE) {
+                    IncludeStmt* incl = &ctx.statements[i]->as.include;
+                    CPX_INFO("Found include/import: %s", incl->module_name);
+                    if (module_requires_skia_runtime(incl->module_name))
+                        g_link_needs_skia = true;
+                    Module* mod = load_module(&ctx.module_registry, incl->module_name, (void*)source_path);
+                    if (mod) {
+                        modules_loaded++;
+                        CPX_INFO("Successfully loaded module: %s", incl->module_name);
+                    } else if (!incl->is_import) {
+                        CPX_WARN("Module not found: %s", incl->module_name);
+                    }
                 }
             }
         }
-        printf("  Loaded %d module(s)\n", modules_loaded);
+        CPX_INFO("Loaded %d module(s)", modules_loaded);
+
+        for (int i = 0; i < ctx.module_registry.count; i++) {
+            if (module_requires_skia_runtime(ctx.module_registry.modules[i].name)) {
+                g_link_needs_skia = true;
+                break;
+            }
+        }
 
         int total_stmts = ctx.stmt_count;
         for (int i = 0; i < ctx.module_registry.count; i++)
@@ -227,35 +284,57 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         ctx.statements = all_statements;
         ctx.stmt_count = idx;
     }
-    debug_phase_end("Module Resolution");
+    if (!g_config.compact_output) debug_phase_end("Module Resolution");
     debug_step_wait();
 
     /* --- Phase 4: Semantic Analysis --- */
-    debug_phase_start("SEMANTIC ANALYSIS");
+    perf_start(&g_diag.perf, "Semantic Analysis", STAGE_SEMA);
+    if (!g_config.compact_output) debug_phase_start("SEMANTIC ANALYSIS");
     init_semantic_analyzer(&ctx.analyzer);
     ctx.analyzer_init = true;
     if (!analyze_program(&ctx.analyzer, ctx.statements, ctx.stmt_count) || had_error) {
-        printf("\n  [ERROR] Semantic analysis failed.\n");
+        if (!g_config.compact_output) CPX_ERROR("Semantic analysis failed.");
         result = 65; goto done;
     }
-    printf("  Type checking passed — %d symbol(s)\n", ctx.analyzer.symbols->count);
-    if (g_debug_config.dump_symbols) debug_dump_symbols(ctx.analyzer.symbols);
-    debug_phase_end("Semantic Analysis");
+    perf_end(&g_diag.perf);
+    if (!g_config.compact_output) {
+        CPX_INFO("Type checking passed \xE2\x80\x94 %d symbol(s)", ctx.analyzer.symbols->count);
+        if (g_debug_config.dump_symbols) debug_dump_symbols(ctx.analyzer.symbols);
+        debug_phase_end("Semantic Analysis");
+    }
     debug_step_wait();
 
     /* --- Phase 4.5: Ownership Check --- */
-    debug_phase_start("OWNERSHIP CHECK");
+    if (!g_config.compact_output) debug_phase_start("OWNERSHIP CHECK");
     {
         OwnershipChecker own_checker;
         ownership_checker_init(&own_checker, &ctx.analyzer);
         (void)own_checker; /* updates had_error directly */
     }
     if (had_error) {
-        printf("\n  [ERROR] Ownership check failed.\n");
+        CPX_ERROR("Ownership check failed.");
         result = 65; goto done;
     }
-    printf("  Ownership check passed\n");
-    debug_phase_end("Ownership Check");
+    if (!g_config.compact_output) {
+        CPX_INFO("Ownership check passed");
+        debug_phase_end("Ownership Check");
+    }
+    debug_step_wait();
+
+    /* --- Phase 4.7: Async Transformation --- */
+    if (!g_config.compact_output) debug_phase_start("ASYNC TRANSFORMATION");
+    init_async(&ctx.async_ctx);
+    ctx.async_init = true;
+    for (int i = 0; i < ctx.stmt_count; i++) {
+        if (ctx.statements[i] && ctx.statements[i]->type == STMT_FUNCTION &&
+            ctx.statements[i]->as.function.is_async) {
+            transform_async_function(&ctx.statements[i]->as.function, &ctx.async_ctx);
+        }
+    }
+    if (!g_config.compact_output) {
+        CPX_INFO("Transformed %d async function(s)", ctx.async_ctx.state_machines_generated);
+        debug_phase_end("Async Transformation");
+    }
     debug_step_wait();
 
     if (g_config.check_only) { result = 0; goto done; }
@@ -273,12 +352,25 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         printf("  Lowered %d function(s) — %d string(s)\n",
                ctx.mir_module->func_count, ctx.mir_module->string_count);
         perf_end(&g_diag.perf);
-        if (!mir_validate_module(ctx.mir_module))
-            printf("  [WARN] MIR validation found issues\n");
         if (g_config.dump_mir || g_config.dump_all) {
             printf("\n  === MIR (after lowering) ===\n");
             mir_print_module(ctx.mir_module, stdout);
         }
+
+        /* Async MIR Transformation */
+        debug_phase_start("ASYNC MIR TRANSFORM");
+        perf_start(&g_diag.perf, "Async MIR Transform", STAGE_MIR);
+        int async_transformed = 0;
+        for (MirFunction* f = ctx.mir_module->func_list; f; f = f->next_func) {
+            if (f->is_async) {
+                async_transformed += mir_transform_async(f);
+            }
+        }
+        printf("  Transformed %d async function(s) to MIR state machines\n", async_transformed);
+        perf_end(&g_diag.perf);
+        debug_phase_end("Async MIR Transform");
+        debug_step_wait();
+
         debug_phase_end("MIR Lowering");
         debug_step_wait();
 
@@ -337,6 +429,12 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
             debug_phase_end("MIR Optimization");
             debug_step_wait();
         }
+
+        if (mir_verify_module(ctx.mir_module, stderr) != 0) {
+            printf("\n  [ERROR] MIR verification failed (CFG, types, or ownership).\n");
+            result = 65; goto done;
+        }
+        if (!g_config.compact_output) CPX_INFO("MIR verification passed");
     }
 
     /* --- Phase 6: AST-level optimization (legacy path) --- */
@@ -345,7 +443,7 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         OptimizerContext opt_ctx;
         init_optimizer(&opt_ctx);
         optimize_program(ctx.statements, ctx.stmt_count, &opt_ctx);
-        printf("  Folded %d constants, eliminated %d dead code\n",
+        CPX_INFO("Folded %d constants, eliminated %d dead code",
                opt_ctx.constants_folded, opt_ctx.dead_code_eliminated);
         debug_phase_end("AST Optimization");
         debug_step_wait();
@@ -379,8 +477,9 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         printf("  Falling back to legacy AST codegen.\n");
     }
 
-    debug_phase_start("CODE GENERATION");
-    printf("  Generating x86-64 assembly...\n");
+    perf_start(&g_diag.perf, "Code Generation", STAGE_CODEGEN);
+    if (!g_config.compact_output) debug_phase_start("CODE GENERATION");
+    if (!g_config.compact_output) CPX_INFO("Generating x86-64 assembly...");
     {
         FILE* output = fopen(output_file_path, "w");
         if (!output) {
@@ -392,9 +491,10 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         generate_assembly(&asm_gen, ctx.statements, ctx.stmt_count, ctx.analyzer.symbols);
         free_asm_generator(&asm_gen);
         fclose(output);
-        printf("  Assembly: %s (%d strings)\n", output_file_path, asm_gen.string_size);
+        if (!g_config.compact_output) CPX_INFO("Assembly: %s (%d strings)", output_file_path, asm_gen.string_size);
     }
-    debug_phase_end("Code Generation");
+    perf_end(&g_diag.perf);
+    if (!g_config.compact_output) debug_phase_end("Code Generation");
 
 done:
     compile_ctx_destroy(&ctx);
@@ -406,7 +506,7 @@ done:
  * ========================================================================== */
 
 int pipeline_assemble(const char* asm_file_path, const char* obj_file_path) {
-    char command[4096];
+    char command[8192];
 #ifdef _WIN32
     snprintf(command, sizeof(command),
              "nasm -f win64 \"%s\" -o \"%s\"", asm_file_path, obj_file_path);
@@ -414,13 +514,18 @@ int pipeline_assemble(const char* asm_file_path, const char* obj_file_path) {
     snprintf(command, sizeof(command),
              "nasm -f elf64 \"%s\" -o \"%s\"", asm_file_path, obj_file_path);
 #endif
-    debug_phase_start("ASSEMBLY");
-    printf("  Running NASM assembler...\n");
-    if (g_config.verbose) printf("  Command: %s\n", command);
+    perf_start(&g_diag.perf, "Assembly", STAGE_NONE);
+    if (!g_config.compact_output) debug_phase_start("ASSEMBLY");
+    if (!g_config.compact_output) CPX_INFO("Running NASM assembler...");
+    if (g_config.verbose) CPX_INFO("Command: %s", command);
     int result = system(command);
-    if (result != 0) { printf("  [ERROR] Assembly failed (exit %d)\n", result); return 1; }
-    printf("  Object file: %s\n", obj_file_path);
-    debug_phase_end("Assembly");
+    perf_end(&g_diag.perf);
+    if (result != 0) {
+        if (!g_config.compact_output) CPX_ERROR("Assembly failed (exit %d)", result);
+        return 1;
+    }
+    if (!g_config.compact_output) CPX_INFO("Object file: %s", obj_file_path);
+    if (!g_config.compact_output) debug_phase_end("Assembly");
     return 0;
 }
 
@@ -441,24 +546,22 @@ static bool file_exists_readable(const char* path) {
 static bool find_source_root_for_runtime(char* out, size_t outsz) {
     const char* env = getenv("CASPRIX_SOURCE_ROOT");
     if (env && *env) {
-        char probe[768];
+        char probe[2048];
         snprintf(probe, sizeof(probe), "%s/runtime/memory/arc.c", env);
         if (file_exists_readable(probe)) {
-            strncpy(out, env, outsz);
-            out[outsz - 1] = '\0';
+            snprintf(out, outsz, "%s", env);
             return true;
         }
     }
 
-    char cwd[512];
+    char cwd[1024];
     if (!casprix_getcwd(cwd, sizeof(cwd))) return false;
 
     for (int depth = 0; depth < 10; depth++) {
-        char probe[640];
+        char probe[2048];
         snprintf(probe, sizeof(probe), "%s/runtime/memory/arc.c", cwd);
         if (file_exists_readable(probe)) {
-            strncpy(out, cwd, outsz);
-            out[outsz - 1] = '\0';
+            snprintf(out, outsz, "%s", cwd);
             return true;
         }
         char* slash = strrchr(cwd, '/');
@@ -473,8 +576,7 @@ static bool find_source_root_for_runtime(char* out, size_t outsz) {
 }
 
 static void extract_parent_dir(const char* file_path, char* dir_out, size_t dir_sz) {
-    strncpy(dir_out, ".", dir_sz);
-    dir_out[dir_sz - 1] = '\0';
+    snprintf(dir_out, dir_sz, ".");
     const char* sep = strrchr(file_path, '/');
 #ifdef _WIN32
     const char* sep2 = strrchr(file_path, '\\');
@@ -489,23 +591,32 @@ static void extract_parent_dir(const char* file_path, char* dir_out, size_t dir_
     }
 }
 
-static bool skia_libs_next_to_runtime(const char* rt_archive_path) {
-    char dir[256];
-    extract_parent_dir(rt_archive_path, dir, sizeof(dir));
-    char p1[512], p2[512];
-    snprintf(p1, sizeof(p1), "%s/libskia_gui.a", dir);
-    snprintf(p2, sizeof(p2), "%s/libskia_c.a", dir);
-    return file_exists_readable(p1) && file_exists_readable(p2);
+static bool find_lib_next_to_path(const char* anchor_path, const char* name,
+                                  char* out, size_t outsz) {
+    char dir[512];
+    char probe[1024];
+
+    if (!anchor_path || !*anchor_path || !name || !out || outsz == 0) return false;
+    extract_parent_dir(anchor_path, dir, sizeof(dir));
+    snprintf(probe, sizeof(probe), "%s/%s", dir, name);
+    if (!file_exists_readable(probe)) return false;
+
+    snprintf(out, outsz, "%s", probe);
+    return true;
 }
 
-static const char* find_prebuilt_lib(const char* name) {
+static bool find_prebuilt_lib_path(const char* name, char* out, size_t outsz) {
+    char path[512];
+
+    if (!name || !out || outsz == 0) return false;
+    out[0] = '\0';
+
     /* Explicit path from CI / tests (see tests/CMakeLists.txt). */
-    static char path[512];
     const char* env = getenv("CASPRIX_RUNTIME_LIB");
-    if (env && *env && file_exists_readable(env)) {
-        strncpy(path, env, sizeof(path) - 1);
-        path[sizeof(path) - 1] = '\0';
-        return path;
+    if (env && *env && strcmp(name, "libcasprix_runtime.a") == 0 &&
+        file_exists_readable(env)) {
+        snprintf(out, outsz, "%s", env);
+        return true;
     }
 
     static const char* dirs[] = {
@@ -521,15 +632,18 @@ static const char* find_prebuilt_lib(const char* name) {
     };
     for (int i = 0; dirs[i]; i++) {
         snprintf(path, sizeof(path), "%s/%s", dirs[i], name);
-        if (file_exists_readable(path)) return path;
+        if (file_exists_readable(path)) {
+            snprintf(out, outsz, "%s", path);
+            return true;
+        }
     }
-    return NULL;
+    return false;
 }
 
 int pipeline_link(const char* obj_file_path, const char* asm_file_path,
                   const char* exe_path) {
     if (!check_tool_available(TOOL_GCC, NULL)) {
-        printf("  [ERROR] GCC not found for linking\n");
+        CPX_ERROR("GCC not found for linking");
         download_tool(TOOL_GCC, NULL);
         return 1;
     }
@@ -538,33 +652,52 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
     const char* opt_flags = g_config.optimize ? "-O2" : "-g";
 
     /* Locate prebuilt runtime library */
-    const char* rt_path  = find_prebuilt_lib("libcasprix_runtime.a");
-    const char* std_path = find_prebuilt_lib("libcasprix_stdlib.a");
+    char rt_path[1024] = "";
+    char std_path[1024] = "";
+    char skia_gui_path[1024] = "";
+    char skia_c_path[1024] = "";
+    bool have_rt = find_lib_next_to_path(obj_file_path, "libcasprix_runtime.a", rt_path, sizeof(rt_path)) ||
+                   find_lib_next_to_path(exe_path, "libcasprix_runtime.a", rt_path, sizeof(rt_path)) ||
+                   find_prebuilt_lib_path("libcasprix_runtime.a", rt_path, sizeof(rt_path));
+    bool have_std = find_lib_next_to_path(obj_file_path, "libcasprix_stdlib.a", std_path, sizeof(std_path)) ||
+                    find_lib_next_to_path(exe_path, "libcasprix_stdlib.a", std_path, sizeof(std_path)) ||
+                    find_prebuilt_lib_path("libcasprix_stdlib.a", std_path, sizeof(std_path));
+    bool have_skia_gui = find_lib_next_to_path(obj_file_path, "libskia_gui.a", skia_gui_path, sizeof(skia_gui_path)) ||
+                         find_lib_next_to_path(exe_path, "libskia_gui.a", skia_gui_path, sizeof(skia_gui_path)) ||
+                         find_prebuilt_lib_path("libskia_gui.a", skia_gui_path, sizeof(skia_gui_path));
+    bool have_skia_c = find_lib_next_to_path(obj_file_path, "libskia_c.a", skia_c_path, sizeof(skia_c_path)) ||
+                       find_lib_next_to_path(exe_path, "libskia_c.a", skia_c_path, sizeof(skia_c_path)) ||
+                       find_prebuilt_lib_path("libskia_c.a", skia_c_path, sizeof(skia_c_path));
+    bool need_skia = g_link_needs_skia;
+    bool have_skia = have_skia_gui && have_skia_c;
 
-    char runtime_flags[512] = "";
-    char inline_sources[512] = "";
+    char runtime_flags[1536] = "";
+    char inline_sources[4096] = "";
 
-    if (rt_path) {
-        char rt_dir[256];
-        extract_parent_dir(rt_path, rt_dir, sizeof(rt_dir));
-        if (skia_libs_next_to_runtime(rt_path)) {
+    if (need_skia && !have_skia) {
+        printf("  [ERROR] Skia GUI program detected, but libskia_gui.a/libskia_c.a were not found.\n");
+        return 1;
+    }
+
+    if (have_rt) {
+        if (need_skia) {
             snprintf(runtime_flags, sizeof(runtime_flags),
-                     " -L\"%s\" -lskia_gui -lskia_c -lcasprix_runtime -lgdi32 -luser32 -lmsimg32",
-                     rt_dir);
+                     " \"%s\" \"%s\" \"%s\" -lgdi32 -luser32 -lole32 -loleaut32 -lmsimg32 -lws2_32 -lpthread -ladvapi32",
+                     rt_path, skia_gui_path, skia_c_path);
         } else {
 #ifdef _WIN32
             snprintf(runtime_flags, sizeof(runtime_flags),
-                     " -L\"%s\" -lcasprix_runtime -lws2_32 -lpthread -ladvapi32",
-                     rt_dir);
+                     " \"%s\" -lws2_32 -lpthread -ladvapi32",
+                     rt_path);
 #else
             snprintf(runtime_flags, sizeof(runtime_flags),
-                     " -L\"%s\" -lcasprix_runtime -lm -lpthread",
-                     rt_dir);
+                     " \"%s\" -lm -lpthread",
+                     rt_path);
 #endif
         }
     } else {
         /* No prebuilt runtime: compile a minimal subset next to the repo root. */
-        char root[512];
+        char root[1024];
         if (find_source_root_for_runtime(root, sizeof(root))) {
             snprintf(inline_sources, sizeof(inline_sources),
                      "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
@@ -575,10 +708,22 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
                      "runtime/memory/arc.c runtime/memory/cycle_gc.c "
                      "runtime/memory/ownership.c runtime/object.c");
         }
+
+        if (need_skia) {
+#ifdef _WIN32
+            snprintf(runtime_flags, sizeof(runtime_flags),
+                     " \"%s\" \"%s\" -lgdi32 -luser32 -lole32 -loleaut32 -lmsimg32",
+                     skia_gui_path, skia_c_path);
+#else
+            snprintf(runtime_flags, sizeof(runtime_flags),
+                     " \"%s\" \"%s\"",
+                     skia_gui_path, skia_c_path);
+#endif
+        }
     }
 
     char stdlib_flags[256] = "";
-    if (std_path)
+    if (have_std)
         snprintf(stdlib_flags, sizeof(stdlib_flags), " \"%s\"", std_path);
 
     char command[4096];
@@ -589,22 +734,27 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
              exe_path, runtime_flags, stdlib_flags);
 #else
     snprintf(command, sizeof(command),
-             "%s %s \"%s\" %s -o \"%s\"%s%s -lm",
+             "%s %s -no-pie \"%s\" %s -o \"%s\"%s%s -lm",
              gcc, opt_flags, obj_file_path, inline_sources,
              exe_path, runtime_flags, stdlib_flags);
 #endif
 
-    debug_phase_start("LINKING");
-    printf("  Running GCC linker...\n");
-    if (g_config.verbose) printf("  Command: %s\n", command);
+    perf_start(&g_diag.perf, "Linking", STAGE_LINK);
+    if (!g_config.compact_output) debug_phase_start("LINKING");
+    if (!g_config.compact_output) CPX_INFO("Running GCC linker...");
+    if (g_config.verbose) CPX_INFO("Command: %s", command);
     int result = system(command);
-    if (result != 0) { printf("  [ERROR] Linking failed (exit %d)\n", result); return 1; }
+    perf_end(&g_diag.perf);
+    if (result != 0) {
+        if (!g_config.compact_output) CPX_ERROR("Linking failed (exit %d)", result);
+        return 1;
+    }
 #ifdef _WIN32
-    printf("  Executable: %s.exe\n", exe_path);
+    if (!g_config.compact_output) CPX_INFO("Executable created: %s.exe", exe_path);
 #else
-    printf("  Executable: %s\n", exe_path);
+    if (!g_config.compact_output) CPX_INFO("Executable created: %s", exe_path);
 #endif
-    debug_phase_end("Linking");
+    if (!g_config.compact_output) debug_phase_end("Linking");
 
     if (!g_config.keep_asm_file) remove(asm_file_path);
     remove(obj_file_path);

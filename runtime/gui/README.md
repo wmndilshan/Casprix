@@ -163,15 +163,11 @@ int main() {
 
 ### Calculator Example
 
-See [examples/gui_calculator.c](../../examples/gui_calculator.c) for a complete working calculator implementation demonstrating:
-- Event handling
-- State management
-- Dynamic text updates
-- Multiple widget interaction
+See [examples/gui/gui_calculator.cpx](../../examples/gui/gui_calculator.cpx) for a Skia/GUI sample (requires building with `ENABLE_SKIA_GUI=ON` where applicable).
 
-### Comprehensive Test
+### Other samples
 
-See [examples/gui_comprehensive_test.c](../../examples/gui_comprehensive_test.c) for a comprehensive test of all GUI components.
+See [examples/gui/](../../examples/gui/) for additional `.cpx` demos (`gui_hello.cpx`, `gui_test.cpx`, `modern_gui_demo.cpx`, …).
 
 ## Building
 

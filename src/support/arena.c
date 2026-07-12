@@ -55,52 +55,70 @@ Arena* arena_create(void) {
 // Fast bump allocation
 void* arena_alloc(Arena* arena, size_t size) {
     if (size == 0) return NULL;
-    
-    // Align size
+
+    // Align size up — subtraction is overflow-safe because ARENA_ALIGNMENT is
+    // a constant power-of-two and we've guarded size > 0.
     size = align_size(size, ARENA_ALIGNMENT);
-    
+
     ArenaBlock* block = arena->current_block;
-    
-    // Check if current block has enough space
-    if (block->used + size <= block->size) {
+
+    // Overflow-safe capacity check: block->used + size could wrap if size is
+    // pathologically large. Use subtraction form: available = block->size - used.
+    if (block->used <= block->size && size <= block->size - block->used) {
         void* ptr = block->memory + block->used;
         block->used += size;
         arena->total_used += size;
         return ptr;
     }
-    
-    // Need new block
+
+    // Need a new block
     ArenaBlock* new_block = create_block(size);
     if (!new_block) return NULL;
-    
-    // Link new block
+
     block->next = new_block;
     arena->current_block = new_block;
     arena->total_allocated += new_block->size;
     arena->block_count++;
-    
-    // Allocate from new block
+
     void* ptr = new_block->memory;
     new_block->used = size;
     arena->total_used += size;
-    
+
     return ptr;
 }
 
-// Allocate aligned memory
+// Allocate with explicit alignment (no wasted gap before alignment).
 void* arena_alloc_aligned(Arena* arena, size_t size, size_t alignment) {
-    assert(alignment > 0 && (alignment & (alignment - 1)) == 0); // Power of 2
-    
-    // Add padding for alignment
-    size_t padding = alignment - 1;
-    void* raw = arena_alloc(arena, size + padding);
-    if (!raw) return NULL;
-    
-    // Align pointer
-    uintptr_t addr = (uintptr_t)raw;
-    uintptr_t aligned = align_size(addr, alignment);
-    
-    return (void*)aligned;
+    assert(alignment > 0 && (alignment & (alignment - 1)) == 0); // must be power-of-2
+
+    ArenaBlock* block = arena->current_block;
+
+    // Align the current bump pointer first, then reserve 'size' bytes.
+    size_t aligned_used = align_size(block->used, alignment);
+    size_t pad           = aligned_used - block->used;
+
+    if (aligned_used <= block->size && size <= block->size - aligned_used) {
+        block->used = aligned_used + size;
+        arena->total_used += pad + size;
+        return block->memory + aligned_used;
+    }
+
+    // Current block doesn't fit — get a fresh block (it starts aligned at 0).
+    size_t alloc_size = align_size(size, alignment);
+    ArenaBlock* new_block = create_block(alloc_size);
+    if (!new_block) return NULL;
+
+    block->next            = new_block;
+    arena->current_block   = new_block;
+    arena->total_allocated += new_block->size;
+    arena->block_count++;
+
+    // new_block->memory is malloc-aligned (at least 8 bytes); for alignment
+    // requirements up to 16 bytes this is guaranteed.  For larger alignments
+    // a POSIX-aligned malloc would be needed — document the limit.
+    new_block->used       = alloc_size;
+    arena->total_used    += alloc_size;
+    return new_block->memory;
 }
 
 // Allocate and zero
@@ -125,19 +143,20 @@ char* arena_strdup(Arena* arena, const char* str) {
     return dup;
 }
 
-// Reset arena (reuse memory)
+// Reset arena (reuse memory).
+// Bumps generation so debug-build callers can detect stale pointers.
 void arena_reset(Arena* arena) {
     if (!arena) return;
-    
-    // Reset all blocks
+
     ArenaBlock* block = arena->first_block;
     while (block) {
         block->used = 0;
         block = block->next;
     }
-    
+
     arena->current_block = arena->first_block;
-    arena->total_used = 0;
+    arena->total_used    = 0;
+    arena->generation++;   /* invalidate all previously-issued pointers */
 }
 
 // Destroy arena
@@ -193,6 +212,7 @@ void arena_scope_end(ArenaScope scope) {
     }
     
     // Restore block usage
+    assert(block->used >= scope.saved_used);
     size_t freed = block->used - scope.saved_used;
     block->used = scope.saved_used;
     scope.arena->total_used -= freed;

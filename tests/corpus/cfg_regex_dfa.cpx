@@ -1,0 +1,26 @@
+// Golden corpus: DFA-like control flow (deep branch trees) for MIR CFG verification.
+func dfa_step(state: int, c: int) -> int {
+    if state == 0 {
+        if c == 97 { return 1 }
+        return 0
+    }
+    if state == 1 {
+        if c == 98 { return 2 }
+        return 0
+    }
+    if state == 2 {
+        if c == 98 { return 2 }
+        if c == 99 { return 3 }
+        return 0
+    }
+    if state == 3 {
+        return 3
+    }
+    return 0
+}
+
+func main() -> int {
+    return dfa_step(dfa_step(dfa_step(dfa_step(0, 97), 98), 98), 99)
+}
+
+main()

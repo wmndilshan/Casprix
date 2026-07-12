@@ -5,8 +5,10 @@
 #include "ownership_check.h"
 #include "compiler/sema/symtable.h"
 #include "support/log.h"
+#include "support/error.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 // Get ownership info from symbol (add to Symbol struct if needed)
 static OwnershipInfo* get_ownership_info(Symbol* sym) {
@@ -18,8 +20,75 @@ static OwnershipInfo* get_ownership_info(Symbol* sym) {
         info->state = OWNERSHIP_OWNED;
         info->borrow_count = 0;
         info->has_mut_borrow = false;
+        info->is_linear_view = false;
+        info->parent_string  = NULL;
+        info->consume_count  = 0;
     }
     return (OwnershipInfo*)sym->ownership_data;
+}
+
+void register_linear_view(OwnershipChecker* checker,
+                          const char* view_name,
+                          const char* parent_string_name,
+                          int line) {
+    if (!checker || !view_name) return;
+
+    Symbol* sym = lookup_symbol(checker->analyzer->symbols, view_name);
+    if (!sym) return;
+
+    OwnershipInfo* info = get_ownership_info(sym);
+    info->is_linear_view = true;
+    info->parent_string  = parent_string_name;   /* borrowed; AST-lived  */
+    info->consume_count  = 0;
+    info->state          = OWNERSHIP_OWNED;
+
+    if (!parent_string_name) {
+        /* Unknown parent — the drop planner cannot prove safety and will
+         * fire its own diagnostic when the surrounding scope exits.  We
+         * emit a dedicated, earlier note here so the user sees both the
+         * declaration site and the eventual drop-site diagnostic. */
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "StringView '%s' has no inferable parent String; "
+                 "the linear-view checker cannot prove its safety",
+                 view_name);
+        report_semantic_error(line, 0, msg);
+        return;
+    }
+
+    CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC,
+            "Registered linear view '%s' borrowing from '%s' at line %d",
+            view_name, parent_string_name, line);
+}
+
+void linear_view_consume(OwnershipChecker* checker,
+                         const char* var_name,
+                         int line) {
+    if (!checker || !var_name) return;
+    if (checker->in_unsafe_block) return;
+
+    Symbol* sym = lookup_symbol(checker->analyzer->symbols, var_name);
+    if (!sym || !sym->ownership_data) return;
+
+    OwnershipInfo* info = (OwnershipInfo*)sym->ownership_data;
+    if (!info->is_linear_view) return;       /* not a view — nothing to do */
+
+    info->consume_count++;
+
+    if (info->consume_count > 1 || info->state == OWNERSHIP_MOVED) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Use of consumed StringView '%s' (linear values may be "
+                 "consumed at most once; previously consumed at line %d)",
+                 var_name, info->move_location);
+        report_semantic_error(line, 0, msg);
+        return;
+    }
+
+    /* First consume → mark MOVED so the regular ownership checker forbids
+     * any subsequent read through `check_ownership_valid`. */
+    info->state          = OWNERSHIP_MOVED;
+    info->move_location  = line;
 }
 
 void ownership_checker_init(OwnershipChecker* checker, SemanticAnalyzer* analyzer) {
@@ -43,8 +112,10 @@ bool check_ownership_valid(OwnershipChecker* checker, const char* var_name, int 
     OwnershipInfo* info = get_ownership_info(sym);
     
     if (info->state == OWNERSHIP_MOVED) {
-        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Use of moved value '%s' (moved at line %d)",
-                 line, 0, var_name, info->move_location);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Use of moved value '%s' (moved at line %d)",
+                 var_name, info->move_location);
+        report_semantic_error(line, 0, msg);
         return false;
     }
 
@@ -63,8 +134,9 @@ void mark_moved(OwnershipChecker* checker, const char* var_name, int line) {
     
     // Can't move if there are active borrows
     if (info->borrow_count > 0 || info->has_mut_borrow) {
-        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot move '%s' while borrowed",
-                 line, 0, var_name);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Cannot move '%s' while borrowed", var_name);
+        report_semantic_error(line, 0, msg);
         return;
     }
 
@@ -86,15 +158,17 @@ bool add_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     
     // Can't borrow if already has mutable borrow
     if (info->has_mut_borrow) {
-        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot borrow '%s' immutably while mutably borrowed",
-                 line, 0, var_name);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Cannot borrow '%s' immutably while mutably borrowed", var_name);
+        report_semantic_error(line, 0, msg);
         return false;
     }
 
     // Can't borrow if moved
     if (info->state == OWNERSHIP_MOVED) {
-        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot borrow moved value '%s'",
-                 line, 0, var_name);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Cannot borrow moved value '%s'", var_name);
+        report_semantic_error(line, 0, msg);
         return false;
     }
 
@@ -119,15 +193,17 @@ bool add_mut_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     
     // Can't have mutable borrow if any borrows exist
     if (info->borrow_count > 0 || info->has_mut_borrow) {
-        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot borrow '%s' mutably while borrowed",
-                 line, 0, var_name);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Cannot borrow '%s' mutably while borrowed", var_name);
+        report_semantic_error(line, 0, msg);
         return false;
     }
 
     // Can't borrow if moved
     if (info->state == OWNERSHIP_MOVED) {
-        CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_SEMANTIC,                  "[%d:%d] Cannot borrow moved value '%s'",
-                 line, 0, var_name);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Cannot borrow moved value '%s'", var_name);
+        report_semantic_error(line, 0, msg);
         return false;
     }
 

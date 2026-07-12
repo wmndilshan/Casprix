@@ -1,0 +1,241 @@
+// Custom backend framework example for Casprix
+// Builds a small HTTP-like framework shape on top of direct socket FFI.
+
+extern func strstr(haystack: string, needle: string) -> int;
+extern func strlen(str: string) -> int;
+
+extern func nuwan_socket_init() -> int;
+extern func nuwan_socket_create(domain: int, type: int, protocol: int) -> int;
+extern func nuwan_socket_bind(sockfd: int, addr: string, port: int) -> int;
+extern func nuwan_socket_listen(sockfd: int, backlog: int) -> int;
+extern func nuwan_socket_accept(sockfd: int, client_addr: string, addr_len: int) -> int;
+extern func nuwan_socket_send(sockfd: int, buf: string, len: int) -> int;
+extern func nuwan_socket_close(sockfd: int) -> int;
+extern func nuwan_socket_set_reuse_addr(sockfd: int, reuse: int) -> int;
+extern func nuwan_socket_set_nodelay(sockfd: int, nodelay: int) -> int;
+extern func nuwan_socket_get_last_error() -> string;
+
+extern func cpx_socket_recv_ptr(sockfd: int, buf: rawptr, len: int) -> int;
+extern func ptr_create_buf(size: int) -> rawptr;
+extern func ptr_to_string(p: rawptr) -> string;
+extern func ptr_free(p: rawptr) -> void;
+
+class BackendApp {
+    port: int;
+    routeCount: int;
+    route1Method: string;
+    route1Path: string;
+    route1Handler: string;
+    route2Method: string;
+    route2Path: string;
+    route2Handler: string;
+    route3Method: string;
+    route3Path: string;
+    route3Handler: string;
+    route4Method: string;
+    route4Path: string;
+    route4Handler: string;
+
+    func new(serverPort: int) -> BackendApp {
+        this.port = serverPort;
+        this.routeCount = 0;
+        this.route1Method = "";
+        this.route1Path = "";
+        this.route1Handler = "";
+        this.route2Method = "";
+        this.route2Path = "";
+        this.route2Handler = "";
+        this.route3Method = "";
+        this.route3Path = "";
+        this.route3Handler = "";
+        this.route4Method = "";
+        this.route4Path = "";
+        this.route4Handler = "";
+        return this;
+    }
+
+    func get(path: string, handlerName: string) -> void {
+        this.addRoute("GET", path, handlerName);
+    }
+
+    func post(path: string, handlerName: string) -> void {
+        this.addRoute("POST", path, handlerName);
+    }
+
+    func addRoute(method: string, path: string, handlerName: string) -> void {
+        if this.routeCount == 0 {
+            this.route1Method = method;
+            this.route1Path = path;
+            this.route1Handler = handlerName;
+        } elif this.routeCount == 1 {
+            this.route2Method = method;
+            this.route2Path = path;
+            this.route2Handler = handlerName;
+        } elif this.routeCount == 2 {
+            this.route3Method = method;
+            this.route3Path = path;
+            this.route3Handler = handlerName;
+        } elif this.routeCount == 3 {
+            this.route4Method = method;
+            this.route4Path = path;
+            this.route4Handler = handlerName;
+        }
+
+        this.routeCount = this.routeCount + 1;
+    }
+
+    func matchHandler(routeId: int) -> int {
+        if routeId == 1 {
+            if this.route1Method == "GET" {
+                if this.route1Path == "/" {
+                    return 1;
+                }
+            }
+        } elif routeId == 2 {
+            if this.route2Method == "GET" {
+                if this.route2Path == "/health" {
+                    return 2;
+                }
+            }
+        } elif routeId == 3 {
+            if this.route3Method == "GET" {
+                if this.route3Path == "/users" {
+                    return 3;
+                }
+            }
+        } elif routeId == 4 {
+            if this.route4Method == "POST" {
+                if this.route4Path == "/users" {
+                    return 4;
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    func printRoutes(dummy: int) -> void {
+        print("Registered routes:");
+
+        if this.route1Path != "" {
+            print(this.route1Method);
+            print(this.route1Path);
+            print(this.route1Handler);
+        }
+        if this.route2Path != "" {
+            print(this.route2Method);
+            print(this.route2Path);
+            print(this.route2Handler);
+        }
+        if this.route3Path != "" {
+            print(this.route3Method);
+            print(this.route3Path);
+            print(this.route3Handler);
+        }
+        if this.route4Path != "" {
+            print(this.route4Method);
+            print(this.route4Path);
+            print(this.route4Handler);
+        }
+    }
+
+    func serveOnce(dummy: int) -> void {
+        print("Starting backend app on port");
+        print(this.port);
+
+        nuwan_socket_init();
+        serverHandle: int = nuwan_socket_create(2, 1, 0);
+
+        if serverHandle >= 0 {
+            nuwan_socket_set_reuse_addr(serverHandle, 1);
+        }
+
+        if serverHandle >= 0 {
+            if nuwan_socket_bind(serverHandle, "0.0.0.0", this.port) == 0 {
+                print("Bind ok");
+                if nuwan_socket_listen(serverHandle, 10) == 0 {
+                    print("Listening for one request...");
+
+                    clientHandle: int = nuwan_socket_accept(serverHandle, "0.0.0.0", 16);
+
+                    if clientHandle >= 0 {
+                        bufferPtr: rawptr = ptr_create_buf(4096);
+                        bytesReceived: int = cpx_socket_recv_ptr(clientHandle, bufferPtr, 4096);
+
+                        if bytesReceived > 0 {
+                            routeId: int = 0;
+                            if strstr(ptr_to_string(bufferPtr), "GET /health ") != 0 {
+                                routeId = 2;
+                            } elif strstr(ptr_to_string(bufferPtr), "GET /users ") != 0 {
+                                routeId = 3;
+                            } elif strstr(ptr_to_string(bufferPtr), "POST /users ") != 0 {
+                                routeId = 4;
+                            } elif strstr(ptr_to_string(bufferPtr), "GET / ") != 0 {
+                                routeId = 1;
+                            }
+                            handlerId: int = this.matchHandler(routeId);
+
+                            if handlerId == 1 {
+                                print("Route: /");
+                                nuwan_socket_send(clientHandle,
+                                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 32\r\nConnection: close\r\n\r\nCasprix custom backend framework",
+                                    126);
+                            } elif handlerId == 2 {
+                                print("Route: /health");
+                                nuwan_socket_send(clientHandle,
+                                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 25\r\nConnection: close\r\n\r\nstatus=ok;runtime=casprix",
+                                    119);
+                            } elif handlerId == 3 {
+                                print("Route: /users GET");
+                                nuwan_socket_send(clientHandle,
+                                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 24\r\nConnection: close\r\n\r\nusers:1:nuwan,2:casprix",
+                                    117);
+                            } elif handlerId == 4 {
+                                print("Route: /users POST");
+                                nuwan_socket_send(clientHandle,
+                                    "HTTP/1.1 201 Created\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nuser created",
+                                    111);
+                            } else {
+                                print("Route: not found");
+                                nuwan_socket_send(clientHandle,
+                                    "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 15\r\nConnection: close\r\n\r\nroute not found",
+                                    116);
+                            }
+                            print("Response sent");
+                        } else {
+                            print("No request data received");
+                        }
+
+                        ptr_free(bufferPtr);
+                        nuwan_socket_close(clientHandle);
+                    }
+                } else {
+                    print("Listen failed");
+                    print(nuwan_socket_get_last_error());
+                }
+            } else {
+                print("Bind failed");
+                print(nuwan_socket_get_last_error());
+            }
+        }
+
+        if serverHandle >= 0 {
+            nuwan_socket_close(serverHandle);
+            print("Server stopped");
+        } else {
+            print("Failed to start server");
+        }
+    }
+}
+
+func main() -> void {
+    app: BackendApp = new BackendApp(8081);
+
+    app.get("/", "home");
+    app.get("/health", "health");
+    app.get("/users", "list_users");
+    app.post("/users", "create_user");
+
+    app.printRoutes(0);
+    app.serveOnce(0);
+}

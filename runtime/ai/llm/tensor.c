@@ -60,8 +60,8 @@ void* arena_alloc(Arena* arena, size_t size, size_t alignment) {
 Tensor* arena_alloc_tensor(Arena* arena, i32 ndim, const i32* shape) {
     assert(ndim > 0 && ndim <= MAX_TENSOR_DIM);
     
-    // Allocate tensor struct
-    Tensor* tensor = (Tensor*)malloc(sizeof(Tensor));
+    // Allocate tensor struct from arena
+    Tensor* tensor = (Tensor*)arena_alloc(arena, sizeof(Tensor), 8);
     if (!tensor) return NULL;
     
     // Calculate total size
@@ -202,11 +202,18 @@ MemoryPools* mempool_create(i32 num_params, size_t activation_capacity, size_t g
     MemoryPools* pool = (MemoryPools*)malloc(sizeof(MemoryPools));
     if (!pool) return NULL;
     
-    // Allocate param arrays
-    pool->params = (Tensor**)calloc(num_params, sizeof(Tensor*));
-    pool->param_grads = (Tensor**)calloc(num_params, sizeof(Tensor*));
-    pool->adam_m = (Tensor**)calloc(num_params, sizeof(Tensor*));
-    pool->adam_v = (Tensor**)calloc(num_params, sizeof(Tensor*));
+    // Allocate param arrays only if needed
+    if (num_params > 0) {
+        pool->params = (Tensor**)calloc(num_params, sizeof(Tensor*));
+        pool->param_grads = (Tensor**)calloc(num_params, sizeof(Tensor*));
+        pool->adam_m = (Tensor**)calloc(num_params, sizeof(Tensor*));
+        pool->adam_v = (Tensor**)calloc(num_params, sizeof(Tensor*));
+    } else {
+        pool->params = NULL;
+        pool->param_grads = NULL;
+        pool->adam_m = NULL;
+        pool->adam_v = NULL;
+    }
     pool->num_params = num_params;
     pool->adam_t = 0;
     
@@ -214,8 +221,9 @@ MemoryPools* mempool_create(i32 num_params, size_t activation_capacity, size_t g
     pool->activations = arena_create(activation_capacity);
     pool->grad_cache = arena_create(grad_capacity);
     
-    if (!pool->params || !pool->param_grads || !pool->adam_m || !pool->adam_v ||
-        !pool->activations || !pool->grad_cache) {
+    bool params_ok = (num_params == 0) || (pool->params && pool->param_grads && pool->adam_m && pool->adam_v);
+    
+    if (!params_ok || !pool->activations || !pool->grad_cache) {
         mempool_destroy(pool);
         return NULL;
     }

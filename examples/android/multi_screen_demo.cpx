@@ -208,7 +208,7 @@ profile_header.set_background(MD_SURFACE)
 let avatar = new Avatar("JD", font_title, MD_PRIMARY)
 let name_text  = new Text("Jane Doe", font_title, MD_ON_SURFACE)
 let email_text = new Text("jane.doe@example.com", font_small, MD_ON_SURFACE_MED)
-let sep_profile = new Separator(1, MD_OUTLINE_VARIANT, 1.0)
+let sep_profile = new Separator(true, MD_OUTLINE_VARIANT, 1.0)
 
 profile_header.add(avatar.handle)
 profile_header.add(name_text.handle)

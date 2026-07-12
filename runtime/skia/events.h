@@ -174,6 +174,9 @@ void sg_dispatch_key_up(SGEventManager* mgr, int keycode, int scancode, int mods
 void sg_dispatch_text_input(SGEventManager* mgr, const char* text);
 void sg_dispatch_resize(SGEventManager* mgr, int width, int height);
 
+/* Secure state mutation helpers for pointer interactions. */
+void sg_pointer_set_active(SGNode* node, int active);
+
 /* ========================================================================
  * Focus Management
  * ======================================================================== */
@@ -193,6 +196,10 @@ void sg_focus_rebuild_tab_order(SGEventManager* mgr);
 
 /* Get currently focused node */
 SGNode* sg_focus_get(SGEventManager* mgr);
+
+/* Process-wide active focus manager helpers */
+SGEventManager* sg_focus_manager_get_active(void);
+SGNode*         sg_focus_get_global(void);
 
 /* ========================================================================
  * Mouse Capture

@@ -11,7 +11,7 @@ responsibility; nothing lives in two places.
 ```
 casprix/
 ├── src/              Compiler (frontend → IR → codegen)
-├── runtime/          C runtime library (memory, I/O, AI, …)
+├── runtime/          C runtime library (memory, I/O, AI, vm/, …)
 ├── lib/              Standard library written in Casprix (.cpx)
 ├── include/          Public C headers for embedding / FFI
 ├── pkg/              Package manager (cpkg) source
@@ -19,7 +19,7 @@ casprix/
 ├── tests/            Test suite (compiler + runtime)
 ├── tools/            Standalone developer tools
 ├── scripts/          CI / developer convenience scripts
-├── docs/             Documentation
+├── docs/             Documentation (FEATURES, PROJECT_STRUCTURE, STDLIB_STRINGS_AND_REGEX, …)
 ├── examples/         Runnable example programs
 ├── ide/              IDE integrations (VS Code extension, grammar)
 ├── third_party/      Vendored external libraries (Skia, Python shim)
@@ -67,7 +67,9 @@ src/
 │   │   ├── mir_opt.c                  General MIR optimisations
 │   │   ├── mir_printer.c              Debug printer
 │   │   ├── mir_backend.c              MIR → backend bridge
-│   │   └── mir_c_backend.c            C-emission backend (portable)
+│   │   ├── mir_c_backend.c            C-emission backend (portable)
+│   │   ├── mir_async.c                Async lowering on MIR
+│   │   └── mir_regex.c                Regex → MIR pipeline
 │   │
 │   ├── opt/                  High-level optimisation passes
 │   │   ├── inline.c / inline.h
@@ -275,21 +277,30 @@ available.
 ```
 tests/
 ├── CMakeLists.txt           Registers all tests with CTest
-├── runner.c                 C test harness for compiler integration
-├── test_lang_abi.c          ABI compatibility smoke-tests
+├── runner.c / runner.sh     Compiler integration harness (invokes `casprix` on .cpx tests)
+├── test_lang_abi.c          ABI compatibility smoke tests
+├── test_vm_jit.c            CVM interpreter + JIT bridge (links MIR + runtime/vm)
 │
-├── compiler/                .cpx files — compile-and-run tests
-│   ├── test_*.cpx           Feature / regression tests
-│   └── *.cpx                Benchmarks & edge-case checks
+├── compiler/
+│   ├── test_*.cpx           Compile-and-run feature tests
+│   ├── test_mir_regex.c     MIR regex pipeline (standalone executable)
+│   ├── test_simd_virt.c     SIMD legalization / backend smoke test
+│   ├── test_mir_corpus_verify.c   Golden MIR corpus checks
+│   └── dump_mir_regex.c     Debug helper for MIR regex
 │
-└── runtime/                 C-based unit & integration tests
-    ├── test_stdlib.c        Standard library correctness
-    ├── test_coroutine.c     Async / coroutine runtime
-    ├── test_scheduler.c     Work-stealing scheduler
-    ├── test_networking.c    TCP / HTTP client
-    ├── benchmark.c          Throughput benchmarks
-    ├── bench_simd.c         SIMD kernel benchmarks
-    └── demo_http_server.c   HTTP server integration demo
+├── corpus/                  Large / focused .cpx fixtures (e.g. regex, float pipeline)
+│
+├── runtime/                 C-based unit & integration tests
+│   ├── test_stdlib.c
+│   ├── test_coroutine.c     (often Windows-only in CMake)
+│   ├── test_scheduler.c
+│   ├── test_networking.c
+│   ├── test_*.c             ML/attention/GEMM/KV-cache experiments
+│   ├── benchmark.c
+│   ├── bench_simd.c
+│   └── demo_http_server.c
+│
+└── android/                 APK tooling smoke tests (manifest, zip, …)
 ```
 
 ---

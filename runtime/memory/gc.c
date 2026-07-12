@@ -31,17 +31,7 @@
 #define GC_DEFAULT_THRESH  (256 * 1024)         /* 256 KB trigger threshold */
 #define GC_GROWTH_FACTOR   1.5f
 
-/* ─── Internal: per-object survival tracking ─── */
-
-typedef struct gc_extra {
-    uint8_t survive_count;  /* How many collections this object has survived */
-} gc_extra_t;
-
-/* Get extra tracking data (stored after type_info in header) */
-static gc_extra_t* gc_get_extra(gc_object_header_t* header) {
-    /* We pack the survive count into the generation field's upper bits */
-    return (gc_extra_t*)((char*)header + sizeof(gc_object_header_t) - sizeof(gc_extra_t));
-}
+/* survive_count is now a dedicated field in gc_object_header_t — no aliasing. */
 
 /* ─── Lifecycle ─── */
 
@@ -62,11 +52,21 @@ gc_context_t* nuwan_gc_init(void) {
     gc->config.heap_size_limit    = GC_DEFAULT_LIMIT;
     gc->config.gc_threshold       = GC_DEFAULT_THRESH;
     gc->config.enable_generational = true;
-    gc->config.enable_incremental  = false;  /* Start without incremental */
+    gc->config.enable_incremental  = false;
     gc->config.growth_factor       = GC_GROWTH_FACTOR;
 
     gc->collecting     = false;
     gc->bytes_since_gc = 0;
+
+    /* Allocate per-context type registry */
+    gc->type_table = (gc_type_descriptor_t*)calloc(GC_MAX_TYPES,
+                                                    sizeof(gc_type_descriptor_t));
+    if (!gc->type_table) {
+        free(gc->roots);
+        free(gc);
+        return NULL;
+    }
+    gc->type_count = 0;
 
     return gc;
 }
@@ -79,7 +79,6 @@ void nuwan_gc_configure(gc_context_t* gc, gc_config_t* config) {
 void nuwan_gc_shutdown(gc_context_t* gc) {
     if (!gc) return;
 
-    /* Free all remaining objects */
     gc_object_header_t* obj = gc->objects;
     while (obj) {
         gc_object_header_t* next = obj->next;
@@ -90,6 +89,7 @@ void nuwan_gc_shutdown(gc_context_t* gc) {
     }
 
     free(gc->roots);
+    free(gc->type_table);
     free(gc);
 }
 
@@ -212,14 +212,10 @@ static void gc_sweep(gc_context_t* gc, bool full_collection) {
 
             if (gc->config.enable_generational &&
                 obj->generation == GC_YOUNG_GEN) {
-                /* Per-object survive count — avoids the shared-static bug where
-                   a single counter was incremented for every surviving object
-                   across all GC contexts, promoting the wrong objects. */
-                gc_extra_t* extra = gc_get_extra(obj);
-                extra->survive_count++;
-                if (extra->survive_count >= GC_PROMOTE_AGE) {
-                    obj->generation = GC_OLD_GEN;
-                    extra->survive_count = 0;
+                obj->survive_count++;
+                if (obj->survive_count >= GC_PROMOTE_AGE) {
+                    obj->generation    = GC_OLD_GEN;
+                    obj->survive_count = 0;
                 }
             }
 
@@ -300,16 +296,12 @@ void nuwan_gc_print_stats(gc_context_t* gc) {
     printf("=====================\n");
 }
 
-/* ─── Type registration (global table) ─── */
+/* ─── Type registration (per-context) ─── */
 
-#define MAX_GC_TYPES 128
-static gc_type_descriptor_t g_gc_types[MAX_GC_TYPES];
-static int g_gc_type_count = 0;
-
-void nuwan_gc_register_type(const char* name, size_t size,
+void nuwan_gc_register_type(gc_context_t* gc, const char* name, size_t size,
                             void (*scan_func)(void*, gc_context_t*)) {
-    if (g_gc_type_count >= MAX_GC_TYPES) return;
-    gc_type_descriptor_t* td = &g_gc_types[g_gc_type_count++];
+    if (!gc || !gc->type_table || gc->type_count >= GC_MAX_TYPES) return;
+    gc_type_descriptor_t* td = &gc->type_table[gc->type_count++];
     td->name      = name;
     td->size      = size;
     td->scan_func = scan_func;

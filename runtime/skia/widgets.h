@@ -12,6 +12,7 @@
 #define WIDGETS_H
 
 #include "scene_graph.h"
+#include "animation.h"
 #include "events.h"
 
 #ifdef __cplusplus
@@ -34,6 +35,7 @@ typedef enum {
     WIDGET_CUSTOM_CANVAS,
     WIDGET_TABS,
     WIDGET_MENU,
+    WIDGET_TAB_PANEL,
 } WidgetType;
 
 /* ========================================================================
@@ -47,16 +49,31 @@ typedef enum {
     BUTTON_DISABLED,
 } ButtonState;
 
+typedef enum {
+    BUTTON_VARIANT_FLAT = 0,
+    BUTTON_VARIANT_OUTLINED = 1,
+    BUTTON_VARIANT_ELEVATED = 2
+} ButtonVariant;
+
 typedef void (*ButtonClickCallback)(SGNode* button, void* user_data);
 
 typedef struct {
     WidgetType type;              /* WIDGET_BUTTON */
     ButtonState state;
+    ButtonVariant variant;
+    int focus_visible;
     uint32_t normal_color;        /* Default background */
     uint32_t hover_color;         /* Hovered background */
     uint32_t press_color;         /* Pressed background */
     uint32_t disabled_color;      /* Disabled background */
     uint32_t text_color;
+    uint32_t saved_border_color;
+    float saved_border_width;
+    int saved_elevation;
+    float saved_shadow_offset_x;
+    float saved_shadow_offset_y;
+    float saved_shadow_blur;
+    uint32_t saved_shadow_color;
     ButtonClickCallback on_click;
     void* callback_data;
 } ButtonWidgetState;
@@ -65,6 +82,8 @@ typedef struct {
  * Returns the root SGNode for the button. */
 SGNode* widget_button(const char* label, SkiaFont font,
                        ButtonClickCallback on_click, void* user_data);
+SGNode* widget_button_modern(const char* label, SkiaFont font, ButtonVariant variant,
+                              ButtonClickCallback on_click, void* user_data);
 
 /* Set button colors */
 void widget_button_set_colors(SGNode* btn, uint32_t normal, uint32_t hover,
@@ -78,6 +97,7 @@ void widget_button_set_callback(SGNode* btn, ButtonClickCallback on_click, void*
 
 /* Get button state */
 ButtonState widget_button_get_state(SGNode* btn);
+void        widget_button_set_variant(SGNode* btn, ButtonVariant variant);
 
 /* ========================================================================
  * Text Widget
@@ -105,8 +125,16 @@ typedef struct {
     int selection_end;            /* Selection end */
     char* placeholder;            /* Placeholder text */
     int focused;                  /* Is this input focused? */
+    int focus_visible;
     float scroll_offset;          /* Horizontal scroll for overflow text */
     double cursor_blink_time;     /* For cursor blink animation */
+    uint32_t saved_border_color;
+    float saved_border_width;
+    int saved_elevation;
+    float saved_shadow_offset_x;
+    float saved_shadow_offset_y;
+    float saved_shadow_blur;
+    uint32_t saved_shadow_color;
     TextChangeCallback on_change;
     void* callback_data;
 } TextInputWidgetState;
@@ -138,6 +166,9 @@ SGNode* widget_checkbox(const char* label, SkiaFont font, int initial_checked);
 int     widget_checkbox_is_checked(SGNode* node);
 void    widget_checkbox_set_checked(SGNode* node, int checked);
 void    widget_checkbox_on_change(SGNode* node, CheckboxChangeCallback callback, void* user_data);
+
+/* Toggle switch (modern checkbox variant). */
+SGNode* widget_toggle(int initial_checked);
 
 /* ========================================================================
  * Slider Widget
@@ -212,22 +243,33 @@ SGNode* widget_separator(int horizontal, uint32_t color, double thickness);
 
 SGNode* widget_spacer(double grow);
 
+/* Modern surface/card container. */
+SGNode* widget_surface_card(float radius, int elevated);
+
 /* ========================================================================
  * Progress Bar Widget
  * ======================================================================== */
 
 typedef struct {
     WidgetType type;              /* WIDGET_PROGRESS_BAR */
-    float value;                  /* Current value (min_val to max_val) */
+    float value;                  /* Target logical value */
+    float display_value;          /* Animated displayed value */
+    float anim_from_value;
     float min_val, max_val;       /* Value range */
     int indeterminate;            /* Indeterminate animation mode */
     uint32_t fill_color;          /* Progress fill color */
     uint32_t bg_color;            /* Background color */
     float anim_pos;               /* Animation position for indeterminate */
+    float anim_duration_sec;      /* 0 = instant updates */
+    SGEasing anim_easing;
+    int animating;
+    float anim_elapsed_sec;
 } ProgressBarState;
 
 SGNode* widget_progress_bar(double min_val, double max_val, double value);
 void    widget_progress_set_value(SGNode* bar, double value);
+void    widget_progress_configure_animation(SGNode* bar, float duration_sec, SGEasing easing);
+void    widget_progress_tick(SGNode* bar, float dt_sec);
 void    widget_progress_set_indeterminate(SGNode* bar, int indeterminate);
 void    widget_progress_set_colors(SGNode* bar, uint32_t fill, uint32_t bg);
 
@@ -236,10 +278,12 @@ void    widget_progress_set_colors(SGNode* bar, uint32_t fill, uint32_t bg);
  * ======================================================================== */
 
 typedef void (*CanvasDrawCallback)(SkiaCanvas canvas, float width, float height, void* user_data);
+typedef void (*CanvasDestroyCallback)(void* user_data);
 
 typedef struct {
     WidgetType type;              /* WIDGET_CUSTOM_CANVAS */
     CanvasDrawCallback draw_fn;   /* User-provided draw function */
+    CanvasDestroyCallback destroy_data;
     void* draw_data;              /* User data passed to draw_fn */
     float width, height;          /* Canvas dimensions */
 } CustomCanvasState;
@@ -247,6 +291,7 @@ typedef struct {
 SGNode* widget_canvas(float width, float height, CanvasDrawCallback draw_fn, void* user_data);
 void    widget_canvas_invalidate(SGNode* canvas);
 void    widget_canvas_set_callback(SGNode* canvas, CanvasDrawCallback draw_fn, void* user_data);
+void    widget_canvas_set_data_destructor(SGNode* canvas, CanvasDestroyCallback destroy_data);
 
 /* ========================================================================
  * Tabs Widget
@@ -310,6 +355,14 @@ void widget_tabpanel_set_active(SGNode* root, int index);
 
 /* Free widget state attached to a node. Called automatically by sg_node_destroy. */
 void widget_cleanup(SGNode* node);
+
+/* Optional per-widget custom rendering hook.
+ * Returns non-zero if the widget fully rendered its own content. */
+int widget_render_override(SkiaCanvas canvas, SGNode* node);
+
+/* Tick widget-local animation/state such as caret blinking.
+ * Returns non-zero when a repaint is needed. */
+int widget_tick_tree(SGNode* node, float dt);
 
 #ifdef __cplusplus
 }

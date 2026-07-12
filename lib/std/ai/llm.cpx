@@ -1,0 +1,213 @@
+// Casprix Standard Library: AI and Large Language Models
+
+// --- Pointer Helpers ---
+extern func ptr_create_i32() -> rawptr
+extern func ptr_free(p: rawptr) -> void
+
+// --- Tokenizer ---
+extern func cpx_tokenizer_create(vocab_size: i32) -> rawptr
+extern func cpx_tokenizer_train(handle: rawptr, text: string, min_freq: i32) -> void
+extern func cpx_tokenizer_encode(handle: rawptr, text: string, out_len: rawptr) -> rawptr
+extern func cpx_tokenizer_decode(handle: rawptr, tokens: rawptr, len: i32) -> string
+extern func cpx_tokenizer_save(handle: rawptr, path: string) -> bool
+extern func cpx_tokenizer_load(path: string) -> rawptr
+extern func cpx_tokenizer_destroy(handle: rawptr) -> void
+
+// --- Dataset & DataLoader ---
+extern func cpx_dataset_create(num_seqs: i32, seq_len: i32, vocab_size: i32) -> rawptr
+extern func cpx_dataset_save(handle: rawptr, path: string) -> bool
+extern func cpx_dataset_load(path: string) -> rawptr
+extern func cpx_dataset_destroy(handle: rawptr) -> void
+extern func cpx_dataset_shuffle(handle: rawptr) -> void
+extern func cpx_dataset_get_num_sequences(handle: rawptr) -> i32
+extern func cpx_dataset_get_seq_length(handle: rawptr) -> i32
+
+extern func cpx_dataloader_create(dataset: rawptr, batch_size: i32, shuffle: i32) -> rawptr
+extern func cpx_dataloader_next_batch(handle: rawptr, batch_out: rawptr, targets_out: rawptr) -> i32
+extern func cpx_dataloader_reset(handle: rawptr) -> void
+extern func cpx_dataloader_destroy(handle: rawptr) -> void
+
+// --- Transformer Model ---
+extern func cpx_transformer_create(
+    vocab_size: i32, hidden_dim: i32, num_layers: i32,
+    num_heads: i32, ffn_dim: i32, max_seq_len: i32
+) -> rawptr
+extern func cpx_transformer_forward(model: rawptr, tokens: rawptr, batch: i32, seq_len: i32) -> rawptr
+extern func cpx_transformer_save(model: rawptr, path: string) -> bool
+extern func cpx_transformer_load(path: string) -> rawptr
+extern func cpx_transformer_destroy(model: rawptr) -> void
+extern func cpx_transformer_get_num_params(model: rawptr) -> i32
+
+// --- Training & Optimization ---
+extern func cpx_train_step(
+    model: rawptr, optimizer: rawptr, tokens: rawptr,
+    targets: rawptr, batch: i32, seq_len: i32
+) -> f32
+extern func cpx_eval_step(model: rawptr, tokens: rawptr, targets: rawptr, batch: i32, seq_len: i32) -> f32
+extern func cpx_adam_create(num_params: i32, lr: f32, beta1: f32, beta2: f32) -> rawptr
+extern func cpx_adam_set_lr(handle: rawptr, lr: f32) -> void
+extern func cpx_adam_destroy(handle: rawptr) -> void
+
+extern func cpx_lr_schedule(step: i32, warmup: i32, max_steps: i32, max_lr: f32, min_lr: f32) -> f32
+extern func cpx_encode_corpus_to_shards(
+    tokenizer_path: string,
+    input_txt: string,
+    output_prefix: string,
+    shard_size: i32
+) -> i32
+
+// --- Generation ---
+extern func cpx_generate(
+    model: rawptr, prompt: rawptr, prompt_len: i32,
+    max_tokens: i32, temp: f32, out_len: rawptr
+) -> rawptr
+
+// ---------------------------------------------------------------------------
+// High-level Casprix Classes
+// ---------------------------------------------------------------------------
+
+class Tokenizer {
+    public mut handle: rawptr
+
+    public func new(vocab_size: i32) -> void {
+        this.handle = cpx_tokenizer_create(vocab_size)
+    }
+
+    public static func load(path: string) -> Tokenizer {
+        let tok = new Tokenizer(0)
+        tok.handle = cpx_tokenizer_load(path)
+        return tok
+    }
+
+    public func train(text: string, vocab_size: i32) -> void {
+        cpx_tokenizer_train(this.handle, text, vocab_size)
+    }
+
+    public func encode(text: string) -> rawptr {
+        let len_ptr = ptr_create_i32()
+        let tokens = cpx_tokenizer_encode(this.handle, text, len_ptr)
+        ptr_free(len_ptr)
+        return tokens
+    }
+
+    public func decode(tokens: rawptr, len: i32) -> string {
+        return cpx_tokenizer_decode(this.handle, tokens, len)
+    }
+
+    public func save(path: string) -> bool {
+        return cpx_tokenizer_save(this.handle, path)
+    }
+
+    public func destroy() -> void {
+        cpx_tokenizer_destroy(this.handle)
+    }
+}
+
+class Dataset {
+    public mut handle: rawptr
+
+    public func new(num_seqs: i32, seq_len: i32, vocab: i32) -> void {
+        this.handle = cpx_dataset_create(num_seqs, seq_len, vocab)
+    }
+
+    public static func load(path: string) -> Dataset {
+        let ds = new Dataset(0, 0, 0)
+        ds.handle = cpx_dataset_load(path)
+        return ds
+    }
+
+    public func shuffle() -> void {
+        cpx_dataset_shuffle(this.handle)
+    }
+
+    public func destroy() -> void {
+        cpx_dataset_destroy(this.handle)
+    }
+}
+
+class DataLoader {
+    public mut handle: rawptr
+
+    public func new(ds: Dataset, batch_size: i32, shuffle: bool) -> void {
+        mut s: i32 = 0
+        if (shuffle) { s = 1 }
+        this.handle = cpx_dataloader_create(ds.handle, batch_size, s)
+    }
+
+    public func next_batch(batch_out: rawptr, targets_out: rawptr) -> bool {
+        return cpx_dataloader_next_batch(this.handle, batch_out, targets_out) == 1
+    }
+
+    public func reset() -> void {
+        cpx_dataloader_reset(this.handle)
+    }
+
+    public func destroy() -> void {
+        cpx_dataloader_destroy(this.handle)
+    }
+}
+
+class Transformer {
+    public mut handle: rawptr
+
+    public func new(v: i32, h: i32, l: i32, heads: i32, ffn: i32, seq: i32) -> void {
+        this.handle = cpx_transformer_create(v, h, l, heads, ffn, seq)
+    }
+
+    public static func load(path: string) -> Transformer {
+        let model = new Transformer(0, 0, 0, 0, 0, 0)
+        model.handle = cpx_transformer_load(path)
+        return model
+    }
+
+    public func get_num_params() -> i32 {
+        return cpx_transformer_get_num_params(this.handle)
+    }
+
+    public func train_step(opt: rawptr, tokens: rawptr, targets: rawptr, b: i32, s: i32) -> f32 {
+        return cpx_train_step(this.handle, opt, tokens, targets, b, s)
+    }
+
+    public func eval_step(tokens: rawptr, targets: rawptr, b: i32, s: i32) -> f32 {
+        return cpx_eval_step(this.handle, tokens, targets, b, s)
+    }
+
+    public func generate(prompt: rawptr, prompt_len: i32, max_tokens: i32, temp: f32) -> rawptr {
+        let out_len_ptr = ptr_create_i32()
+        let result = cpx_generate(this.handle, prompt, prompt_len, max_tokens, temp, out_len_ptr)
+        ptr_free(out_len_ptr)
+        return result
+    }
+
+    public func save(path: string) -> bool {
+        return cpx_transformer_save(this.handle, path)
+    }
+
+    public func destroy() -> void {
+        cpx_transformer_destroy(this.handle)
+    }
+}
+
+class Optimizer {
+    public mut handle: rawptr
+
+    public func new(params: i32, lr: f32, b1: f32, b2: f32) -> void {
+        this.handle = cpx_adam_create(params, lr, b1, b2)
+    }
+
+    public func set_lr(lr: f32) -> void {
+        cpx_adam_set_lr(this.handle, lr)
+    }
+
+    public func destroy() -> void {
+        cpx_adam_destroy(this.handle)
+    }
+}
+
+func compute_lr(step: i32, warmup: i32, max_steps: i32, max_lr: f32, min_lr: f32) -> f32 {
+    return cpx_lr_schedule(step, warmup, max_steps, max_lr, min_lr)
+}
+
+func encode_to_shards(tok_path: string, in_txt: string, out_prefix: string, size: i32) -> i32 {
+    return cpx_encode_corpus_to_shards(tok_path, in_txt, out_prefix, size)
+}

@@ -8,7 +8,7 @@ project(Casprix
     VERSION 1.0.0
     LANGUAGES C
     DESCRIPTION "Casprix: Modern high-performance compiled programming language"
-    HOMEPAGE_URL "https://github.com/casprix/casprix"
+    HOMEPAGE_URL "https://github.com/wmndilshan/casprix"
 )
 
 # ============================================================================
@@ -38,6 +38,18 @@ option(BUILD_TESTS           "Build and register the test suite"     ON)
 option(ENABLE_AVX2           "Enable AVX2/FMA SIMD optimizations"    ON)
 option(ENABLE_DEBUG_LOGGING  "Compile with DEBUG_LOGGING defined"    OFF)
 option(ENABLE_SKIA_GUI       "Enable Skia-based GUI framework"       OFF)
+option(SKIA_GUI_ENABLE_ASAN  "Enable AddressSanitizer for skia_gui consumers" OFF)
+option(SKIA_GUI_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for skia_gui consumers" OFF)
+option(CASPRIX_ENABLE_NINJA_AUTOREGEN
+       "Allow Ninja to rerun CMake automatically during builds"
+       OFF)
+
+# CMake regeneration has been flaky on the Windows/Ninja build tree,
+# leaving behind .tmp build files and stalling otherwise simple target builds.
+# Prefer explicit reconfigure steps over auto-regeneration there.
+if(WIN32 AND CMAKE_GENERATOR MATCHES "Ninja" AND NOT CASPRIX_ENABLE_NINJA_AUTOREGEN)
+    set(CMAKE_SUPPRESS_REGENERATION ON)
+endif()
 
 # NASM — optional, needed for SIMD assembly kernels
 include(CheckLanguage)
@@ -127,6 +139,7 @@ set(SEMA_SOURCES
     src/compiler/sema/ownership_check.c
     src/compiler/sema/escape_analysis.c
     src/compiler/sema/drop_planner.c
+    src/compiler/sema/linear_view.c
 )
 
 set(LAYOUT_SOURCES
@@ -152,6 +165,8 @@ set(MIR_SOURCES
     src/compiler/ir/mir_c_backend.c
     src/compiler/ir/mir_mem2reg.c
     src/compiler/ir/mir_inline.c
+    src/compiler/ir/mir_async.c
+    src/compiler/ir/mir_regex.c
 )
 
 set(CODEGEN_SOURCES
@@ -193,13 +208,27 @@ set(ALL_COMPILER_SOURCES
 )
 
 # ============================================================================
-# Compiler executable
+# Compiler library + driver executable
 # ============================================================================
+#
+# The bulk of the compiler is built as a static library so MIR verification
+# and other integration tests can link the same sources without compiling
+# a second monolithic executable.
 
 if(BUILD_COMPILER)
-    add_executable(casprix ${ALL_COMPILER_SOURCES})
+    set(CASPRIX_COMPILER_LIB_SOURCES ${ALL_COMPILER_SOURCES})
+    list(REMOVE_ITEM CASPRIX_COMPILER_LIB_SOURCES src/main.c)
 
+    add_library(casprix_compiler STATIC ${CASPRIX_COMPILER_LIB_SOURCES})
+    target_link_libraries(casprix_compiler PRIVATE
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+
+    add_executable(casprix src/main.c)
     target_link_libraries(casprix PRIVATE
+        casprix_compiler
         casprix_compile_options
         casprix_include_dirs
         $<$<NOT:$<BOOL:${MSVC}>>:m>
@@ -218,6 +247,13 @@ endif()
 
 if(BUILD_RUNTIME)
     set(RUNTIME_SOURCES runtime/runtime.c)
+
+    # CVM interpreter + JIT bridge (register-based MIR VM)
+    foreach(_f cvm_engine jit_bridge)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/vm/${_f}.c")
+            list(APPEND RUNTIME_SOURCES "runtime/vm/${_f}.c")
+        endif()
+    endforeach()
 
     # Memory subsystem
     foreach(_f arc ownership cycle_gc memory gc region refcount tlocal_heap)
@@ -268,6 +304,8 @@ if(BUILD_RUNTIME)
     endforeach()
     if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/async/coroutine_win32.c")
         list(APPEND RUNTIME_SOURCES runtime/async/coroutine_win32.c)
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/runtime/async/coroutine_posix.c")
+        list(APPEND RUNTIME_SOURCES runtime/async/coroutine_posix.c)
     endif()
 
     # Concurrent / sync
@@ -279,13 +317,18 @@ if(BUILD_RUNTIME)
     endif()
 
     # Network (new clean API — legacy disabled due to type conflicts)
-    foreach(_f socket http http_server)
+    foreach(_f socket http http_server reactor threadpool mpsc_queue ringbuf iouring scheduler_bridge cx_arena)
         if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/net/${_f}.c")
             list(APPEND RUNTIME_SOURCES "runtime/net/${_f}.c")
         endif()
     endforeach()
 
     # I/O subsystem
+    foreach(_f direct_io fast_format lockfree_log ml_telemetry dataset_stream checkpoint_io)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/io/${_f}.c")
+            list(APPEND RUNTIME_SOURCES "runtime/io/${_f}.c")
+        endif()
+    endforeach()
     if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/io/file_async.c")
         list(APPEND RUNTIME_SOURCES runtime/io/file_async.c)
     endif()
@@ -375,15 +418,15 @@ if(BUILD_PACKAGE_MANAGER AND EXISTS "${CMAKE_SOURCE_DIR}/pkg/core/registry.c")
 endif()
 
 # ============================================================================
-# Skia GUI framework (optional)
+# Skia GUI framework
 # ============================================================================
 
-if(ENABLE_SKIA_GUI)
+if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/skia/scene_graph.c")
     set(SKIA_DIR "${CMAKE_SOURCE_DIR}/third_party/skia")
     option(USE_SKIA_BACKEND
         "Use real Skia C++ backend (requires MSVC-compatible toolchain)" OFF)
 
-    if(USE_SKIA_BACKEND AND EXISTS "${SKIA_DIR}/lib/skia.lib")
+    if(ENABLE_SKIA_GUI AND USE_SKIA_BACKEND AND EXISTS "${SKIA_DIR}/lib/skia.lib")
         enable_language(CXX)
         set(CMAKE_CXX_STANDARD 17)
         set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -404,12 +447,18 @@ if(ENABLE_SKIA_GUI)
         runtime/skia/layout.c
         runtime/skia/events.c
         runtime/skia/widgets.c
+        runtime/skia/charts.c
+        runtime/skia/effects.c
+        runtime/skia/shapes.c
         runtime/skia/style.c
         runtime/skia/text.c
         runtime/skia/animation.c
         runtime/skia/frame_loop.c
         runtime/skia/skia_window_win32.c
     )
+    if(ANDROID AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/skia/frame_loop_android.c")
+        list(APPEND SKIA_GUI_SOURCES runtime/skia/frame_loop_android.c)
+    endif()
     if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/android/android_runtime.c")
         list(APPEND SKIA_GUI_SOURCES runtime/android/android_runtime.c)
     endif()
@@ -421,6 +470,25 @@ if(ENABLE_SKIA_GUI)
     target_link_libraries(skia_gui PUBLIC
         skia_c
         $<$<BOOL:${WIN32}>:user32 gdi32 ole32 oleaut32>)
+
+    if(SKIA_GUI_ENABLE_ASAN)
+        if(MSVC)
+            target_compile_options(skia_gui PUBLIC /fsanitize=address)
+            target_link_options(skia_gui INTERFACE /fsanitize=address)
+        else()
+            target_compile_options(skia_gui PUBLIC -fsanitize=address -fno-omit-frame-pointer)
+            target_link_options(skia_gui INTERFACE -fsanitize=address)
+        endif()
+    endif()
+
+    if(SKIA_GUI_ENABLE_UBSAN)
+        if(MSVC)
+            message(WARNING "SKIA_GUI_ENABLE_UBSAN is not supported on MSVC; ignoring toggle")
+        else()
+            target_compile_options(skia_gui PUBLIC -fsanitize=undefined -fno-omit-frame-pointer)
+            target_link_options(skia_gui INTERFACE -fsanitize=undefined)
+        endif()
+    endif()
 
     if(BUILD_RUNTIME)
         target_link_libraries(casprix_runtime PUBLIC skia_gui)
@@ -443,6 +511,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tools/apk_builder/main.c")
         tools/apk_builder/apk_builder.c
         tools/apk_builder/manifest.c
         tools/apk_builder/zip_writer.c
+        tools/apk_builder/ndk_utils.c
     )
     target_include_directories(apk-builder PRIVATE
         ${CMAKE_SOURCE_DIR}/tools/apk_builder)

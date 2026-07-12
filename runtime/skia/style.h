@@ -18,25 +18,91 @@ extern "C" {
 #endif
 
 /* ========================================================================
+ * Modern Token + Cascade Engine (allocation-free resolve path)
+ * ======================================================================== */
+
+typedef enum {
+    SG_TOKEN_PRIMARY = 0,
+    SG_TOKEN_ON_PRIMARY,
+    SG_TOKEN_SURFACE,
+    SG_TOKEN_ON_SURFACE,
+    SG_TOKEN_SURFACE_CONTAINER,
+    SG_TOKEN_SURFACE_CONTAINER_HIGH,
+    SG_TOKEN_OUTLINE,
+    SG_TOKEN_OUTLINE_VARIANT,
+    SG_TOKEN_ERROR,
+    SG_TOKEN_COUNT
+} SGStyleToken;
+
+typedef struct {
+    uint32_t colors[SG_TOKEN_COUNT];
+    uint8_t  spacing_scale[8]; /* 2,4,6,8,12,16,24,32 */
+} SGTheme;
+
+typedef struct {
+    uint32_t bg_color;
+    uint32_t fg_color;
+    uint32_t border_color;
+    float border_width;
+    float radius;
+    float pad_top, pad_right, pad_bottom, pad_left;
+    SkiaFont font;
+    float shadow_offset_y;
+    float shadow_blur;
+    uint32_t shadow_color;
+} SGStyleData;
+
+enum {
+    SG_STYLE_SET_BG      = 1u << 0,
+    SG_STYLE_SET_FG      = 1u << 1,
+    SG_STYLE_SET_BORDER  = 1u << 2,
+    SG_STYLE_SET_RADIUS  = 1u << 3,
+    SG_STYLE_SET_PADDING = 1u << 4,
+    SG_STYLE_SET_FONT    = 1u << 5,
+    SG_STYLE_SET_SHADOW  = 1u << 6
+};
+
+typedef struct SGStyleRef {
+    const struct SGStyleRef* parent;
+    SGStyleData              data;
+    uint32_t                 set_mask;
+} SGStyleRef;
+
+typedef struct {
+    SGStyleData data;
+    uint32_t    resolved_state_flags;
+} SGResolvedStyle;
+
+/* ========================================================================
  * Predefined Color Palette
  * ======================================================================== */
 
-/* Material Design colors */
-#define SG_COLOR_PRIMARY      0xFF4285F4   /* Google Blue */
-#define SG_COLOR_PRIMARY_DARK 0xFF3367D6
-#define SG_COLOR_ACCENT       0xFFFBBC05   /* Google Yellow */
-#define SG_COLOR_SUCCESS      0xFF34A853   /* Google Green */
-#define SG_COLOR_ERROR        0xFFEA4335   /* Google Red */
-#define SG_COLOR_WARNING      0xFFFF9800
-#define SG_COLOR_INFO         0xFF2196F3
+/* Modern default palette */
+#define SG_COLOR_PRIMARY         0xFF3B82F6
+#define SG_COLOR_PRIMARY_DARK    0xFF2563EB
+#define SG_COLOR_PRIMARY_SOFT    0xFFEFF6FF
+#define SG_COLOR_ACCENT          0xFF14B8A6
+#define SG_COLOR_SUCCESS         0xFF10B981
+#define SG_COLOR_ERROR           0xFFEF4444
+#define SG_COLOR_WARNING         0xFFF59E0B
+#define SG_COLOR_INFO            0xFF0EA5E9
 
 /* Neutral colors */
-#define SG_COLOR_BACKGROUND   0xFFF5F5F5
-#define SG_COLOR_SURFACE      0xFFFFFFFF
-#define SG_COLOR_TEXT         0xFF212121
-#define SG_COLOR_TEXT_SECONDARY 0xFF757575
-#define SG_COLOR_DIVIDER      0xFFBDBDBD
-#define SG_COLOR_DISABLED     0xFF9E9E9E
+#define SG_COLOR_BACKGROUND      0xFFF3F6FA
+#define SG_COLOR_SURFACE         0xFFFFFFFF
+#define SG_COLOR_SURFACE_ALT     0xFFF8FBFE
+#define SG_COLOR_TEXT            0xFF1F2937
+#define SG_COLOR_TEXT_SECONDARY  0xFF6B7280
+#define SG_COLOR_TEXT_SOFT       0xFF94A3B8
+#define SG_COLOR_TEXT_ON_DARK    0xFFF8FAFC
+#define SG_COLOR_DIVIDER         0xFFD6DEE8
+#define SG_COLOR_BORDER          0xFFD6DEE8
+#define SG_COLOR_BORDER_STRONG   0xFFB8C5D6
+#define SG_COLOR_DISABLED        0xFF94A3B8
+#define SG_COLOR_DISABLED_SURFACE 0xFFE2E8F0
+#define SG_COLOR_FOCUS           0xFF60A5FA
+#define SG_COLOR_SIDEBAR         0xFF1F2937
+#define SG_COLOR_SIDEBAR_ALT     0xFF111827
 
 /* ========================================================================
  * Color Utilities
@@ -89,6 +155,21 @@ SkiaShader sg_gradient_two_color(SGRect bounds, float angle,
  * Themed Styles (apply to nodes)
  * ======================================================================== */
 
+/* Application root shell */
+void sg_style_app_root(SGNode* node);
+
+/* Panel surface: bright card-like container */
+void sg_style_panel(SGNode* node);
+
+/* Alternate panel surface for subtle contrast */
+void sg_style_panel_alt(SGNode* node);
+
+/* Toolbar surface */
+void sg_style_toolbar(SGNode* node);
+
+/* Dark navigation/sidebar surface */
+void sg_style_sidebar(SGNode* node);
+
 /* Card: white background, rounded corners, shadow */
 void sg_style_card(SGNode* node);
 
@@ -107,6 +188,19 @@ void sg_style_pill(SGNode* node);
 
 /* Render a rounded rect with background, gradient, and border */
 void sg_render_styled_rect(SkiaCanvas canvas, SGRect bounds, SGStyle* style);
+
+/* Theme + style cascade helpers. */
+void     sg_theme_material3_default(SGTheme* out_theme);
+void     sg_style_data_from_theme(SGStyleData* out, const SGTheme* theme);
+void     sg_style_ref_init(SGStyleRef* ref, const SGStyleRef* parent);
+void     sg_style_ref_set_bg(SGStyleRef* ref, uint32_t color);
+void     sg_style_ref_set_fg(SGStyleRef* ref, uint32_t color);
+void     sg_style_ref_set_border(SGStyleRef* ref, uint32_t color, float width);
+void     sg_style_ref_set_radius(SGStyleRef* ref, float radius);
+void     sg_style_ref_set_padding(SGStyleRef* ref, float top, float right, float bottom, float left);
+void     sg_style_ref_set_font(SGStyleRef* ref, SkiaFont font);
+void     sg_style_ref_set_shadow(SGStyleRef* ref, float offset_y, float blur, uint32_t color);
+void     sg_style_resolve(const SGStyleRef* ref, uint32_t state_flags, SGResolvedStyle* out);
 
 #ifdef __cplusplus
 }

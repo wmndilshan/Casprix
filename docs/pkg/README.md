@@ -1,34 +1,45 @@
-# Casperix Package Manager (cpkg)
+# Casprix package manager (`casprix-pkg`)
 
-Complete package management system for the Casperix programming language.
+Package management for the Casprix toolchain. The executable produced by CMake is **`casprix-pkg`**; the in-app usage text refers to the command as **`cpkg`**.
 
 ## Features
 
-- **Dependency Resolution** - Automatic resolution with semantic versioning
-- **Version Constraints** - Support for `^`, `~`, `>=`, wildcards
-- **Local Cache** - Fast installations with local package cache
-- **Package Registry** - Publish and share packages
-- **Manifest Format** - Simple `casper.json` format
-- **Cross-Platform** - Windows, Linux, macOS support
+- **Dependency resolution** — automatic resolution with semantic versioning
+- **Version constraints** — support for `^`, `~`, `>=`, wildcards
+- **Local cache** — fast installs with a local package cache
+- **Package registry** — publish and share packages (when configured)
+- **Manifest format** — `casper.json`
+- **Cross-platform** — Windows, Linux, macOS
 
-## Installation
+## Building
+
+From the **repository root** (recommended; enables the same flags as the main project):
 
 ```bash
-# Build from source
-cd pkg
-gcc -o cpkg cli_complete.c manifest.c semver.c cache.c installer.c publisher.c registry.c resolver.c -I.
+cmake -S . -B build -DBUILD_PACKAGE_MANAGER=ON
+cmake --build build --target casprix-pkg
 ```
 
-## Quick Start
+The binary is written to the build directory (e.g. `build/casprix-pkg` or `build/Release/casprix-pkg.exe` on Windows multi-config generators).
 
-### 1. Create a New Package
+**Standalone** build of only the package manager:
 
 ```bash
-cpkg init my-awesome-package
+cmake -S pkg -B build-pkg -DCASPRIX_PKG_STANDALONE=ON
+cmake --build build-pkg
+```
+
+## Quick start
+
+### 1. Create a new package
+
+```bash
+casprix-pkg init my-awesome-package
 cd my-awesome-package
 ```
 
 This creates:
+
 ```
 my-awesome-package/
 ├── casper.json
@@ -37,61 +48,58 @@ my-awesome-package/
 └── README.md
 ```
 
-### 2. Install Dependencies
+### 2. Install dependencies
 
 ```bash
 # Install all dependencies from casper.json
-cpkg install
+casprix-pkg install
 
 # Install specific package
-cpkg install http-client
+casprix-pkg install http-client
 
 # Install specific version
-cpkg install json-parser@1.5.3
+casprix-pkg install json-parser@1.5.3
 ```
 
-### 3. Publish Your Package
+### 3. Publish your package
 
 ```bash
-# Login to registry
-cpkg login
-
-# Publish
-cpkg publish
+casprix-pkg login
+casprix-pkg publish
 ```
 
 ## Commands
 
-### Package Management
+### Package management
 
 | Command | Description |
 |---------|-------------|
-| `cpkg init [name]` | Initialize new package |
-| `cpkg install [package]` | Install package(s) |
-| `cpkg update` | Update all dependencies |
-| `cpkg remove <package>` | Remove package |
-| `cpkg list` | List installed packages |
-| `cpkg search <query>` | Search registry |
-| `cpkg info <package>` | Show package details |
+| `casprix-pkg init [name]` | Initialize new package |
+| `casprix-pkg install [package]` | Install package(s) |
+| `casprix-pkg update` | Update all dependencies |
+| `casprix-pkg remove <package>` | Remove package |
+| `casprix-pkg list` | List installed packages |
+| `casprix-pkg search <query>` | Search registry |
+| `casprix-pkg info <package>` | Show package details |
 
 ### Publishing
 
 | Command | Description |
 |---------|-------------|
-| `cpkg login` | Login to registry |
-| `cpkg logout` | Logout |
-| `cpkg pack` | Create package tarball |
-| `cpkg publish` | Publish to registry |
-| `cpkg unpublish <ver>` | Unpublish version |
+| `casprix-pkg login` | Login to registry |
+| `casprix-pkg logout` | Logout |
+| `casprix-pkg pack` | Create package tarball |
+| `casprix-pkg publish` | Publish to registry |
+| `casprix-pkg unpublish <ver>` | Unpublish version |
 
 ### Cache
 
 | Command | Description |
 |---------|-------------|
-| `cpkg cache list` | List cached packages |
-| `cpkg cache clean` | Clear cache |
+| `casprix-pkg cache list` | List cached packages |
+| `casprix-pkg cache clean` | Clear cache |
 
-## casper.json Format
+## `casper.json` format
 
 ```json
 {
@@ -101,7 +109,7 @@ cpkg publish
   "author": "Your Name",
   "license": "MIT",
   "main": "src/main.cpx",
-  "repository": "https://github.com/user/repo",
+  "repository": "https://github.com/wmndilshan/casprix",
   "dependencies": {
     "http-client": "^2.1.0",
     "json-parser": "~1.5.3"
@@ -112,7 +120,7 @@ cpkg publish
 }
 ```
 
-## Version Constraints
+## Version constraints
 
 | Constraint | Meaning | Example |
 |------------|---------|---------|
@@ -124,7 +132,7 @@ cpkg publish
 | `1.2.x` | Wildcard | `1.2.0` ≤ x < `1.3.0` |
 | `*` | Any version | Any |
 
-## Directory Structure
+## Directory layout
 
 ```
 ~/.cpkg/
@@ -136,65 +144,25 @@ cpkg publish
 └── auth.txt            # API key
 ```
 
-## API
+## API (library)
 
-### Components
+Sources live under `pkg/core/`:
 
-- **`semver.h/c`** - Semantic versioning parser and constraint matching
-- **`manifest.h/c`** - casper.json parser
-- **`cache.h/c`** - Local package cache manager
-- **`installer.h/c`** - Package installation
-- **`publisher.h/c`** - Package publishing
-- **`registry.h/c`** - Registry client
-- **`resolver.h/c`** - Dependency resolver
+- **`semver.h/c`** — semantic versioning and constraint matching
+- **`manifest.h/c`** — `casper.json` parsing
+- **`cache.h/c`** — local package cache
+- **`installer.h/c`** — package installation
+- **`publisher.h/c`** — publishing
+- **`registry.h/c`** — registry client
+- **`resolver.h/c`** — dependency resolver
 
-### Example Usage
+### Example (C)
 
 ```c
 #include "installer.h"
 
-// Install package
 pkg_install_package("http-client", "^2.0.0");
-
-// Install from manifest
 pkg_install_from_manifest("casper.json", false);
-```
-
-## Examples
-
-### Create and Publish
-
-```bash
-# Create new package
-cpkg init my-lib
-
-# Add dependencies
-cpkg install lodash@^4.0.0
-
-# Test locally
-casperix src/main.cpx
-
-# Publish
-cpkg login
-cpkg publish
-```
-
-### Use in Project
-
-```bash
-# Install dependency
-cpkg install my-lib
-
-# Import in code
-import "my-lib"
-```
-
-## Testing
-
-```bash
-# Run package manager tests
-cd pkg
-make test
 ```
 
 ## License
@@ -203,10 +171,4 @@ MIT
 
 ## Contributing
 
-Contributions welcome! Please see [CONTRIBUTING.md](../CONTRIBUTING.md).
-
----
-
-**Version**: 1.0.0  
-**Status**: Production Ready  
-**Language**: Casperix
+See [CONTRIBUTING.md](../../CONTRIBUTING.md).

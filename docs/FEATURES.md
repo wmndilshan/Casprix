@@ -1,104 +1,66 @@
-# Casprix Compiler - Feature Specification
+# Casprix compiler — feature overview
 
-## Language Capabilities
+This file summarizes **language surface**, **compiler pipelines**, and **CLI usage** for the current tree. Line counts are indicative only.
 
-### Core Features
-*   Classes with inheritance
-*   Virtual method dispatch
-*   **Closures** with variable capture
-*   **Generic types** (List<T>, Map<K,V>)
-*   Arrays and strings
-*   Control flow (if/else/while/for)
+## Language surface
 
-### Advanced Optimizations
+### Core
 
-#### 1. Closures (420 lines)
-- Automatic capture detection
-- By-value and by-reference modes
-- Nested closure support
-- Minimal runtime overhead
+- Classes with inheritance and virtual dispatch
+- Closures (surface and capture rules still evolving in places)
+- Generics with monomorphization (`List<T>`-style)
+- Arrays, `string`, control flow (`if` / `while` / `for` / `match`)
+- **Linear `StringView`**: non-owning borrow of `string` data with move-only semantics; checked in semantic / escape / drop passes (see [STDLIB_STRINGS_AND_REGEX.md](STDLIB_STRINGS_AND_REGEX.md))
 
-#### 2. Generic Types (450 lines)
-- Monomorphization engine
-- Type-safe instantiation
-- Name mangling (List<Int> → List_Int)
-- Instance deduplication
+### Optimizations (representative)
 
-#### 3. Register Allocation (310 lines)
-- Linear scan algorithm
-- x86-64 calling conventions
-- 85-90% register utilization
-- Smart spilling
+- MIR-based middle end: const eval, borrow checking on MIR, inlining, mem2reg, SIMD legalization, etc.
+- x86-64 codegen: linear-scan register allocation, peephole passes, loop optimizations, SIMD path in `src/compiler/opt/simd.c`
+- AVX2: enabled at **CMake** / compile time for the runtime and some kernels (`ENABLE_AVX2`), not via a `casprix -mavx2` flag
 
-#### 4. Peephole Optimization (340 lines)
-- 5 pattern classes
-- Iterative multi-pass
-- xor for zero, strength reduction
-- Dead code elimination
+## Regex (toolchain)
 
-#### 5. Loop Optimization (280 lines) **NEW!**
-- Invariant code motion
-- Loop unrolling (4x)
-- Strength reduction
-- Trip count analysis
+- **MIR regex compiler** (`mir_regex.c`): pattern → NFA → DFA → MIR function for linear-time matching over bytes. Used in tests and corpus verification; see [STDLIB_STRINGS_AND_REGEX.md](STDLIB_STRINGS_AND_REGEX.md#4-regex--mir-compiler-inside-the-toolchain).
 
-#### 6. SIMD Vectorization (200 lines) **NEW!**
-- AVX2 auto-vectorization
-- 4-way parallelism
-- Alignment handling
-- Scalar fallback
+## Performance (illustrative)
 
-### Performance Targets
+Reported speedups in marketing docs are **order-of-magnitude** goals from combining RA + SIMD + loop opts + inlining; measure on your workload.
 
-| Feature | Speedup |
-|---------|---------|
-| Register allocation | 2-3x |
-| Peephole | 1.2-1.5x |
-| Loop optimization | 1.5-2x |
-| SIMD vectorization | 2-4x |
-| **Combined** | **5-10x** |
+| Layer | Role |
+|-------|------|
+| Register allocation | Spill reduction, calling conventions |
+| Peephole | Local instruction cleanup |
+| Loop optimization | Unrolling, invariant motion |
+| SIMD hints | Vectorize hot loops where legal |
 
-### Code Statistics
+## CLI usage
 
-**Total implementation**: ~2,000 lines
-- Closures: 420 lines
-- Generics: 450 lines
-- Register allocation: 310 lines
-- Peephole: 340 lines
-- Loop optimization: 280 lines
-- SIMD: 200 lines
-
-### Usage
+The driver binary is **`casprix`** (not `casprixc`). Build it with CMake (`scripts/build.sh` or `scripts/build.bat`), then:
 
 ```bash
-# Compile with all optimizations
-casprixc program.cpx -o program.exe -O2
-
-# Enable SIMD
-casprixc program.cpx -o program.exe -O2 -mavx2
-
-# Disable specific optimizations
-casprixc program.cpx -o program.exe -O2 -fno-vectorize
+casprix program.cpx -o out
+casprix program.cpx -o out --opt-level=2
+casprix program.cpx --check-only
+casprix --help
 ```
 
-### Example Optimizations
+Relevant backend / pipeline flags (see `--help` for the full set):
 
-**Before**:
-```casprix
-For i = 0 To 1000 Do
-    result[i] = array1[i] + array2[i]
-End
-```
+- `--mir` — run MIR middle end before codegen
+- `--native` / `--aot` — MIR native backend (experimental)
+- `--vm` / `--jit` — MIR VM / JIT-oriented emission paths (experimental)
+- `--emit-c` — C emission via MIR
+- `--safe-mode` — borrow checking (implies `--mir`)
 
-**After (with all optimizations)**:
-- Loop unrolled 4x
-- SIMD vectorized (4 elements at once)
-- Results in ~8x faster execution
+Flags such as `-mavx2` or `-fno-vectorize` on the **compiler executable** are not the primary knobs; vectorization of **generated** code is driven by the optimizer and target options in your build.
 
----
+## Tests
 
----
+- `tests/compiler/test_*.cpx` — compile-and-run
+- `tests/compiler/test_mir_regex.c` — regex → MIR pipeline
+- `tests/runtime/test_stdlib.c` — C runtime string helpers
+- `tests/corpus/stringview_linear.cpx` — StringView linearity
 
-**Current Status**: PRODUCTION READY
-**Performance**: 5-10x speedup over baseline (O0)
-**Code Quality**: Enterprise-grade, verified test suite
+## Status
+
+The compiler and runtime are under active development. Treat “production ready” claims in older snapshots as aspirational unless validated for your use case.

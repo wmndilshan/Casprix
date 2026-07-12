@@ -29,26 +29,79 @@ void peephole_add_instr(PeepholeContext* ctx, const char* opcode,
     instr->line_number = ctx->instr_count;
 }
 
-// Pattern: mov rax, 0 => xor rax, rax (smaller, faster)
+/* Return true if opcode reads EFLAGS (so xor-for-zero would break it). */
+static bool is_flag_consumer(const char* op) {
+    static const char* consumers[] = {
+        "jz","jnz","je","jne","jl","jle","jg","jge",
+        "jb","jbe","ja","jae","js","jns","jp","jnp","jo","jno","jc","jnc",
+        "jrcxz","jecxz",
+        "cmovz","cmovnz","cmove","cmovne","cmovl","cmovle","cmovg","cmovge",
+        "cmovb","cmovbe","cmova","cmovae","cmovs","cmovns","cmovo","cmovno",
+        "setz","setnz","sete","setne","setl","setle","setg","setge",
+        "setb","setbe","seta","setae","sets","setns","seto","setno",
+        NULL
+    };
+    if (!op) return false;
+    for (int i = 0; consumers[i]; i++)
+        if (strcmp(op, consumers[i]) == 0) return true;
+    return false;
+}
+
+/* Return true if opcode unconditionally writes EFLAGS. */
+static bool is_flag_setter(const char* op) {
+    static const char* setters[] = {
+        "add","sub","and","or","xor","cmp","test","inc","dec",
+        "neg","imul","mul","div","idiv","shl","shr","sar","sal",
+        "adc","sbb","rcl","rcr",
+        NULL
+    };
+    if (!op) return false;
+    for (int i = 0; setters[i]; i++)
+        if (strcmp(op, setters[i]) == 0) return true;
+    return false;
+}
+
+/* Return true if it is safe to replace `mov reg, 0` at position i with
+   `xor reg, reg`.  Unsafe when a flag-consuming instruction (jcc etc.)
+   appears before the next flag-setter, because xor clobbers EFLAGS while
+   mov does not. */
+static bool xor_zero_is_safe(PeepholeContext* ctx, int i) {
+    for (int j = i + 1; j < ctx->instr_count; j++) {
+        const char* op = ctx->instructions[j].opcode;
+        if (!op || strcmp(op, "nop") == 0) continue;
+        if (is_flag_consumer(op)) return false;  /* flags read before reset */
+        if (is_flag_setter(op))   return true;   /* flags overwritten first */
+        /* Calls and unconditional jumps terminate the search conservatively. */
+        if (strcmp(op, "call") == 0 || strcmp(op, "jmp") == 0 ||
+            strcmp(op, "ret") == 0)
+            return false;
+    }
+    return true;  /* no flag consumer found before end of instruction stream */
+}
+
+/* Pattern: mov rax, 0 => xor rax, rax (smaller encoding, faster on modern CPUs).
+   Only applied when it is safe — i.e. no flag-consuming instruction lies
+   between this mov and the next flag-setter. */
 bool peephole_use_xor_for_zero(PeepholeContext* ctx) {
     bool changed = false;
-    
+
     for (int i = 0; i < ctx->instr_count; i++) {
         AsmInstr* instr = &ctx->instructions[i];
-        
+
         if (instr->opcode && strcmp(instr->opcode, "mov") == 0 &&
-            instr->operand2 && strcmp(instr->operand2, "0") == 0) {
-            
+            instr->operand2 && strcmp(instr->operand2, "0") == 0 &&
+            xor_zero_is_safe(ctx, i)) {
+
             free(instr->opcode);
             instr->opcode = strdup("xor");
             free(instr->operand2);
             instr->operand2 = strdup(instr->operand1);
-            
+
             changed = true;
             ctx->optimizations_applied++;
         }
     }
-    
+
     return changed;
 }
 

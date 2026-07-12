@@ -4,6 +4,14 @@
 #ifndef NUWAN_GUI_H
 #define NUWAN_GUI_H
 
+#if !defined(CASPRIX_SUPPRESS_LEGACY_GUI_DEPRECATION)
+    #if defined(_MSC_VER)
+        #pragma message("include/casprix/gui.h is deprecated; migrate to the skia module (lib/skia/ui or runtime/skia)")
+    #else
+        #warning "include/casprix/gui.h is deprecated; migrate to the skia module (lib/skia/ui or runtime/skia)"
+    #endif
+#endif
+
 #include <stdint.h>
 #include <stdbool.h>
 

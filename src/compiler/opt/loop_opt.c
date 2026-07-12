@@ -121,25 +121,62 @@ bool hoist_loop_invariants(LoopInfo* loop) {
     return true;  // Placeholder
 }
 
+/* Deep-clone a Stmt tree so unrolled iterations don't share AST nodes.
+   Shared nodes would cause optimizer passes that mutate in-place to corrupt
+   all copies simultaneously.  We recursively clone compound statements;
+   leaf expressions are intentionally left shared (read-only after parsing). */
+static Stmt* stmt_clone(Stmt* s) {
+    if (!s) return NULL;
+    Stmt* c = malloc(sizeof(Stmt));
+    if (!c) return s;          /* allocation failure: return original (safe fallback) */
+    *c = *s;                   /* shallow copy of all fields */
+
+    switch (s->type) {
+        case STMT_BLOCK: {
+            int n = s->as.block.stmt_count;
+            c->as.block.statements = malloc((size_t)n * sizeof(Stmt*));
+            if (c->as.block.statements) {
+                for (int i = 0; i < n; i++)
+                    c->as.block.statements[i] = stmt_clone(s->as.block.statements[i]);
+            } else {
+                c->as.block.statements = s->as.block.statements; /* fallback */
+            }
+            break;
+        }
+        case STMT_IF:
+            c->as.if_stmt.then_branch = stmt_clone(s->as.if_stmt.then_branch);
+            c->as.if_stmt.else_branch = stmt_clone(s->as.if_stmt.else_branch);
+            break;
+        case STMT_FOR:
+            c->as.for_stmt.body      = stmt_clone(s->as.for_stmt.body);
+            c->as.for_stmt.increment = stmt_clone(s->as.for_stmt.increment);
+            break;
+        case STMT_WHILE:
+            c->as.while_stmt.body = stmt_clone(s->as.while_stmt.body);
+            break;
+        default:
+            break;
+    }
+    return c;
+}
+
 // Loop unrolling
 Stmt* unroll_loop(Stmt* loop, int factor) {
     if (!loop || factor < 2) return loop;
 
-    // Unroll by duplicating loop body 'factor' times
-    // This is a simplified implementation
-
     if (loop->type == STMT_FOR) {
-        // Create new block with unrolled iterations
         Stmt* block = malloc(sizeof(Stmt));
+        if (!block) return loop;
         block->type = STMT_BLOCK;
+        block->line = loop->line;
+        block->column = loop->column;
         block->as.block.stmt_count = factor;
-        block->as.block.statements = malloc(factor * sizeof(Stmt*));
+        block->as.block.is_alloc_scope = false;
+        block->as.block.statements = malloc((size_t)factor * sizeof(Stmt*));
+        if (!block->as.block.statements) { free(block); return loop; }
 
-        // Duplicate body
-        for (int i = 0; i < factor; i++) {
-            // Deep copy the loop body
-            block->as.block.statements[i] = loop->as.for_stmt.body;  // Simplified
-        }
+        for (int i = 0; i < factor; i++)
+            block->as.block.statements[i] = stmt_clone(loop->as.for_stmt.body);
 
         return block;
     }

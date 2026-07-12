@@ -28,10 +28,11 @@ int main(int argc, char* argv[]) {
     }
 
     /* 2. Initialise logging */
-    CpxLogLevel log_level = g_config.verbose ? CPX_LOG_DEBUG : CPX_LOG_INFO;
+    CpxLogLevel log_level = CPX_LOG_INFO;
+    if (g_config.verbose) log_level = CPX_LOG_DEBUG;
+    else if (g_config.compact_output) log_level = CPX_LOG_OFF;
+
     cpx_log_init(log_level);
-    cpx_log_set_location(g_config.verbose);
-    cpx_log_set_show_category(false);
 
     /* 3. Initialise diagnostic engine */
     diag_engine_init(&g_diag);
@@ -39,7 +40,7 @@ int main(int argc, char* argv[]) {
     diag_engine_set_colors(&g_diag, !g_config.diag_no_color);
     diag_engine_set_max_errors(&g_diag, g_config.max_errors);
     g_diag.min_severity  = g_config.min_severity;
-    g_diag.perf.enabled  = g_config.perf_trace;
+    g_diag.perf.enabled  = g_config.perf_trace || g_config.compact_output;
 
     if (!input_file) {
         fprintf(stderr, "Error: No input file specified.\n");
@@ -69,9 +70,11 @@ int main(int argc, char* argv[]) {
 
     /* MIR-based backends handle their own output — skip NASM + GCC */
     if (g_config.output_kind != OUTPUT_NATIVE) {
-        printf("\n================================================================================\n");
-        printf("  COMPILATION SUCCESSFUL (%s)\n", driver_selected_output_name());
-        printf("================================================================================\n\n");
+        if (!g_config.compact_output) {
+            printf("\n================================================================================\n");
+            printf("  COMPILATION SUCCESSFUL (%s)\n", driver_selected_output_name());
+            printf("================================================================================\n\n");
+        }
         goto print_diag;
     }
 
@@ -81,14 +84,16 @@ int main(int argc, char* argv[]) {
 
     /* 7. Link → executable */
     result = pipeline_link(obj_file_path, output_file_path, output_name);
-    if (result == 0) {
+    if (result == 0 && !g_config.compact_output) {
         printf("\n================================================================================\n");
         printf("  COMPILATION SUCCESSFUL\n");
         printf("================================================================================\n\n");
     }
 
 print_diag:
-    if (g_config.perf_trace) {
+    if (g_config.compact_output && result == 0) {
+        perf_print_compact(&g_diag.perf, stdout, input_file, !g_config.diag_no_color);
+    } else if (g_config.perf_trace) {
         if (g_config.diag_format == DIAG_FMT_JSON)
             perf_print_json(&g_diag.perf, stdout);
         else

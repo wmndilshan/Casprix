@@ -22,12 +22,14 @@ typedef struct ArenaBlock {
 } ArenaBlock;
 
 // Arena allocator
-typedef struct {
+typedef struct Arena {
     ArenaBlock* current_block;
     ArenaBlock* first_block;
     size_t total_allocated;
     size_t total_used;
     size_t block_count;
+    unsigned int generation; /* Incremented by arena_reset; debug builds can
+                                detect stale pointers by comparing generations. */
 } Arena;
 
 // Initialize arena

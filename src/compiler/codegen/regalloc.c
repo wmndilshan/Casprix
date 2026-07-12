@@ -44,6 +44,7 @@ void init_regalloc(RegAllocator* alloc) {
     // Reserve special registers
     alloc->gp_regs_available[REG_RBP] = false;  // Frame pointer
     alloc->gp_regs_available[REG_RSP] = false;  // Stack pointer
+    alloc->used_callee_saved_mask = 0;
 }
 
 void regalloc_add_interval(RegAllocator* alloc, const char* var_name,
@@ -89,8 +90,10 @@ void regalloc_linear_scan(RegAllocator* alloc) {
             if (active[j]->end_pos <= current->start_pos) {
                 // Free the register
                 if (active[j]->assigned_reg != REG_SPILL) {
-                    if (current->reg_class == REG_CLASS_GP) {
+                    if (active[j]->reg_class == REG_CLASS_GP) {
                         alloc->gp_regs_available[active[j]->assigned_reg] = true;
+                    } else if (active[j]->reg_class == REG_CLASS_FLOAT) {
+                        alloc->fp_regs_available[active[j]->assigned_reg] = true;
                     }
                 }
                 // Remove from active list
@@ -125,6 +128,7 @@ void regalloc_linear_scan(RegAllocator* alloc) {
                     if (alloc->gp_regs_available[reg]) {
                         current->assigned_reg = reg;
                         alloc->gp_regs_available[reg] = false;
+                        alloc->used_callee_saved_mask |= (1u << reg);
                         allocated = true;
                         break;
                     }
@@ -184,6 +188,10 @@ const char* register_name(Register reg, int size) {
         case 8: return gp_reg_names_64[reg];
         default: return gp_reg_names_64[reg];
     }
+}
+
+uint32_t regalloc_used_callee_saved_mask(const RegAllocator* alloc) {
+    return alloc ? alloc->used_callee_saved_mask : 0;
 }
 
 void free_regalloc(RegAllocator* alloc) {

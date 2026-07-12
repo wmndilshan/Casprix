@@ -9,6 +9,7 @@
  *   Linux:   mmap(PROT_READ | PROT_WRITE | PROT_EXEC)
  */
 
+#define _GNU_SOURCE
 #include "jit.h"
 #include <stdlib.h>
 #include <string.h>

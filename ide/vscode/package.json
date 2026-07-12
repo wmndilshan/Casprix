@@ -1,15 +1,15 @@
 {
     "name": "casprix-language",
-    "displayName": "Casprix Language",
+    "displayName": "Casprix 👻 Language",
     "description": "Syntax highlighting, auto-complete, and error highlighting for the Casprix programming language (.cpx).",
     "version": "1.1.0",
     "publisher": "casprix-dev",
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "https://github.com/casprix/casprix.git"
+        "url": "https://github.com/wmndilshan/casprix.git"
     },
-    "icon": "icons/casper-ghost.png",
+    "icon": "icons/ghost-emoji.png",
     "engines": {
         "vscode": "^1.75.0"
     },
@@ -24,6 +24,7 @@
             {
                 "id": "casprix",
                 "aliases": [
+                    "Casprix 👻",
                     "Casprix",
                     "casprix",
                     "cpx"
@@ -34,8 +35,8 @@
                 ],
                 "configuration": "./language-configuration.json",
                 "icon": {
-                    "light": "./icons/icon.png",
-                    "dark": "./icons/icon.png"
+                    "light": "./icons/ghost-emoji.png",
+                    "dark": "./icons/ghost-emoji.png"
                 }
             }
         ],
