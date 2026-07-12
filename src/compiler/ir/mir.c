@@ -386,6 +386,11 @@ MirFunction* mir_module_add_function(MirModule* module, const char* name,
     func->is_constexpr = false;
     func->is_extern = false;
 
+    /* Value type table — initialize before assigning parameter value IDs. */
+    func->value_type_capacity = 64;
+    func->value_types = (MirType**)mir_arena_alloc(module->arena,
+                         func->value_type_capacity * sizeof(MirType*));
+
     /* Copy params */
     if (n_params > 0) {
         func->params = (MirParam*)mir_arena_alloc(module->arena,
@@ -398,11 +403,6 @@ MirFunction* mir_module_add_function(MirModule* module, const char* name,
     } else {
         func->params = NULL;
     }
-
-    /* Value type table — initial capacity */
-    func->value_type_capacity = 64;
-    func->value_types = (MirType**)mir_arena_alloc(module->arena,
-                         func->value_type_capacity * sizeof(MirType*));
 
     /* Link into module's function list */
     func->next_func = module->func_list;
@@ -531,11 +531,16 @@ MirValueId mir_function_new_value(MirFunction* func, MirType* type) {
 
     /* Grow value type table if needed */
     if ((int)id >= func->value_type_capacity) {
-        int new_cap = func->value_type_capacity * 2;
+        int new_cap = func->value_type_capacity ? func->value_type_capacity * 2 : 64;
+        while ((int)id >= new_cap) {
+            new_cap *= 2;
+        }
         MirType** new_types = (MirType**)mir_arena_alloc(func->parent->arena,
                                new_cap * sizeof(MirType*));
-        memcpy(new_types, func->value_types,
-               func->value_type_capacity * sizeof(MirType*));
+        if (func->value_types && func->value_type_capacity > 0) {
+            memcpy(new_types, func->value_types,
+                   func->value_type_capacity * sizeof(MirType*));
+        }
         func->value_types = new_types;
         func->value_type_capacity = new_cap;
     }
