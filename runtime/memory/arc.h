@@ -26,6 +26,7 @@ extern "C" {
 #define ARC_FLAG_CYCLE_SUSPECT 0x08  // Suspected of being in a reference cycle
 #define ARC_FLAG_BUFFERED      0x10  // Already in cycle collector's buffer
 #define ARC_FLAG_ACYCLIC       0x20  // Known to never participate in cycles
+#define ARC_FLAG_DEALLOCATING  0x40  // Destruction has started; upgrades must fail
 
 // ARC color for cycle collection (Bacon-Rajan algorithm)
 typedef enum {
@@ -47,10 +48,13 @@ typedef void (*arc_scan_fn)(void* obj, void (*visitor)(void* field_ptr));
 
 // ARC object header - prepended to every managed object
 typedef struct ArcHeader {
+    void* allocation_base;         // Original allocation base for free()
+    void* user_data;               // User-visible payload pointer
+    size_t size;                   // Size of user data (excluding header)
+    size_t alignment;              // Guaranteed payload alignment
     int32_t strong_count;          // Strong reference count (atomic on supported platforms)
     int32_t weak_count;            // Weak reference count (includes +1 from strong refs)
     uint32_t flags;                // ARC_FLAG_* bits
-    uint32_t size;                 // Size of user data (excluding header)
     ArcColor color;                // Color for cycle collection
     arc_destructor_fn destructor;  // Optional custom destructor
     arc_scan_fn scanner;           // Optional field scanner for cycle detection
@@ -74,6 +78,13 @@ void* arc_alloc_with_destructor(size_t size, arc_destructor_fn destructor);
 // Allocate with destructor and cycle scanner
 void* arc_alloc_full(size_t size, arc_destructor_fn destructor, arc_scan_fn scanner);
 
+// Allocate with an explicit payload alignment. alignment=0 uses the runtime default.
+void* arc_alloc_aligned(size_t size, size_t alignment);
+void* arc_alloc_with_destructor_aligned(size_t size, size_t alignment,
+                                        arc_destructor_fn destructor);
+void* arc_alloc_full_aligned(size_t size, size_t alignment,
+                             arc_destructor_fn destructor, arc_scan_fn scanner);
+
 // Increment strong reference count
 // Returns the object pointer for convenience
 void* arc_retain(void* obj);
@@ -82,6 +93,9 @@ void* arc_retain(void* obj);
 // Calls destructor and frees when count reaches 0
 // If cycle collector is active and object has scanner, may buffer as suspect
 void arc_release(void* obj);
+
+// Release and report whether the object survived the decrement.
+bool arc_release_survived(void* obj);
 
 // Get current strong reference count
 int32_t arc_strong_count(const void* obj);
@@ -109,6 +123,9 @@ ArcHeader* arc_get_header(void* obj);
 // Get the ArcHeader from a user data pointer (const version)
 const ArcHeader* arc_get_header_const(const void* obj);
 
+// Report whether destruction has started for this object.
+bool arc_is_deallocating(const void* obj);
+
 // Check if object has been moved
 bool arc_is_moved(const void* obj);
 
@@ -117,6 +134,13 @@ void arc_mark_moved(void* obj);
 
 // Mark object as acyclic (optimization: skip during cycle collection)
 void arc_mark_acyclic(void* obj);
+
+// Expose the actual payload alignment for validation/tests.
+size_t arc_allocation_alignment(const void* obj);
+
+// Finalize an object whose strong count already reached zero via cycle collection.
+// Returns true when this call performed the final destruction.
+bool arc_cycle_collect(void* obj);
 
 // --- Statistics ---
 
@@ -148,8 +172,9 @@ void arc_notify_freed(size_t size);
 // --- Header access macros ---
 
 #define ARC_HEADER_SIZE sizeof(ArcHeader)
-#define ARC_OBJ_TO_HEADER(ptr) ((ArcHeader*)((char*)(ptr) - ARC_HEADER_SIZE))
-#define ARC_HEADER_TO_OBJ(hdr) ((void*)((char*)(hdr) + ARC_HEADER_SIZE))
+#define ARC_HEADER_SLOT_SIZE sizeof(ArcHeader*)
+#define ARC_OBJ_TO_HEADER(ptr) (*(((ArcHeader**)(ptr)) - 1))
+#define ARC_HEADER_TO_OBJ(hdr) ((hdr)->user_data)
 
 #ifdef __cplusplus
 }
