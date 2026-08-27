@@ -52,6 +52,10 @@ Expr* create_variable_expr(char* name, int line, int col) {
     expr->column = col;
     expr->as.variable.name = name;
     expr->as.variable.is_move = false;
+    expr->as.variable.is_closure_value = false;
+    expr->as.variable.closure_capture_count = 0;
+    expr->as.variable.closure_lambda_id = -1;
+    expr->as.variable.closure_capture_types = NULL;
     return expr;
 }
 
@@ -115,7 +119,7 @@ Expr* create_this_expr(char* class_name, int line, int col) {
     Expr* expr = ALLOCATE(Expr, 1);
     expr->type = EXPR_THIS;
     expr->data_type = TYPE_CLASS;
-    expr->class_name = class_name;  // Set class name
+    expr->class_name = class_name ? strdup(class_name) : NULL;  // Set class name
     expr->type_info = NULL;
     expr->line = line;
     expr->column = col;
@@ -159,6 +163,19 @@ Expr* create_await_expr(Expr* expression, int line, int col) {
     expr->line = line;
     expr->column = col;
     expr->as.await_expr.expression = expression;
+    return expr;
+}
+
+Expr* create_array_literal_expr(Expr** elements, int count, int line, int col) {
+    Expr* expr = ALLOCATE(Expr, 1);
+    expr->type = EXPR_ARRAY_LITERAL;
+    expr->data_type = TYPE_CLASS;
+    expr->class_name = strdup("Array");
+    expr->type_info = NULL;
+    expr->line = line;
+    expr->column = col;
+    expr->as.array_literal.elements = elements;
+    expr->as.array_literal.element_count = count;
     return expr;
 }
 
@@ -367,6 +384,9 @@ void free_expr(Expr* expr) {
             break;
         case EXPR_VARIABLE:
             free(expr->as.variable.name);
+            if (expr->as.variable.closure_capture_types) {
+                free(expr->as.variable.closure_capture_types);
+            }
             break;
         case EXPR_CALL:
             free_expr(expr->as.call.callee);
@@ -481,9 +501,153 @@ void free_expr(Expr* expr) {
         case EXPR_AWAIT:
             free_expr(expr->as.await_expr.expression);
             break;
+        case EXPR_ARRAY_LITERAL:
+            for (int i = 0; i < expr->as.array_literal.element_count; i++) {
+                free_expr(expr->as.array_literal.elements[i]);
+            }
+            if (expr->as.array_literal.elements) {
+                free(expr->as.array_literal.elements);
+            }
+            break;
     }
 
     free(expr);
+}
+
+Expr* clone_expr(const Expr* expr) {
+    if (!expr) return NULL;
+
+    Expr* clone = ALLOCATE(Expr, 1);
+    clone->type = expr->type;
+    clone->data_type = expr->data_type;
+    clone->class_name = expr->class_name ? strdup(expr->class_name) : NULL;
+    clone->type_info = expr->type_info ? clone_type_info(expr->type_info) : NULL;
+    clone->line = expr->line;
+    clone->column = expr->column;
+
+    switch (expr->type) {
+        case EXPR_BINARY:
+            clone->as.binary.left = clone_expr(expr->as.binary.left);
+            clone->as.binary.operator = expr->as.binary.operator;
+            clone->as.binary.right = clone_expr(expr->as.binary.right);
+            break;
+        case EXPR_UNARY:
+            clone->as.unary.operator = expr->as.unary.operator;
+            clone->as.unary.operand = clone_expr(expr->as.unary.operand);
+            break;
+        case EXPR_LITERAL:
+            clone->as.literal.type = expr->as.literal.type;
+            if (expr->as.literal.type == TYPE_STRING) {
+                clone->as.literal.value.string_value = expr->as.literal.value.string_value ? strdup(expr->as.literal.value.string_value) : NULL;
+            } else {
+                clone->as.literal.value = expr->as.literal.value;
+            }
+            break;
+        case EXPR_VARIABLE:
+            clone->as.variable.name = expr->as.variable.name ? strdup(expr->as.variable.name) : NULL;
+            clone->as.variable.is_move = expr->as.variable.is_move;
+            clone->as.variable.is_closure_value = expr->as.variable.is_closure_value;
+            clone->as.variable.closure_capture_count = expr->as.variable.closure_capture_count;
+            clone->as.variable.closure_lambda_id = expr->as.variable.closure_lambda_id;
+            if (expr->as.variable.closure_capture_types && expr->as.variable.closure_capture_count > 0) {
+                clone->as.variable.closure_capture_types = ALLOCATE(DataType, expr->as.variable.closure_capture_count);
+                memcpy(clone->as.variable.closure_capture_types, expr->as.variable.closure_capture_types, sizeof(DataType) * expr->as.variable.closure_capture_count);
+            } else {
+                clone->as.variable.closure_capture_types = NULL;
+            }
+            break;
+        case EXPR_CALL:
+            clone->as.call.callee = clone_expr(expr->as.call.callee);
+            clone->as.call.name = expr->as.call.name ? strdup(expr->as.call.name) : NULL;
+            clone->as.call.arg_count = expr->as.call.arg_count;
+            if (expr->as.call.arguments) {
+                clone->as.call.arguments = ALLOCATE(Expr*, expr->as.call.arg_count);
+                for (int i = 0; i < expr->as.call.arg_count; i++) {
+                    clone->as.call.arguments[i] = clone_expr(expr->as.call.arguments[i]);
+                }
+            } else {
+                clone->as.call.arguments = NULL;
+            }
+            break;
+        case EXPR_MEMBER_ACCESS:
+            clone->as.member.object = clone_expr(expr->as.member.object);
+            clone->as.member.member_name = expr->as.member.member_name ? strdup(expr->as.member.member_name) : NULL;
+            clone->as.member.is_method_call = expr->as.member.is_method_call;
+            clone->as.member.arg_count = expr->as.member.arg_count;
+            if (expr->as.member.arguments) {
+                clone->as.member.arguments = ALLOCATE(Expr*, expr->as.member.arg_count);
+                for (int i = 0; i < expr->as.member.arg_count; i++) {
+                    clone->as.member.arguments[i] = clone_expr(expr->as.member.arguments[i]);
+                }
+            } else {
+                clone->as.member.arguments = NULL;
+            }
+            break;
+        case EXPR_STATIC_ACCESS:
+            clone->as.static_access.class_name = expr->as.static_access.class_name ? strdup(expr->as.static_access.class_name) : NULL;
+            clone->as.static_access.member_name = expr->as.static_access.member_name ? strdup(expr->as.static_access.member_name) : NULL;
+            clone->as.static_access.is_method_call = expr->as.static_access.is_method_call;
+            clone->as.static_access.arg_count = expr->as.static_access.arg_count;
+            if (expr->as.static_access.arguments) {
+                clone->as.static_access.arguments = ALLOCATE(Expr*, expr->as.static_access.arg_count);
+                for (int i = 0; i < expr->as.static_access.arg_count; i++) {
+                    clone->as.static_access.arguments[i] = clone_expr(expr->as.static_access.arguments[i]);
+                }
+            } else {
+                clone->as.static_access.arguments = NULL;
+            }
+            break;
+        case EXPR_THIS:
+            clone->as.this_expr.class_name = expr->as.this_expr.class_name ? strdup(expr->as.this_expr.class_name) : NULL;
+            break;
+        case EXPR_SUPER:
+            clone->as.super_expr.member_name = expr->as.super_expr.member_name ? strdup(expr->as.super_expr.member_name) : NULL;
+            clone->as.super_expr.is_method_call = expr->as.super_expr.is_method_call;
+            clone->as.super_expr.arg_count = expr->as.super_expr.arg_count;
+            if (expr->as.super_expr.arguments) {
+                clone->as.super_expr.arguments = ALLOCATE(Expr*, expr->as.super_expr.arg_count);
+                for (int i = 0; i < expr->as.super_expr.arg_count; i++) {
+                    clone->as.super_expr.arguments[i] = clone_expr(expr->as.super_expr.arguments[i]);
+                }
+            } else {
+                clone->as.super_expr.arguments = NULL;
+            }
+            break;
+        case EXPR_NEW:
+            clone->as.new_expr.class_name = expr->as.new_expr.class_name ? strdup(expr->as.new_expr.class_name) : NULL;
+            clone->as.new_expr.arg_count = expr->as.new_expr.arg_count;
+            if (expr->as.new_expr.arguments) {
+                clone->as.new_expr.arguments = ALLOCATE(Expr*, expr->as.new_expr.arg_count);
+                for (int i = 0; i < expr->as.new_expr.arg_count; i++) {
+                    clone->as.new_expr.arguments[i] = clone_expr(expr->as.new_expr.arguments[i]);
+                }
+            } else {
+                clone->as.new_expr.arguments = NULL;
+            }
+            break;
+        case EXPR_INDEX:
+            clone->as.index.array = clone_expr(expr->as.index.array);
+            clone->as.index.index = clone_expr(expr->as.index.index);
+            break;
+        case EXPR_AWAIT:
+            clone->as.await_expr.expression = clone_expr(expr->as.await_expr.expression);
+            break;
+        case EXPR_ARRAY_LITERAL:
+            clone->as.array_literal.element_count = expr->as.array_literal.element_count;
+            if (expr->as.array_literal.elements) {
+                clone->as.array_literal.elements = ALLOCATE(Expr*, expr->as.array_literal.element_count);
+                for (int i = 0; i < expr->as.array_literal.element_count; i++) {
+                    clone->as.array_literal.elements[i] = clone_expr(expr->as.array_literal.elements[i]);
+                }
+            } else {
+                clone->as.array_literal.elements = NULL;
+            }
+            break;
+        default:
+            break;
+    }
+
+    return clone;
 }
 
 void free_stmt(Stmt* stmt) {
@@ -705,8 +869,60 @@ void free_stmt(Stmt* stmt) {
         }
 
         case STMT_TRAIT:
-            if (stmt->as.trait_stmt.name) free(stmt->as.trait_stmt.name);
-            /* method stubs are compile-time only; no deep freeing needed */
+            if (stmt->as.trait_stmt.type_params) {
+                for (int i = 0; i < stmt->as.trait_stmt.type_param_count; i++) {
+                    if (stmt->as.trait_stmt.type_params[i].name) {
+                        free(stmt->as.trait_stmt.type_params[i].name);
+                    }
+                    if (stmt->as.trait_stmt.type_params[i].constraint) {
+                        free(stmt->as.trait_stmt.type_params[i].constraint);
+                    }
+                    if (stmt->as.trait_stmt.type_params[i].default_class) {
+                        free(stmt->as.trait_stmt.type_params[i].default_class);
+                    }
+                }
+                free(stmt->as.trait_stmt.type_params);
+            }
+            if (stmt->as.trait_stmt.super_traits) {
+                for (int i = 0; i < stmt->as.trait_stmt.super_count; i++) {
+                    if (stmt->as.trait_stmt.super_traits[i]) {
+                        free(stmt->as.trait_stmt.super_traits[i]);
+                    }
+                }
+                free(stmt->as.trait_stmt.super_traits);
+            }
+            if (stmt->as.trait_stmt.methods) {
+                for (int i = 0; i < stmt->as.trait_stmt.method_count; i++) {
+                    TraitMethodDecl* method = &stmt->as.trait_stmt.methods[i];
+                    if (method->name) {
+                        free(method->name);
+                    }
+                    if (method->return_class_name) {
+                        free(method->return_class_name);
+                    }
+                    if (method->parameters) {
+                        for (int j = 0; j < method->param_count; j++) {
+                            if (method->parameters[j].name) {
+                                free(method->parameters[j].name);
+                            }
+                            if (method->parameters[j].class_name) {
+                                free(method->parameters[j].class_name);
+                            }
+                            if (method->parameters[j].type_info) {
+                                free_type_info(method->parameters[j].type_info);
+                            }
+                        }
+                        free(method->parameters);
+                    }
+                    if (method->default_body) {
+                        free_stmt(method->default_body);
+                    }
+                }
+                free(stmt->as.trait_stmt.methods);
+            }
+            if (stmt->as.trait_stmt.name) {
+                free(stmt->as.trait_stmt.name);
+            }
             break;
 
         case STMT_CONST_DECL:

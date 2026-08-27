@@ -132,6 +132,34 @@ static void emit_lambda_call_arg(AssemblyGenerator* gen, const LambdaExpr* lambd
     emit_asm(gen, "    xor %s, %s\n", reg, reg);
 }
 
+static DataType closure_call_arg_type_from_var(const VariableExpr* var, int arg_index) {
+    if (!var) return TYPE_I64;
+    if (arg_index < var->closure_capture_count) {
+        return TYPE_PTR;
+    }
+    return TYPE_I64;
+}
+
+static void emit_closure_call_arg_from_var(AssemblyGenerator* gen, const VariableExpr* var,
+                                           Expr** call_args, int call_arg_count, int arg_index,
+                                           const char* reg, SymbolTable* symbols) {
+    if (var && arg_index < var->closure_capture_count) {
+        emit_asm(gen, "    mov %s, [r12 + %d]\n", reg, 8 * (arg_index + 1));
+        return;
+    }
+
+    if (var) {
+        arg_index -= var->closure_capture_count;
+    }
+
+    if (arg_index >= 0 && arg_index < call_arg_count) {
+        generate_asm_expr(gen, call_args[arg_index], reg, symbols);
+        return;
+    }
+
+    emit_asm(gen, "    xor %s, %s\n", reg, reg);
+}
+
 static void emit_closure_call_arg(AssemblyGenerator* gen, const Symbol* symbol,
                                   Expr** call_args, int call_arg_count, int arg_index,
                                   const char* reg, SymbolTable* symbols) {
@@ -243,6 +271,7 @@ static void begin_local_frame(AssemblyGenerator* gen) {
     for (int i = 0; i < gen->local_count; i++) free(gen->local_names[i]);
     gen->local_count = 0;
     gen->frame_size = 0;
+    drop_planner_reset(&gen->drop_ctx);
 }
 
 /* Allocate a slot for 'name' on the current stack frame.
@@ -261,7 +290,11 @@ static int alloc_local(AssemblyGenerator* gen, const char* name) {
         gen->local_offsets = realloc(gen->local_offsets, sizeof(int)   * nc);
         gen->local_capacity = nc;
     }
-    gen->frame_size += 8;
+    int size = 8;
+    if (strncmp(name, "__cpx_jbuf", 10) == 0) {
+        size = 256;
+    }
+    gen->frame_size += size;
     gen->local_names[gen->local_count]   = strdup(name);
     gen->local_offsets[gen->local_count] = gen->frame_size;
     gen->local_count++;
@@ -511,6 +544,13 @@ static void collect_strings(AssemblyGenerator* gen, Expr* expr) {
                 for (int i = 0; i < static_access->arg_count; i++) {
                     collect_strings(gen, static_access->arguments[i]);
                 }
+            }
+            break;
+        }
+        case EXPR_ARRAY_LITERAL: {
+            ArrayLiteralExpr* array_literal = &expr->as.array_literal;
+            for (int i = 0; i < array_literal->element_count; i++) {
+                collect_strings(gen, array_literal->elements[i]);
             }
             break;
         }
@@ -798,12 +838,19 @@ static void prescan_expr_locals(AssemblyGenerator* gen, Expr* expr) {
                 prescan_expr_locals(gen, expr->as.call.arguments[i]);
             }
             break;
-        case EXPR_MEMBER_ACCESS:
-            prescan_expr_locals(gen, expr->as.member.object);
-            for (int i = 0; i < expr->as.member.arg_count; i++) {
-                prescan_expr_locals(gen, expr->as.member.arguments[i]);
+        case EXPR_MEMBER_ACCESS: {
+            MemberAccessExpr* member = &expr->as.member;
+            if (member->is_method_call) {
+                char this_name[64];
+                snprintf(this_name, sizeof(this_name), "__cpx_this_%p", (void*)expr);
+                alloc_local(gen, this_name);
+            }
+            prescan_expr_locals(gen, member->object);
+            for (int i = 0; i < member->arg_count; i++) {
+                prescan_expr_locals(gen, member->arguments[i]);
             }
             break;
+        }
         case EXPR_STATIC_ACCESS:
             for (int i = 0; i < expr->as.static_access.arg_count; i++) {
                 prescan_expr_locals(gen, expr->as.static_access.arguments[i]);
@@ -813,11 +860,23 @@ static void prescan_expr_locals(AssemblyGenerator* gen, Expr* expr) {
             prescan_expr_locals(gen, expr->as.index.array);
             prescan_expr_locals(gen, expr->as.index.index);
             break;
-        case EXPR_NEW:
-            for (int i = 0; i < expr->as.new_expr.arg_count; i++) {
-                prescan_expr_locals(gen, expr->as.new_expr.arguments[i]);
+        case EXPR_NEW: {
+            char new_this_name[64];
+            snprintf(new_this_name, sizeof(new_this_name), "__cpx_new_this_%p", (void*)expr);
+            alloc_local(gen, new_this_name);
+            NewExpr* new_expr = &expr->as.new_expr;
+            for (int i = 0; i < new_expr->arg_count; i++) {
+                prescan_expr_locals(gen, new_expr->arguments[i]);
             }
             break;
+        }
+        case EXPR_ARRAY_LITERAL: {
+            ArrayLiteralExpr* array_literal = &expr->as.array_literal;
+            for (int i = 0; i < array_literal->element_count; i++) {
+                prescan_expr_locals(gen, array_literal->elements[i]);
+            }
+            break;
+        }
         case EXPR_SUPER:
             for (int i = 0; i < expr->as.super_expr.arg_count; i++) {
                 prescan_expr_locals(gen, expr->as.super_expr.arguments[i]);
@@ -852,16 +911,30 @@ static void prescan_locals(AssemblyGenerator* gen, Stmt* stmt) {
             prescan_locals(gen, stmt->as.for_stmt.body);
             prescan_locals(gen, stmt->as.for_stmt.increment);
             break;
-        case STMT_FOR_IN:
-            /* loop variable + hidden index counter */
+        case STMT_FOR_IN: {
+            char iter_name[64];
+            char len_name[64];
+            char idx_name[64];
+            snprintf(iter_name, sizeof(iter_name), "__cpx_fi_iter_%p", (void*)stmt);
+            snprintf(len_name, sizeof(len_name), "__cpx_fi_len_%p", (void*)stmt);
+            snprintf(idx_name, sizeof(idx_name), "__cpx_fi_idx_%p", (void*)stmt);
+
             alloc_local(gen, stmt->as.for_in_stmt.var_name);
-            alloc_local(gen, "__cpx_for_idx");
+            alloc_local(gen, idx_name);
+            alloc_local(gen, iter_name);
+            alloc_local(gen, len_name);
+
             prescan_expr_locals(gen, stmt->as.for_in_stmt.iterable);
             prescan_locals(gen, stmt->as.for_in_stmt.body);
             break;
+        }
         case STMT_TRY: {
-            /* jmp_buf slot (we store only 8 bytes here; full setjmp buf grows from there) */
-            alloc_local(gen, "__cpx_jbuf");
+            char jbuf_name[64];
+            snprintf(jbuf_name, sizeof(jbuf_name), "__cpx_jbuf_%p", (void*)stmt);
+            alloc_local(gen, jbuf_name);
+            char prev_jbuf_name[64];
+            snprintf(prev_jbuf_name, sizeof(prev_jbuf_name), "__cpx_prev_jbuf_%p", (void*)stmt);
+            alloc_local(gen, prev_jbuf_name);
             TryStmt* t = &stmt->as.try_stmt;
             prescan_locals(gen, t->try_body);
             for (int i = 0; i < t->catch_count; i++) {
@@ -873,6 +946,9 @@ static void prescan_locals(AssemblyGenerator* gen, Stmt* stmt) {
             break;
         }
         case STMT_MATCH: {
+            char match_subj_name[64];
+            snprintf(match_subj_name, sizeof(match_subj_name), "__cpx_match_subj_%p", (void*)stmt);
+            alloc_local(gen, match_subj_name);
             MatchStmt* m = &stmt->as.match_stmt;
             prescan_expr_locals(gen, m->subject);
             for (int i = 0; i < m->arm_count; i++)
@@ -1122,13 +1198,12 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 }
 
                 {
-                    const char* iregs[] = {"rcx", "rdx", "r8", "r9"};
-                    int n = total_args < 4 ? total_args : 4;
+                    int n = total_args < ABI_I_REG_COUNT ? total_args : ABI_I_REG_COUNT;
                     for (int i = 0; i < n; i++) {
                         DataType pt = lambda_call_arg_type(lambda, i);
                         if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64) {
                             emit_asm(gen, "    movq xmm%d, %s  ; lambda arg %d\n",
-                                     i, iregs[i], i);
+                                     i, ABI_I_REGS[i], i);
                         }
                     }
                 }
@@ -1148,9 +1223,9 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             if (call->callee &&
                 call->callee->type == EXPR_VARIABLE &&
                 call->callee->as.variable.name) {
-                Symbol* closure_sym = lookup_symbol(symbols, call->callee->as.variable.name);
-                if (closure_sym && closure_sym->is_closure_value) {
-                    int total_args = closure_sym->closure_capture_count + call->arg_count;
+                VariableExpr* var = &call->callee->as.variable;
+                if (var->is_closure_value) {
+                    int total_args = var->closure_capture_count + call->arg_count;
                     int extra_args = (total_args > ABI_I_REG_COUNT) ? (total_args - ABI_I_REG_COUNT) : 0;
                     int stack_size = ABI_SHADOW_SPACE + (extra_args * 8);
 
@@ -1162,25 +1237,24 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
 
                     for (int i = total_args - 1; i >= ABI_I_REG_COUNT; i--) {
                         int offset = ABI_SHADOW_SPACE + (i - ABI_I_REG_COUNT) * 8;
-                        emit_closure_call_arg(gen, closure_sym, call->arguments,
+                        emit_closure_call_arg_from_var(gen, var, call->arguments,
                                               call->arg_count, i, "rax", symbols);
                         emit_asm(gen, "    mov [rsp + %d], rax\n", offset);
                     }
 
                     int n_reg = total_args < ABI_I_REG_COUNT ? total_args : ABI_I_REG_COUNT;
                     for (int i = 0; i < n_reg; i++) {
-                        emit_closure_call_arg(gen, closure_sym, call->arguments,
+                        emit_closure_call_arg_from_var(gen, var, call->arguments,
                                               call->arg_count, i, ABI_I_REGS[i], symbols);
                     }
 
                     {
-                        const char* iregs[] = {"rcx", "rdx", "r8", "r9"};
-                        int n = total_args < 4 ? total_args : 4;
+                        int n = total_args < ABI_I_REG_COUNT ? total_args : ABI_I_REG_COUNT;
                         for (int i = 0; i < n; i++) {
-                            DataType pt = closure_call_arg_type(closure_sym, i);
+                            DataType pt = closure_call_arg_type_from_var(var, i);
                             if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64) {
                                 emit_asm(gen, "    movq xmm%d, %s  ; closure arg %d\n",
-                                         i, iregs[i], i);
+                                         i, ABI_I_REGS[i], i);
                             }
                         }
                     }
@@ -1289,7 +1363,9 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
 
                 /* Save object pointer in a frame slot — avoids clobbering callee-saved
                    registers (r14/r15) without a matching prologue push. */
-                int mc_this_off = alloc_local(gen, "__cpx_this");
+                char this_name[64];
+                snprintf(this_name, sizeof(this_name), "__cpx_this_%p", (void*)expr);
+                int mc_this_off = alloc_local(gen, this_name);
                 emit_asm(gen, "    mov [rbp - %d], rax  ; save object ptr\n", mc_this_off);
 
                 // Allocate shadow space + stack args (must be 16-byte aligned)
@@ -1486,7 +1562,9 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
 
             /* Save object pointer in a frame slot — avoids clobbering callee-saved
                registers (r14/r15) without a matching prologue push. */
-            int new_this_off = alloc_local(gen, "__cpx_new_this");
+            char new_this_name[64];
+            snprintf(new_this_name, sizeof(new_this_name), "__cpx_new_this_%p", (void*)expr);
+            int new_this_off = alloc_local(gen, new_this_name);
             emit_asm(gen, "    mov [rbp - %d], rax  ; save new object ptr\n", new_this_off);
 
             // Allocate shadow space + space for stack args (must be 16-byte aligned)
@@ -1645,6 +1723,64 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             emit_asm(gen, "    xor %s, %s\n", reg, reg);
             break;
         }
+        case EXPR_ARRAY_LITERAL: {
+            ArrayLiteralExpr* array_literal = &expr->as.array_literal;
+            int count = array_literal->element_count;
+
+            emit_asm(gen, "    ; Array literal allocation (count=%d)\n", count);
+
+            // 1. Allocate Array object (16 bytes)
+            int arc_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+            emit_asm(gen, "    sub rsp, %d  ; shadow space/alignment\n", arc_stack_adj);
+            emit_asm(gen, "    mov %s, 16  ; size of Array object\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    xor %s, %s  ; destructor (NULL)\n", ABI_I_REGS[1], ABI_I_REGS[1]);
+            emit_asm(gen, "    xor %s, %s  ; scanner (NULL)\n", ABI_I_REGS[2], ABI_I_REGS[2]);
+            emit_asm(gen, "    call arc_alloc_full\n");
+            emit_asm(gen, "    add rsp, %d\n", arc_stack_adj);
+
+            // rax now holds the Array object pointer.
+            // Push it to save it.
+            emit_asm(gen, "    push rax  ; save Array object pointer\n");
+
+            // 2. Allocate the elements data block (count * 8 bytes)
+            int malloc_size = count > 0 ? count * 8 : 8; // allocate at least 8 bytes
+            int malloc_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+            emit_asm(gen, "    sub rsp, %d  ; shadow space/alignment\n", malloc_stack_adj);
+            emit_asm(gen, "    mov %s, %d  ; size of elements buffer\n", ABI_I_REGS[0], malloc_size);
+            emit_asm(gen, "    call malloc\n");
+            emit_asm(gen, "    add rsp, %d\n", malloc_stack_adj);
+
+            // rax now holds the elements block pointer.
+            // Pop the Array object pointer into rbx.
+            emit_asm(gen, "    pop rbx  ; restore Array object pointer\n");
+
+            // Store length and data pointer in the Array object
+            emit_asm(gen, "    mov qword [rbx + 0], %d  ; set length\n", count);
+            emit_asm(gen, "    mov [rbx + 8], rax  ; set data pointer\n");
+
+            // Push both pointers so we can evaluate elements and write them
+            emit_asm(gen, "    push rbx  ; save Array object pointer\n");
+            emit_asm(gen, "    push rax  ; save data pointer\n");
+
+            // 3. Evaluate elements and store them
+            for (int i = 0; i < count; i++) {
+                // Generate code for element i -> result in rax
+                generate_asm_expr(gen, array_literal->elements[i], "rax", symbols);
+
+                // Load data pointer from stack (top of stack)
+                emit_asm(gen, "    mov rbx, [rsp]  ; load data pointer\n");
+                // Store element value
+                emit_asm(gen, "    mov [rbx + %d], rax  ; store element %d\n", i * 8, i);
+            }
+
+            // Pop data pointer and restore Array object pointer into target register
+            emit_asm(gen, "    pop rax  ; discard data pointer from stack\n");
+            emit_asm(gen, "    pop rax  ; restore Array object pointer\n");
+            if (strcmp(reg, "rax") != 0) {
+                emit_asm(gen, "    mov %s, rax\n", reg);
+            }
+            break;
+        }
     }
 }
 
@@ -1779,11 +1915,17 @@ static void generate_asm_print(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
         case TYPE_U64:
             emit_asm(gen, "    lea %s, [rel fmt_int]\n", ABI_I_REGS[0]);
             emit_asm(gen, "    mov %s, rax\n", ABI_I_REGS[1]);
+#ifndef _WIN32
+            emit_asm(gen, "    xor eax, eax\n");
+#endif
             emit_asm(gen, "    call printf\n");
             break;
         case TYPE_STRING:
             emit_asm(gen, "    lea %s, [rel fmt_str]\n", ABI_I_REGS[0]);
             emit_asm(gen, "    mov %s, rax\n", ABI_I_REGS[1]);
+#ifndef _WIN32
+            emit_asm(gen, "    xor eax, eax\n");
+#endif
             emit_asm(gen, "    call printf\n");
             break;
         case TYPE_FLOAT:
@@ -1807,6 +1949,9 @@ static void generate_asm_print(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
             emit_asm(gen, "%s:\n", true_label);
             emit_asm(gen, "    lea %s, [rel fmt_true]\n", ABI_I_REGS[0]);
             emit_asm(gen, "%s:\n", end_label);
+#ifndef _WIN32
+            emit_asm(gen, "    xor eax, eax\n");
+#endif
             emit_asm(gen, "    call printf\n");
             break;
         }
@@ -2199,8 +2344,7 @@ static void emit_lambda_function(AssemblyGenerator* gen, LambdaExpr* lambda, Sym
 
     {
         int total_params = lambda->capture_count + lambda->param_count;
-        int n = total_params < 4 ? total_params : 4;
-        const char* regs[] = {"rcx", "rdx", "r8", "r9"};
+        int n = total_params < ABI_I_REG_COUNT ? total_params : ABI_I_REG_COUNT;
         for (int j = 0; j < n; j++) {
             const char* param_name = NULL;
             DataType pt = lambda_call_arg_type(lambda, j);
@@ -2212,18 +2356,18 @@ static void emit_lambda_function(AssemblyGenerator* gen, LambdaExpr* lambda, Sym
             }
             off = find_local(gen, param_name);
             if (j < lambda->capture_count) {
-                emit_asm(gen, "    mov rax, [%s]\n", regs[j]);
+                emit_asm(gen, "    mov rax, [%s]\n", ABI_I_REGS[j]);
                 emit_asm(gen, "    mov [rbp - %d], rax\n", off);
             } else if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64) {
                 emit_asm(gen, "    movq [rbp - %d], xmm%d\n", off, j);
             } else {
-                emit_asm(gen, "    mov [rbp - %d], %s\n", off, regs[j]);
+                emit_asm(gen, "    mov [rbp - %d], %s\n", off, ABI_I_REGS[j]);
             }
         }
     }
 
-    for (int j = 4; j < lambda->capture_count + lambda->param_count; j++) {
-        int stack_offset = 48 + (j - 4) * 8;
+    for (int j = ABI_I_REG_COUNT; j < lambda->capture_count + lambda->param_count; j++) {
+        int stack_offset = 16 + ABI_SHADOW_SPACE + (j - ABI_I_REG_COUNT) * 8;
         const char* param_name = (j < lambda->capture_count)
             ? lambda->captured_vars[j]
             : lambda->parameters[j - lambda->capture_count].name;
@@ -2484,18 +2628,23 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             snprintf(loop_lbl, sizeof(loop_lbl), "L%d", lb);
             snprintf(end_lbl,  sizeof(end_lbl),  "L%d", gen->label_count++);
 
-            /* Store the iterable and its length in frame slots so they survive
-               calls inside the loop body without clobbering callee-saved regs. */
-            int fi_iter_off = alloc_local(gen, "__cpx_fi_iter");
-            int fi_len_off  = alloc_local(gen, "__cpx_fi_len");
+            char iter_name[64];
+            char len_name[64];
+            char idx_name[64];
+            snprintf(iter_name, sizeof(iter_name), "__cpx_fi_iter_%p", (void*)stmt);
+            snprintf(len_name, sizeof(len_name), "__cpx_fi_len_%p", (void*)stmt);
+            snprintf(idx_name, sizeof(idx_name), "__cpx_fi_idx_%p", (void*)stmt);
+
+            int fi_iter_off = alloc_local(gen, iter_name);
+            int fi_len_off  = alloc_local(gen, len_name);
+            int idx_off     = alloc_local(gen, idx_name);
+            int var_off     = alloc_local(gen, fi->var_name);
+
             emit_asm(gen, "    ; for-in loop over '%s'\n", fi->var_name);
             generate_asm_expr(gen, fi->iterable, "rax", symbols);
             emit_asm(gen, "    mov [rbp - %d], rax  ; save iterable ptr\n", fi_iter_off);
             emit_asm(gen, "    mov rax, [rax + 0]   ; load length\n");
             emit_asm(gen, "    mov [rbp - %d], rax  ; save length\n", fi_len_off);
-            /* Allocate index on stack */
-            int idx_off = alloc_local(gen, "__cpx_for_idx");
-            int var_off = alloc_local(gen, fi->var_name);
             emit_asm(gen, "    mov qword [rbp - %d], 0  ; idx = 0\n", idx_off);
 
             /* Push loop labels for break/continue */
@@ -2509,9 +2658,9 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             emit_asm(gen, "    mov rax, [rbp - %d]  ; load idx\n", idx_off);
             emit_asm(gen, "    cmp rax, [rbp - %d]  ; idx < length\n", fi_len_off);
             emit_asm(gen, "    jge %s  ; idx >= length → end\n", end_lbl);
-            /* Load arr[idx]: data starts at offset 8 (after length) */
+            /* Load arr[idx]: data pointer is at offset 8 of the array object */
             emit_asm(gen, "    mov rcx, [rbp - %d]  ; load iterable ptr\n", fi_iter_off);
-            emit_asm(gen, "    lea rbx, [rcx + 8]   ; base of data array\n");
+            emit_asm(gen, "    mov rbx, [rcx + 8]   ; load data pointer\n");
             emit_asm(gen, "    mov rcx, [rbx + rax*8]  ; load element\n");
             emit_asm(gen, "    mov [rbp - %d], rcx  ; store into loop var\n", var_off);
 
@@ -2527,7 +2676,9 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
         case STMT_MATCH: {
             MatchStmt* ms = &stmt->as.match_stmt;
             /* Store subject in a frame slot — avoids callee-saved register clobbering. */
-            int ms_subj_off = alloc_local(gen, "__cpx_match_subj");
+            char match_subj_name[64];
+            snprintf(match_subj_name, sizeof(match_subj_name), "__cpx_match_subj_%p", (void*)stmt);
+            int ms_subj_off = alloc_local(gen, match_subj_name);
             generate_asm_expr(gen, ms->subject, "rax", symbols);
             emit_asm(gen, "    mov [rbp - %d], rax  ; save match subject\n", ms_subj_off);
 
@@ -2602,17 +2753,23 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             snprintf(done_lbl,    sizeof(done_lbl),    "L_done_%d",    try_id);
 
             /* Allocate local jmp_buf (216 bytes on x64 Windows) */
-            int jbuf_off = alloc_local(gen, "__cpx_jbuf");
+            char jbuf_name[64];
+            snprintf(jbuf_name, sizeof(jbuf_name), "__cpx_jbuf_%p", (void*)stmt);
+            int jbuf_off = alloc_local(gen, jbuf_name);
             /* Grow frame by 216 bytes for jmp_buf (already allocated 8 bytes by alloc_local)
                — in a real impl we'd reserve 216; for simplicity reference as [rbp-jbuf_off] */
+
+            char prev_jbuf_name[64];
+            snprintf(prev_jbuf_name, sizeof(prev_jbuf_name), "__cpx_prev_jbuf_%p", (void*)stmt);
+            int prev_jbuf_off = alloc_local(gen, prev_jbuf_name);
 
             emit_asm(gen, "    ; try block (id=%d)\n", try_id);
             /* Save old jmp_buf ptr */
             emit_asm(gen, "    mov rax, [rel cpx_jmp_buf_ptr]\n");
-            emit_asm(gen, "    push rax  ; save old jmp_buf ptr\n");
+            emit_asm(gen, "    mov [rbp - %d], rax  ; save old jmp_buf ptr\n", prev_jbuf_off);
             /* Set new jmp_buf */
-            emit_asm(gen, "    lea rcx, [rbp - %d]  ; address of local jmp_buf\n", jbuf_off);
-            emit_asm(gen, "    mov [rel cpx_jmp_buf_ptr], rcx\n");
+            emit_asm(gen, "    lea %s, [rbp - %d]  ; address of local jmp_buf\n", ABI_I_REGS[0], jbuf_off);
+            emit_asm(gen, "    mov [rel cpx_jmp_buf_ptr], %s\n", ABI_I_REGS[0]);
             int jmp_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
             emit_asm(gen, "    sub rsp, %d\n", jmp_stack_adj);
             emit_asm(gen, "    call setjmp\n");
@@ -2641,7 +2798,7 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
             /* Finally block */
             emit_asm(gen, "%s:\n", finally_lbl);
             /* Restore previous jmp_buf ptr */
-            emit_asm(gen, "    pop rax  ; restore old jmp_buf ptr\n");
+            emit_asm(gen, "    mov rax, [rbp - %d]  ; restore old jmp_buf ptr\n", prev_jbuf_off);
             emit_asm(gen, "    mov [rel cpx_jmp_buf_ptr], rax\n");
             if (tr->finally_body) {
                 generate_asm_stmt(gen, tr->finally_body, symbols);

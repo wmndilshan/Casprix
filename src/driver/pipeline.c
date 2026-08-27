@@ -214,6 +214,9 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     Parser parser;
     init_parser(&parser, &lexer);
     ctx.statements = parse(&parser, &ctx.stmt_count);
+    if (g_debug_config.dump_ast) {
+        debug_dump_ast(ctx.statements, ctx.stmt_count);
+    }
     if (had_error) {
         if (!g_config.compact_output) CPX_ERROR("Parsing failed.");
         result = 65; goto done;
@@ -222,7 +225,6 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     perf_end(&g_diag.perf);
     if (!g_config.compact_output) {
         CPX_INFO("Parsed %d top-level statement(s)", ctx.stmt_count);
-        if (g_debug_config.dump_ast) debug_dump_ast(ctx.statements, ctx.stmt_count);
         debug_phase_end("Syntax Analysis");
     }
     debug_step_wait();

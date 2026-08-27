@@ -29,6 +29,7 @@ void init_semantic_analyzer(SemanticAnalyzer* analyzer) {
     init_symbol_table(analyzer->symbols);
     analyzer->scope_depth = 0;
     analyzer->current_function_return_type = TYPE_VOID;
+    analyzer->current_lambda_return_type = NULL;
     analyzer->in_function = false;
     analyzer->in_async_function = false;
     analyzer->current_class = NULL;
@@ -234,6 +235,16 @@ static bool expr_is_stack_closure_value(SemanticAnalyzer* analyzer, Expr* expr) 
     }
 
     symbol = lookup_symbol(analyzer->symbols, expr->as.variable.name);
+    if (symbol && symbol->is_closure_value) {
+        VariableExpr* var = &expr->as.variable;
+        var->is_closure_value = true;
+        var->closure_capture_count = symbol->closure_capture_count;
+        var->closure_lambda_id = symbol->closure_lambda_id;
+        if (symbol->closure_capture_types && symbol->closure_capture_count > 0 && !var->closure_capture_types) {
+            var->closure_capture_types = ALLOCATE(DataType, symbol->closure_capture_count);
+            memcpy(var->closure_capture_types, symbol->closure_capture_types, sizeof(DataType) * symbol->closure_capture_count);
+        }
+    }
     return symbol && symbol->is_closure_value;
 }
 
@@ -475,6 +486,23 @@ static void analyze_variable_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         // For now, we only warn, not error, to allow complex initialization patterns
         // This is acceptable since uninitialized variables will cause runtime errors anyway
         // A production compiler would do full dataflow analysis
+    }
+
+    if (symbol->is_closure_value) {
+        var->is_closure_value = true;
+        var->closure_capture_count = symbol->closure_capture_count;
+        var->closure_lambda_id = symbol->closure_lambda_id;
+        if (symbol->closure_capture_types && symbol->closure_capture_count > 0) {
+            var->closure_capture_types = ALLOCATE(DataType, symbol->closure_capture_count);
+            memcpy(var->closure_capture_types, symbol->closure_capture_types, sizeof(DataType) * symbol->closure_capture_count);
+        } else {
+            var->closure_capture_types = NULL;
+        }
+    } else {
+        var->is_closure_value = false;
+        var->closure_capture_count = 0;
+        var->closure_lambda_id = -1;
+        var->closure_capture_types = NULL;
     }
 
     expr->data_type = symbol->type;
@@ -871,6 +899,24 @@ static void analyze_index_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     expr->data_type = TYPE_INT;
 }
 
+static void analyze_array_literal_expr(SemanticAnalyzer* analyzer, Expr* expr) {
+    ArrayLiteralExpr* array_literal = &expr->as.array_literal;
+    DataType element_type = TYPE_I32;  // Default element type
+    for (int i = 0; i < array_literal->element_count; i++) {
+        analyze_expr(analyzer, array_literal->elements[i]);
+        if (i == 0) {
+            element_type = array_literal->elements[i]->data_type;
+        } else if (array_literal->elements[i]->data_type != TYPE_ERROR &&
+                   element_type != TYPE_ERROR &&
+                   !types_compatible(array_literal->elements[i]->data_type, element_type)) {
+            report_type_error(array_literal->elements[i]->line, array_literal->elements[i]->column,
+                              "Array elements must have compatible types");
+        }
+    }
+    expr->data_type = TYPE_CLASS;
+    expr->class_name = strdup("Array");
+}
+
 static void analyze_member_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     MemberAccessExpr* member = &expr->as.member;
     ClassSymbol* class_sym = NULL;
@@ -1164,6 +1210,7 @@ static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     ClosureMeta* closure_meta = analyze_closure(lambda, analyzer->symbols, analyzer->symbols);
 
     DataType prev_return_type = analyzer->current_function_return_type;
+    DataType* prev_lambda_return_type = analyzer->current_lambda_return_type;
     bool prev_in_function = analyzer->in_function;
 
     if (closure_meta) {
@@ -1200,6 +1247,7 @@ static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
 
     analyzer->current_function_return_type = lambda->return_type;
+    analyzer->current_lambda_return_type = &lambda->return_type;
     analyzer->in_function = true;
 
     enter_scope(analyzer->symbols, &analyzer->scope_depth);
@@ -1230,6 +1278,7 @@ static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     exit_scope(analyzer->symbols, &analyzer->scope_depth);
 
     analyzer->current_function_return_type = prev_return_type;
+    analyzer->current_lambda_return_type = prev_lambda_return_type;
     analyzer->in_function = prev_in_function;
 
     if (expr->type_info) {
@@ -1388,6 +1437,9 @@ static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             break;
         case EXPR_AWAIT:
             analyze_await_expr(analyzer, expr);
+            break;
+        case EXPR_ARRAY_LITERAL:
+            analyze_array_literal_expr(analyzer, expr);
             break;
     }
 }
@@ -2059,6 +2111,11 @@ static void analyze_return_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     if (ret->value) {
         analyze_expr(analyzer, ret->value);
 
+        if (analyzer->current_lambda_return_type && *analyzer->current_lambda_return_type == TYPE_ERROR) {
+            *analyzer->current_lambda_return_type = ret->value->data_type;
+            analyzer->current_function_return_type = ret->value->data_type;
+        }
+
         if (expr_is_stack_closure_value(analyzer, ret->value)) {
             report_semantic_error(stmt->line, stmt->column,
                 "Returning capturing closure values is not implemented yet");
@@ -2097,6 +2154,10 @@ static void analyze_return_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             report_type_error(stmt->line, stmt->column, msg);
         }
     } else {
+        if (analyzer->current_lambda_return_type && *analyzer->current_lambda_return_type == TYPE_ERROR) {
+            *analyzer->current_lambda_return_type = TYPE_VOID;
+            analyzer->current_function_return_type = TYPE_VOID;
+        }
         if (analyzer->current_function_return_type != TYPE_VOID) {
             char msg[256];
             snprintf(msg, sizeof(msg),

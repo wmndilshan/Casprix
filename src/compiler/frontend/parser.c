@@ -7,6 +7,7 @@ static bool check(Parser* parser, TokenType type);
 static bool match(Parser* parser, TokenType type);
 static void consume(Parser* parser, TokenType type, const char* message);
 static void synchronize(Parser* parser);
+static void synchronize_block(Parser* parser);
 static char* copy_identifier(Token* token);
 static bool token_text_equals(Token* token, const char* text);
 static Expr* error_expression(int line, int col);
@@ -81,9 +82,11 @@ static void consume(Parser* parser, TokenType type, const char* message) {
 static void synchronize(Parser* parser) {
     parser->panic_mode = false;
     
+    // Guarantee progress by advancing at least once
+    advance(parser);
+    
     while (parser->current.type != TOKEN_EOF) {
         if (parser->previous.type == TOKEN_SEMICOLON) return;
-        if (parser->previous.type == TOKEN_RBRACE) return;
         
         switch (parser->current.type) {
             case TOKEN_FUNC:
@@ -95,6 +98,50 @@ static void synchronize(Parser* parser) {
                 return;
             default:
                 ; // Do nothing
+        }
+        
+        advance(parser);
+    }
+}
+
+static void synchronize_block(Parser* parser) {
+    parser->panic_mode = false;
+    
+    // Guarantee progress by advancing at least once
+    advance(parser);
+    
+    while (parser->current.type != TOKEN_EOF) {
+        if (parser->current.type == TOKEN_RBRACE) return;
+        if (parser->previous.type == TOKEN_SEMICOLON) return;
+        
+        switch (parser->current.type) {
+            case TOKEN_FUNC:
+            case TOKEN_LET:
+            case TOKEN_MUT:
+            case TOKEN_CONST:
+            case TOKEN_IF:
+            case TOKEN_WHILE:
+            case TOKEN_FOR:
+            case TOKEN_RETURN:
+            case TOKEN_PRINT:
+            case TOKEN_MATCH:
+            case TOKEN_TRY:
+            case TOKEN_THROW:
+            case TOKEN_CLASS:
+            case TOKEN_STRUCT:
+            case TOKEN_ENUM_KW:
+            case TOKEN_UNION_KW:
+            case TOKEN_TRAIT:
+            case TOKEN_IMPL:
+            case TOKEN_EXTERN:
+            case TOKEN_PUBLIC:
+            case TOKEN_PRIVATE:
+            case TOKEN_PROTECTED:
+            case TOKEN_STATIC:
+            case TOKEN_ABSTRACT:
+                return;
+            default:
+                break;
         }
         
         advance(parser);
@@ -712,6 +759,8 @@ static Expr* lambda_expression(Parser* parser) {
             char* param_class_name = NULL;
             params[param_count].type = parse_type_with_class(parser, &param_class_name);
             params[param_count].class_name = param_class_name;
+            params[param_count].type_info = NULL;
+            params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
         } while (match(parser, TOKEN_COMMA));
@@ -746,10 +795,9 @@ static Expr* lambda_expression(Parser* parser) {
              body_expr->type == EXPR_INDEX)) {
             int stmt_capacity = 2;
             Stmt** stmts = ALLOCATE(Stmt*, stmt_capacity);
-            Expr* return_expr = ALLOCATE(Expr, 1);
+            Expr* return_expr = clone_expr(body_expr);
             Expr* assign_value;
 
-            memcpy(return_expr, body_expr, sizeof(Expr));
             advance(parser); /* consume '=' */
             assign_value = expression(parser);
 
@@ -1073,6 +1121,28 @@ static Expr* primary(Parser* parser) {
         return create_await_expr(expression, op.line, op.column);
     }
 
+    // Array literal: [1, 2, 3]
+    if (match(parser, TOKEN_LBRACKET)) {
+        int line = parser->previous.line;
+        int col = parser->previous.column;
+        int capacity = 8;
+        int count = 0;
+        Expr** elements = ALLOCATE(Expr*, capacity);
+
+        if (!check(parser, TOKEN_RBRACKET)) {
+            do {
+                if (count >= capacity) {
+                    capacity = GROW_CAPACITY(capacity);
+                    elements = GROW_ARRAY(Expr*, elements, count, capacity);
+                }
+                elements[count++] = expression(parser);
+            } while (match(parser, TOKEN_COMMA));
+        }
+
+        consume(parser, TOKEN_RBRACKET, "Expected ']' after array literal elements");
+        return create_array_literal_expr(elements, count, line, col);
+    }
+
     error_at_current(parser, "Expected expression");
     return error_expression(parser->current.line, parser->current.column);
 }
@@ -1118,8 +1188,15 @@ static Expr* postfix(Parser* parser) {
         int line = parser->previous.line;
         int col = parser->previous.column;
 
-        consume(parser, TOKEN_IDENTIFIER, "Expected property or method name after '.'");
-        char* member_name = copy_identifier(&parser->previous);
+        char* member_name = NULL;
+        if (match(parser, TOKEN_IDENTIFIER)) {
+            member_name = copy_identifier(&parser->previous);
+        } else if (match(parser, TOKEN_PRINT)) {
+            member_name = strdup("print");
+        } else {
+            error_at_current(parser, "Expected property or method name after '.'");
+            member_name = strdup("");
+        }
 
         // Check if it's a method call (followed by parentheses)
         if (match(parser, TOKEN_LPAREN)) {
@@ -1183,8 +1260,15 @@ static Expr* postfix_with_expr(Parser* parser, Expr* expr) {
         int line = parser->previous.line;
         int col = parser->previous.column;
 
-        consume(parser, TOKEN_IDENTIFIER, "Expected property or method name after '.'");
-        char* member_name = copy_identifier(&parser->previous);
+        char* member_name = NULL;
+        if (match(parser, TOKEN_IDENTIFIER)) {
+            member_name = copy_identifier(&parser->previous);
+        } else if (match(parser, TOKEN_PRINT)) {
+            member_name = strdup("print");
+        } else {
+            error_at_current(parser, "Expected property or method name after '.'");
+            member_name = strdup("");
+        }
 
         // Check if it's a method call (followed by parentheses)
         if (match(parser, TOKEN_LPAREN)) {
@@ -1385,6 +1469,10 @@ static Stmt* block_statement(Parser* parser) {
             statements = GROW_ARRAY(Stmt*, statements, count, capacity);
         }
         statements[count++] = declaration(parser);
+
+        if (parser->panic_mode) {
+            synchronize_block(parser);
+        }
     }
     
     consume(parser, TOKEN_RBRACE, "Expected '}' after block");
@@ -1402,6 +1490,10 @@ static Stmt* implicit_block_statement(Parser* parser, int line, int col) {
             statements = GROW_ARRAY(Stmt*, statements, count, capacity);
         }
         statements[count++] = declaration(parser);
+
+        if (parser->panic_mode) {
+            synchronize_block(parser);
+        }
     }
 
     consume(parser, TOKEN_RBRACE, "Expected '}' after implicit block");
@@ -1800,6 +1892,8 @@ static Stmt* function_declaration(Parser* parser) {
             char* param_class_name = NULL;
             params[param_count].type = parse_type_with_class(parser, &param_class_name);
             params[param_count].class_name = param_class_name;
+            params[param_count].type_info = NULL;
+            params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
         } while (match(parser, TOKEN_COMMA));
@@ -2012,6 +2106,8 @@ static Stmt* class_declaration(Parser* parser) {
                     char* param_class_name = NULL;
                     params[param_count].type = parse_type_with_class(parser, &param_class_name);
                     params[param_count].class_name = param_class_name;
+                    params[param_count].type_info = NULL;
+                    params[param_count].ownership = OWNERSHIP_OWNED;
 
                     param_count++;
                 } while (match(parser, TOKEN_COMMA));
@@ -2110,6 +2206,10 @@ static Stmt* class_declaration(Parser* parser) {
         } else {
             error_at_current(parser, "Expected field or method declaration in class body");
             advance(parser); // Skip the unexpected token
+        }
+
+        if (parser->panic_mode) {
+            synchronize_block(parser);
         }
     }
 
@@ -2362,16 +2462,41 @@ static Stmt* declaration(Parser* parser) {
         // Now continue parsing the rest as postfix operations (., [])
         expr = postfix_with_expr(parser, expr);
 
-        // Check if this is an assignment
-        if (match(parser, TOKEN_ASSIGN)) {
+        // Check if this is an assignment (simple or compound)
+        TokenType assign_op = parser->current.type;
+        if (assign_op == TOKEN_ASSIGN ||
+            assign_op == TOKEN_PLUS_ASSIGN  || assign_op == TOKEN_MINUS_ASSIGN ||
+            assign_op == TOKEN_STAR_ASSIGN  || assign_op == TOKEN_SLASH_ASSIGN ||
+            assign_op == TOKEN_PERCENT_ASSIGN) {
+
+            advance(parser);  // consume the assignment token
             int line = parser->previous.line;
             int col = parser->previous.column;
 
-            if (expr->type != EXPR_VARIABLE && expr->type != EXPR_MEMBER_ACCESS) {
+            if (expr->type != EXPR_VARIABLE && expr->type != EXPR_MEMBER_ACCESS &&
+                expr->type != EXPR_INDEX) {
                 error_at_current(parser, "Invalid assignment target");
             }
 
             Expr* value = expression(parser);
+
+            // Desugar compound assignment: x += y  =>  x = x + y
+            if (assign_op != TOKEN_ASSIGN) {
+                TokenType bin_op;
+                switch (assign_op) {
+                    case TOKEN_PLUS_ASSIGN:    bin_op = TOKEN_PLUS;    break;
+                    case TOKEN_MINUS_ASSIGN:   bin_op = TOKEN_MINUS;   break;
+                    case TOKEN_STAR_ASSIGN:    bin_op = TOKEN_STAR;    break;
+                    case TOKEN_SLASH_ASSIGN:   bin_op = TOKEN_SLASH;   break;
+                    case TOKEN_PERCENT_ASSIGN: bin_op = TOKEN_PERCENT; break;
+                    default: bin_op = TOKEN_PLUS; break;
+                }
+                // Clone the target expression for the right-hand side
+                Expr* lhs_copy = ALLOCATE(Expr, 1);
+                memcpy(lhs_copy, expr, sizeof(Expr));
+                value = create_binary_expr(lhs_copy, bin_op, value, line, col);
+            }
+
             // Semicolons are optional
             match(parser, TOKEN_SEMICOLON);
             return create_assignment_stmt(expr, value, line, col);
@@ -2415,6 +2540,8 @@ static Stmt* extern_declaration(Parser* parser) {
             char* param_class_name = NULL;
             params[param_count].type = parse_type_with_class(parser, &param_class_name);
             params[param_count].class_name = param_class_name;
+            params[param_count].type_info = NULL;
+            params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
         } while (match(parser, TOKEN_COMMA));
@@ -2477,6 +2604,8 @@ static Stmt* trait_statement(Parser* parser) {
                 params[pcnt].name = copy_identifier(&parser->previous);
                 params[pcnt].type = TYPE_VOID;
                 params[pcnt].class_name = NULL;
+                params[pcnt].type_info = NULL;
+                params[pcnt].ownership = OWNERSHIP_OWNED;
                 if (match(parser, TOKEN_COLON)) {
                     params[pcnt].type = parse_type(parser);
                 }
@@ -2497,7 +2626,7 @@ static Stmt* trait_statement(Parser* parser) {
         bool has_default = false;
         if (match(parser, TOKEN_SEMICOLON)) {
             /* abstract method — no body */
-        } else if (check(parser, TOKEN_LBRACE)) {
+        } else if (match(parser, TOKEN_LBRACE)) {
             has_default = true;
             default_body = block_statement(parser);
         } else {
@@ -2516,6 +2645,10 @@ static Stmt* trait_statement(Parser* parser) {
         methods[cnt].has_default    = has_default;
         methods[cnt].default_body   = default_body;
         cnt++;
+
+        if (parser->panic_mode) {
+            synchronize_block(parser);
+        }
     }
 
     consume(parser, TOKEN_RBRACE, "Expected '}' after trait body");
@@ -2568,6 +2701,10 @@ static Stmt* struct_declaration(Parser* parser) {
         // Allow comma or newline between fields
         match(parser, TOKEN_COMMA);
         match(parser, TOKEN_SEMICOLON);
+
+        if (parser->panic_mode) {
+            synchronize_block(parser);
+        }
     }
 
     consume(parser, TOKEN_RBRACE, "Expected '}' after struct body");
@@ -2634,6 +2771,10 @@ static Stmt* enum_declaration(Parser* parser) {
         // Allow comma or newline between variants
         match(parser, TOKEN_COMMA);
         match(parser, TOKEN_SEMICOLON);
+
+        if (parser->panic_mode) {
+            synchronize_block(parser);
+        }
     }
 
     consume(parser, TOKEN_RBRACE, "Expected '}' after enum body");
@@ -2672,6 +2813,10 @@ static Stmt* union_declaration(Parser* parser) {
 
         match(parser, TOKEN_COMMA);
         match(parser, TOKEN_SEMICOLON);
+
+        if (parser->panic_mode) {
+            synchronize_block(parser);
+        }
     }
 
     consume(parser, TOKEN_RBRACE, "Expected '}' after union body");
@@ -2750,6 +2895,10 @@ static Stmt* impl_declaration(Parser* parser) {
         consume(parser, TOKEN_FUNC, "Expected 'func' in impl block");
         methods[method_count] = function_declaration(parser);
         method_count++;
+
+        if (parser->panic_mode) {
+            synchronize_block(parser);
+        }
     }
 
     consume(parser, TOKEN_RBRACE, "Expected '}' after impl body");
