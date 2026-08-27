@@ -36,6 +36,34 @@ static const char* token_names[] = {
     [TOKEN_STRING_TYPE] = "STRING_TYPE",
     [TOKEN_BOOL_TYPE] = "BOOL_TYPE",
     [TOKEN_VOID_TYPE] = "VOID_TYPE",
+    [TOKEN_I8_TYPE] = "I8_TYPE",
+    [TOKEN_I16_TYPE] = "I16_TYPE",
+    [TOKEN_I32_TYPE] = "I32_TYPE",
+    [TOKEN_I64_TYPE] = "I64_TYPE",
+    [TOKEN_I128_TYPE] = "I128_TYPE",
+    [TOKEN_U8_TYPE] = "U8_TYPE",
+    [TOKEN_U16_TYPE] = "U16_TYPE",
+    [TOKEN_U32_TYPE] = "U32_TYPE",
+    [TOKEN_U64_TYPE] = "U64_TYPE",
+    [TOKEN_U128_TYPE] = "U128_TYPE",
+    [TOKEN_F16_TYPE] = "F16_TYPE",
+    [TOKEN_F32_TYPE] = "F32_TYPE",
+    [TOKEN_F64_TYPE] = "F64_TYPE",
+    [TOKEN_BF16_TYPE] = "BF16_TYPE",
+    [TOKEN_CHAR_TYPE] = "CHAR_TYPE",
+    [TOKEN_STRBUF_TYPE] = "STRBUF_TYPE",
+    [TOKEN_ARRAY_TYPE] = "ARRAY_TYPE",
+    [TOKEN_SLICE_TYPE] = "SLICE_TYPE",
+    [TOKEN_PTR_TYPE] = "PTR_TYPE",
+    [TOKEN_RAWPTR_TYPE] = "RAWPTR_TYPE",
+    [TOKEN_REF_TYPE] = "REF_TYPE",
+    [TOKEN_TENSOR_TYPE] = "TENSOR_TYPE",
+    [TOKEN_LET] = "LET",
+    [TOKEN_CONST] = "CONST",
+    [TOKEN_MUT] = "MUT",
+    [TOKEN_STRUCT] = "STRUCT",
+    [TOKEN_ENUM_KW] = "ENUM_KW",
+    [TOKEN_UNION_KW] = "UNION_KW",
     [TOKEN_PRINT] = "PRINT",
     [TOKEN_IF] = "IF",
     [TOKEN_ELIF] = "ELIF",
@@ -59,16 +87,29 @@ static const char* token_names[] = {
     [TOKEN_PUBLIC] = "PUBLIC",
     [TOKEN_PROTECTED] = "PROTECTED",
     [TOKEN_EXTERN] = "EXTERN",
-    [TOKEN_CONST] = "CONST",
-    [TOKEN_MUT] = "MUT",
+    [TOKEN_ASYNC] = "ASYNC",
+    [TOKEN_AWAIT] = "AWAIT",
+    [TOKEN_SPAWN] = "SPAWN",
+    [TOKEN_MOVE] = "MOVE",
+    [TOKEN_UNSAFE] = "UNSAFE",
     [TOKEN_COPY] = "COPY",
     [TOKEN_WHERE] = "WHERE",
+    [TOKEN_MATCH] = "MATCH",
+    [TOKEN_IN] = "IN",
+    [TOKEN_TRY] = "TRY",
+    [TOKEN_CATCH] = "CATCH",
+    [TOKEN_FINALLY] = "FINALLY",
+    [TOKEN_THROW] = "THROW",
+    [TOKEN_TRAIT] = "TRAIT",
+    [TOKEN_IMPL] = "IMPL",
+    [TOKEN_IMPLEMENTS] = "IMPLEMENTS",
     [TOKEN_PLUS] = "PLUS",
     [TOKEN_MINUS] = "MINUS",
     [TOKEN_STAR] = "STAR",
     [TOKEN_SLASH] = "SLASH",
     [TOKEN_PERCENT] = "PERCENT",
     [TOKEN_ASSIGN] = "ASSIGN",
+    [TOKEN_INFER_ASSIGN] = "INFER_ASSIGN",
     [TOKEN_EQUAL] = "EQUAL",
     [TOKEN_NOT_EQUAL] = "NOT_EQUAL",
     [TOKEN_LESS] = "LESS",
@@ -78,6 +119,16 @@ static const char* token_names[] = {
     [TOKEN_AND] = "AND",
     [TOKEN_OR] = "OR",
     [TOKEN_NOT] = "NOT",
+    [TOKEN_PLUS_ASSIGN] = "PLUS_ASSIGN",
+    [TOKEN_MINUS_ASSIGN] = "MINUS_ASSIGN",
+    [TOKEN_STAR_ASSIGN] = "STAR_ASSIGN",
+    [TOKEN_SLASH_ASSIGN] = "SLASH_ASSIGN",
+    [TOKEN_PERCENT_ASSIGN] = "PERCENT_ASSIGN",
+    [TOKEN_BITAND] = "BITAND",
+    [TOKEN_BITXOR] = "BITXOR",
+    [TOKEN_BITNOT] = "BITNOT",
+    [TOKEN_LSHIFT] = "LSHIFT",
+    [TOKEN_RSHIFT] = "RSHIFT",
     [TOKEN_LPAREN] = "LPAREN",
     [TOKEN_RPAREN] = "RPAREN",
     [TOKEN_LBRACE] = "LBRACE",
@@ -249,6 +300,7 @@ static const char* expr_type_name(ExprType type) {
         case EXPR_INDEX: return "Index";
         case EXPR_LAMBDA: return "Lambda";
         case EXPR_GENERIC_INST: return "GenericInst";
+        case EXPR_ARRAY_LITERAL: return "ArrayLiteral";
         default: return "Unknown";
     }
 }
@@ -461,6 +513,15 @@ void debug_print_expr(Expr* expr, int indent) {
                 fprintf(out, "%s", debug_data_type_name(expr->as.generic_inst.type_args[i]));
             }
             fprintf(out, ">\n");
+            break;
+
+        case EXPR_ARRAY_LITERAL:
+            fprintf(out, " [\n");
+            for (int i = 0; i < expr->as.array_literal.element_count; i++) {
+                debug_print_expr(expr->as.array_literal.elements[i], indent + 1);
+            }
+            debug_indent(indent);
+            fprintf(out, "]\n");
             break;
 
         default:

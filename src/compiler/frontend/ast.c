@@ -458,6 +458,9 @@ void free_expr(Expr* expr) {
                 if (expr->as.lambda.parameters[i].class_name) {
                     free(expr->as.lambda.parameters[i].class_name);
                 }
+                if (expr->as.lambda.parameters[i].type_info) {
+                    free_type_info(expr->as.lambda.parameters[i].type_info);
+                }
             }
             if (expr->as.lambda.parameters) {
                 free(expr->as.lambda.parameters);
@@ -691,6 +694,12 @@ void free_stmt(Stmt* stmt) {
             free(stmt->as.function.name);
             for (int i = 0; i < stmt->as.function.param_count; i++) {
                 free(stmt->as.function.parameters[i].name);
+                if (stmt->as.function.parameters[i].class_name) {
+                    free(stmt->as.function.parameters[i].class_name);
+                }
+                if (stmt->as.function.parameters[i].type_info) {
+                    free_type_info(stmt->as.function.parameters[i].type_info);
+                }
             }
             free(stmt->as.function.parameters);
             free_stmt(stmt->as.function.body);
@@ -750,6 +759,12 @@ void free_stmt(Stmt* stmt) {
                 free(stmt->as.class_stmt.methods[i].name);
                 for (int j = 0; j < stmt->as.class_stmt.methods[i].param_count; j++) {
                     free(stmt->as.class_stmt.methods[i].parameters[j].name);
+                    if (stmt->as.class_stmt.methods[i].parameters[j].class_name) {
+                        free(stmt->as.class_stmt.methods[i].parameters[j].class_name);
+                    }
+                    if (stmt->as.class_stmt.methods[i].parameters[j].type_info) {
+                        free_type_info(stmt->as.class_stmt.methods[i].parameters[j].type_info);
+                    }
                 }
                 if (stmt->as.class_stmt.methods[i].parameters) {
                     free(stmt->as.class_stmt.methods[i].parameters);
@@ -785,6 +800,9 @@ void free_stmt(Stmt* stmt) {
                 free(stmt->as.extern_stmt.parameters[i].name);
                 if (stmt->as.extern_stmt.parameters[i].class_name) {
                     free(stmt->as.extern_stmt.parameters[i].class_name);
+                }
+                if (stmt->as.extern_stmt.parameters[i].type_info) {
+                    free_type_info(stmt->as.extern_stmt.parameters[i].type_info);
                 }
             }
             free(stmt->as.extern_stmt.parameters);

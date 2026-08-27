@@ -10,6 +10,150 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+/* ─── Path-sensitive move state ─────────────────────────────────────────────
+ *
+ * The move bit lives here, in a Symbol*-keyed map, rather than in the
+ * per-symbol OwnershipInfo, so branch/loop analysis can fork and merge it.
+ */
+
+static OwnMoveEntry* move_find(OwnMoveState* st, void* sym) {
+    for (int i = 0; i < st->count; i++) {
+        if (st->entries[i].sym == sym) return &st->entries[i];
+    }
+    return NULL;
+}
+
+static void move_set(OwnMoveState* st, void* sym, bool moved, int line) {
+    OwnMoveEntry* e = move_find(st, sym);
+    if (!e) {
+        if (st->count >= st->capacity) {
+            int nc = st->capacity < 8 ? 8 : st->capacity * 2;
+            st->entries = realloc(st->entries, nc * sizeof(OwnMoveEntry));
+            st->capacity = nc;
+        }
+        e = &st->entries[st->count++];
+        e->sym = sym;
+    }
+    e->moved = moved;
+    e->move_line = line;
+}
+
+static bool move_is_set(OwnMoveState* st, void* sym) {
+    OwnMoveEntry* e = move_find(st, sym);
+    return e && e->moved;
+}
+
+static int move_line_of(OwnMoveState* st, void* sym) {
+    OwnMoveEntry* e = move_find(st, sym);
+    return e ? e->move_line : 0;
+}
+
+static void state_copy(OwnMoveState* dst, const OwnMoveState* src) {
+    dst->count = src->count;
+    dst->capacity = src->count > 0 ? src->count : 0;
+    dst->entries = NULL;
+    if (src->count > 0) {
+        dst->entries = malloc(src->count * sizeof(OwnMoveEntry));
+        memcpy(dst->entries, src->entries, src->count * sizeof(OwnMoveEntry));
+    }
+}
+
+void own_state_snapshot(OwnershipChecker* checker, OwnStateSnapshot* out) {
+    state_copy(out, &checker->move_state);
+}
+
+void own_state_copy(OwnStateSnapshot* out, const OwnStateSnapshot* src) {
+    state_copy(out, src);
+}
+
+void own_state_restore(OwnershipChecker* checker, const OwnStateSnapshot* snap) {
+    free(checker->move_state.entries);
+    state_copy(&checker->move_state, snap);
+}
+
+void own_state_merge_intersect(OwnStateSnapshot* dst, const OwnStateSnapshot* src) {
+    /* Keep an entry moved only if it is moved in `src` too. Anything moved in
+     * dst but not moved in src becomes not-moved. */
+    for (int i = 0; i < dst->count; i++) {
+        if (!dst->entries[i].moved) continue;
+        const OwnMoveEntry* s = NULL;
+        for (int j = 0; j < src->count; j++) {
+            if (src->entries[j].sym == dst->entries[i].sym) { s = &src->entries[j]; break; }
+        }
+        if (!s || !s->moved) {
+            dst->entries[i].moved = false;
+        }
+    }
+}
+
+void own_state_merge_union(OwnStateSnapshot* dst, const OwnStateSnapshot* src) {
+    for (int j = 0; j < src->count; j++) {
+        if (!src->entries[j].moved) continue;
+        OwnMoveEntry* d = NULL;
+        for (int i = 0; i < dst->count; i++) {
+            if (dst->entries[i].sym == src->entries[j].sym) { d = &dst->entries[i]; break; }
+        }
+        if (d) {
+            if (!d->moved) { d->moved = true; d->move_line = src->entries[j].move_line; }
+        } else {
+            if (dst->count >= dst->capacity) {
+                int nc = dst->capacity < 8 ? 8 : dst->capacity * 2;
+                dst->entries = realloc(dst->entries, nc * sizeof(OwnMoveEntry));
+                dst->capacity = nc;
+            }
+            dst->entries[dst->count++] = src->entries[j];
+        }
+    }
+}
+
+bool own_state_equal(const OwnStateSnapshot* a, const OwnStateSnapshot* b) {
+    /* Compare only the set of symbols that are `moved` in each. */
+    for (int i = 0; i < a->count; i++) {
+        if (!a->entries[i].moved) continue;
+        bool found = false;
+        for (int j = 0; j < b->count; j++) {
+            if (b->entries[j].sym == a->entries[i].sym && b->entries[j].moved) { found = true; break; }
+        }
+        if (!found) return false;
+    }
+    for (int j = 0; j < b->count; j++) {
+        if (!b->entries[j].moved) continue;
+        bool found = false;
+        for (int i = 0; i < a->count; i++) {
+            if (a->entries[i].sym == b->entries[j].sym && a->entries[i].moved) { found = true; break; }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+void own_state_free(OwnStateSnapshot* snap) {
+    if (!snap) return;
+    free(snap->entries);
+    snap->entries = NULL;
+    snap->count = snap->capacity = 0;
+}
+
+void own_state_forget_scope(OwnershipChecker* checker, int scope_level) {
+    OwnMoveState* st = &checker->move_state;
+    int w = 0;
+    for (int i = 0; i < st->count; i++) {
+        Symbol* s = (Symbol*)st->entries[i].sym;
+        if (s && s->scope_depth == scope_level) continue; /* drop */
+        st->entries[w++] = st->entries[i];
+    }
+    st->count = w;
+}
+
+void ownership_reset_function(OwnershipChecker* checker) {
+    if (!checker) return;
+    free(checker->move_state.entries);
+    checker->move_state.entries = NULL;
+    checker->move_state.count = 0;
+    checker->move_state.capacity = 0;
+    checker->suppress_diagnostics = false;
+}
+
 // Get ownership info from symbol (add to Symbol struct if needed)
 static OwnershipInfo* get_ownership_info(Symbol* sym) {
     // For now, we'll store it in Symbol's extra data
@@ -75,7 +219,7 @@ void linear_view_consume(OwnershipChecker* checker,
 
     info->consume_count++;
 
-    if (info->consume_count > 1 || info->state == OWNERSHIP_MOVED) {
+    if (info->consume_count > 1 || move_is_set(&checker->move_state, sym)) {
         char msg[256];
         snprintf(msg, sizeof(msg),
                  "Use of consumed StringView '%s' (linear values may be "
@@ -85,9 +229,10 @@ void linear_view_consume(OwnershipChecker* checker,
         return;
     }
 
-    /* First consume → mark MOVED so the regular ownership checker forbids
-     * any subsequent read through `check_ownership_valid`. */
-    info->state          = OWNERSHIP_MOVED;
+    /* First consume → record the move on the current path so the regular
+     * ownership checker forbids any subsequent read through
+     * check_ownership_valid. */
+    move_set(&checker->move_state, sym, true, line);
     info->move_location  = line;
 }
 
@@ -95,6 +240,10 @@ void ownership_checker_init(OwnershipChecker* checker, SemanticAnalyzer* analyze
     checker->analyzer = analyzer;
     checker->current_scope = 0;
     checker->in_unsafe_block = false;
+    checker->move_state.entries = NULL;
+    checker->move_state.count = 0;
+    checker->move_state.capacity = 0;
+    checker->suppress_diagnostics = false;
 }
 
 bool check_ownership_valid(OwnershipChecker* checker, const char* var_name, int line) {
@@ -109,13 +258,13 @@ bool check_ownership_valid(OwnershipChecker* checker, const char* var_name, int 
         return true;
     }
 
-    OwnershipInfo* info = get_ownership_info(sym);
-    
-    if (info->state == OWNERSHIP_MOVED) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "Use of moved value '%s' (moved at line %d)",
-                 var_name, info->move_location);
-        report_semantic_error(line, 0, msg);
+    if (move_is_set(&checker->move_state, sym)) {
+        if (!checker->suppress_diagnostics) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Use of moved value '%s' (moved at line %d)",
+                     var_name, move_line_of(&checker->move_state, sym));
+            report_semantic_error(line, 0, msg);
+        }
         return false;
     }
 
@@ -131,18 +280,23 @@ void mark_moved(OwnershipChecker* checker, const char* var_name, int line) {
     if (!sym) return;
 
     OwnershipInfo* info = get_ownership_info(sym);
-    
+
     // Can't move if there are active borrows
     if (info->borrow_count > 0 || info->has_mut_borrow) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "Cannot move '%s' while borrowed", var_name);
-        report_semantic_error(line, 0, msg);
+        if (!checker->suppress_diagnostics) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Cannot move '%s' while borrowed", var_name);
+            report_semantic_error(line, 0, msg);
+        }
         return;
     }
 
-    info->state = OWNERSHIP_MOVED;
+    /* A second move on the same path is a use-after-move; the read of the
+     * variable inside the `move` expression is already reported by
+     * check_ownership_valid, so just record the (idempotent) move here. */
+    move_set(&checker->move_state, sym, true, line);
     info->move_location = line;
-    
+
     CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Marked '%s' as moved at line %d", var_name, line);
 }
 
@@ -165,7 +319,7 @@ bool add_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     }
 
     // Can't borrow if moved
-    if (info->state == OWNERSHIP_MOVED) {
+    if (move_is_set(&checker->move_state, sym)) {
         char msg[256];
         snprintf(msg, sizeof(msg), "Cannot borrow moved value '%s'", var_name);
         report_semantic_error(line, 0, msg);
@@ -200,7 +354,7 @@ bool add_mut_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     }
 
     // Can't borrow if moved
-    if (info->state == OWNERSHIP_MOVED) {
+    if (move_is_set(&checker->move_state, sym)) {
         char msg[256];
         snprintf(msg, sizeof(msg), "Cannot borrow moved value '%s'", var_name);
         report_semantic_error(line, 0, msg);
@@ -290,6 +444,10 @@ void validate_scope_end(OwnershipChecker* checker, int scope_level) {
             info->state = OWNERSHIP_OWNED;
         }
     }
+
+    /* Drop path-sensitive move entries for the symbols leaving scope — their
+     * Symbol* is about to be freed by exit_scope(). */
+    own_state_forget_scope(checker, scope_level);
 
     CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Validated scope end at level %d", scope_level);
 }

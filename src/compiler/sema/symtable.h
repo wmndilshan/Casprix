@@ -8,13 +8,16 @@ typedef enum {
     SYMBOL_VARIABLE,
     SYMBOL_FUNCTION,
     SYMBOL_PARAMETER,
-    SYMBOL_CLASS
+    SYMBOL_CLASS,
+    SYMBOL_TRAIT
 } SymbolKind;
 
 // Forward declarations
 typedef struct FieldSymbol FieldSymbol;
 typedef struct MethodSymbol MethodSymbol;
 typedef struct ClassSymbol ClassSymbol;
+typedef struct TraitMethodSymbol TraitMethodSymbol;
+typedef struct TraitSymbol TraitSymbol;
 
 // Field symbol for class members
 struct FieldSymbol {
@@ -56,6 +59,23 @@ struct ClassSymbol {
     char* return_class_name;  // For methods that return a class type
 };
 
+// Trait method signature (required-method contract)
+struct TraitMethodSymbol {
+    char* name;
+    DataType return_type;
+    char* return_class_name;  // For return_type == TYPE_CLASS
+    DataType* param_types;
+    int param_count;
+    bool has_default;         // True if the trait provides a default implementation
+};
+
+// Trait symbol
+struct TraitSymbol {
+    char* name;
+    TraitMethodSymbol* methods;
+    int method_count;
+};
+
 typedef struct {
     char* name;
     SymbolKind kind;
@@ -78,6 +98,9 @@ typedef struct {
 
     // For classes
     ClassSymbol* class_info;
+
+    // For traits
+    TraitSymbol* trait_info;
 
     // Ownership tracking (Casperix)
     void* ownership_data;  // Points to OwnershipInfo structure
@@ -117,5 +140,13 @@ bool add_method_to_class(ClassSymbol* class_sym, const char* name, DataType retu
 FieldSymbol* find_field(ClassSymbol* class_sym, const char* name);
 MethodSymbol* find_method(ClassSymbol* class_sym, const char* name);
 bool is_subclass_of(ClassSymbol* child, ClassSymbol* parent);
+
+// Trait-specific operations
+bool add_trait(SymbolTable* table, const char* name, int scope_depth);
+TraitSymbol* lookup_trait(SymbolTable* table, const char* name);
+bool add_method_to_trait(TraitSymbol* trait_sym, const char* name, DataType return_type,
+                         const char* return_class_name, DataType* param_types,
+                         int param_count, bool has_default);
+TraitMethodSymbol* find_trait_method(TraitSymbol* trait_sym, const char* name);
 
 #endif // SYMTABLE_H

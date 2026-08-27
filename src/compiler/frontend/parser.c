@@ -899,6 +899,7 @@ static Expr* primary(Parser* parser) {
         expr->column = col;
         expr->data_type = TYPE_CLASS;
         expr->class_name = NULL;
+        expr->type_info = NULL;
         
         // Copy member name
         expr->as.super_expr.member_name = ALLOCATE(char, member.length + 1);
@@ -1074,6 +1075,7 @@ static Expr* primary(Parser* parser) {
             expr->column = name_token.column;
             expr->data_type = TYPE_CLASS;  // Generic instantiation produces a class type
             expr->class_name = NULL;  // Will be set during semantic analysis
+            expr->type_info = NULL;
 
             expr->as.generic_inst.base_name = name;
             expr->as.generic_inst.type_args = type_args;

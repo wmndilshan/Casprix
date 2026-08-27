@@ -45,6 +45,9 @@
 #include "util/tools.h"
 #include "util/module.h"
 
+/* CVM interpreter — for `--execute` (in-process run, no bytecode file). */
+#include "../../runtime/vm/cvm_engine.h"
+
 /* ============================================================================
  * CompileCtx — owns all heap-allocated per-compilation state.
  *
@@ -397,6 +400,10 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
             perf_end(&g_diag.perf);
             printf("  Inlined %d calls (%d instructions)\n",
                    inl.calls_inlined, inl.instructions_copied);
+            if (g_config.dump_mir) {
+                printf("\n  === MIR (after inlining) ===\n");
+                mir_print_module(ctx.mir_module, stdout);
+            }
             debug_phase_end("Inlining");
             debug_step_wait();
         }
@@ -437,6 +444,61 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
             result = 65; goto done;
         }
         if (!g_config.compact_output) CPX_INFO("MIR verification passed");
+
+        /* --- Phase 5.9: in-process execution via the CVM (--execute) ---
+         *
+         * Runs the fully-lowered MIR module directly through the CVM
+         * interpreter — no .cpxv/.cpxj serialization, no separate loader
+         * (Option A: bypass the incomplete bytecode formats entirely).
+         *
+         * Entry point is `main` (the Casprix `func main()` convention); if
+         * absent, the synthetic `__casprix_entry` (file-scope top-level
+         * statements) is used. A no-arg entry is assumed; argv passthrough
+         * and JIT tier-up (jit=NULL here → pure interpretation) are
+         * follow-ups.
+         *
+         * `--execute` is terminal: whatever the mode (`--execute` alone,
+         * `--vm --execute`, …) the driver runs the program and exits with
+         * main()'s return value as the process exit code, matching normal
+         * language-runtime convention. No output artifact is emitted. */
+        if (g_config.execute) {
+            debug_phase_start("EXECUTE (CVM)");
+
+            const char* entry = "main";
+            if (!mir_module_find_function(ctx.mir_module, entry)) {
+                entry = "__casprix_entry";
+            }
+            if (!mir_module_find_function(ctx.mir_module, entry)) {
+                printf("\n  [ERROR] --execute: no entry point (define `func main()` "
+                       "or provide top-level statements).\n");
+                result = 65; goto done;
+            }
+
+            if (!g_config.compact_output)
+                CPX_INFO("Executing '%s' via CVM interpreter...", entry);
+
+            CvmState* vm = cvm_state_create(ctx.mir_module, /*jit=*/NULL);
+            if (!vm) {
+                printf("\n  [ERROR] --execute: could not create CVM state.\n");
+                result = 74; goto done;
+            }
+
+            int64_t rc = cvm_run(vm, entry, /*args=*/NULL, /*n_args=*/0);
+            int trap = vm->trap_code;
+            if (g_config.verbose) cvm_print_stats(vm, stdout);
+            cvm_state_destroy(vm);
+
+            debug_phase_end("Execute (CVM)");
+
+            if (trap != 0) {
+                printf("\n  [ERROR] --execute: program trapped (code %d).\n", trap);
+                result = 70; goto done;
+            }
+
+            /* main()'s return becomes the process exit code (low 8 bits). */
+            result = (int)(rc & 0xFF);
+            goto done;
+        }
     }
 
     /* --- Phase 6: AST-level optimization (legacy path) --- */

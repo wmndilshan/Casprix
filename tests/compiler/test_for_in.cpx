@@ -1,7 +1,7 @@
 // test_for_in.cpx — Tests for-in iterator syntax
 // Run: casprix tests/compiler/test_for_in.cpx
 
-func sum(items: Int[]) -> Int {
+func sum(items: Array<Int>) -> Int {
     total: Int = 0
     for item in items {
         total += item
@@ -10,7 +10,7 @@ func sum(items: Int[]) -> Int {
 }
 
 func main() -> Int {
-    numbers: Int[] = [1, 2, 3, 4, 5]
+    numbers: Array<Int> = [1, 2, 3, 4, 5]
 
     // for-in loop
     for n in numbers {

@@ -872,6 +872,79 @@ done_sw:
 }
 
 /* ─────────────────────────────────────────────────────────────
+ * Host intrinsics
+ *
+ * MIR lowering emits ordinary MIR_CALL instructions to a fixed set of
+ * runtime output functions (nuwan_print_*).  Under `--execute` there is no
+ * linker step, so these are not in the module's function list.  We provide
+ * a tiny built-in dispatch table, checked BEFORE in-module resolution, that
+ * maps each name to a C shim writing to stdout via the same fast-format /
+ * direct-io helpers the native runtime uses.
+ *
+ * v1 supports the four scalar print variants the type checker already
+ * selects at lowering time: int (i64), float (f64), bool, and string
+ * (NUL-terminated char* — MIR_CONST_STRING stores a plain pointer).
+ * ───────────────────────────────────────────────────────────── */
+
+static CvmReg cvm_intrin_print_int(CvmReg* args, int n) {
+    int64_t v = (n > 0) ? (int64_t)args[0] : 0;
+    char buf[48];
+    CpxFmtBuffer out;
+    cpx_fmt_init(&out, buf, sizeof(buf));
+    cpx_fmt_append_i64(&out, v);
+    cpx_fmt_putc(&out, '\n');
+    (void)cpx_io_write_all_fd(1, buf, out.len);
+    return 0;
+}
+
+static CvmReg cvm_intrin_print_float(CvmReg* args, int n) {
+    double v = (n > 0) ? cvm_bits_to_f64(args[0]) : 0.0;
+    char buf[64];
+    CpxFmtBuffer out;
+    cpx_fmt_init(&out, buf, sizeof(buf));
+    cpx_fmt_append_f64_6(&out, v);
+    cpx_fmt_putc(&out, '\n');
+    (void)cpx_io_write_all_fd(1, buf, out.len);
+    return 0;
+}
+
+static CvmReg cvm_intrin_print_bool(CvmReg* args, int n) {
+    int truthy = (n > 0) && (args[0] != 0);
+    const char* s = truthy ? "true\n" : "false\n";
+    (void)cpx_io_write_all_fd(1, s, truthy ? 5 : 6);
+    return 0;
+}
+
+static CvmReg cvm_intrin_print_str(CvmReg* args, int n) {
+    const char* v = (n > 0) ? (const char*)(uintptr_t)args[0] : NULL;
+    if (v) {
+        (void)cpx_io_write_all_fd(1, v, strlen(v));
+    }
+    (void)cpx_io_write_all_fd(1, "\n", 1);
+    return 0;
+}
+
+typedef struct {
+    const char* name;
+    CvmReg (*fn)(CvmReg* args, int n);
+} CvmIntrinsic;
+
+static const CvmIntrinsic CVM_INTRINSICS[] = {
+    { "nuwan_print_int",   cvm_intrin_print_int   },
+    { "nuwan_print_float", cvm_intrin_print_float },
+    { "nuwan_print_bool",  cvm_intrin_print_bool  },
+    { "nuwan_print_str",   cvm_intrin_print_str   },
+};
+
+static const CvmIntrinsic* cvm_find_intrinsic(const char* name) {
+    if (!name) return NULL;
+    for (size_t i = 0; i < sizeof(CVM_INTRINSICS) / sizeof(CVM_INTRINSICS[0]); i++) {
+        if (strcmp(CVM_INTRINSICS[i].name, name) == 0) return &CVM_INTRINSICS[i];
+    }
+    return NULL;
+}
+
+/* ─────────────────────────────────────────────────────────────
  * Dispatch helper: look up callee, check tiering, recurse
  * ───────────────────────────────────────────────────────────── */
 
@@ -880,14 +953,8 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
                                 MirValueId* arg_ids, int n_args) {
     if (vm->trap_code) return 0;
 
-    /* Resolve callee */
-    MirFunction* callee = mir_module_find_function(vm->module, func_name);
-    if (!callee) {
-        cvm_diag(vm, "[CVM] unresolved function '%s'\n", func_name ? func_name : "(null)");
-        return 0;
-    }
-
-    /* Collect argument register values */
+    /* Collect argument register values (needed for both intrinsics and
+     * in-module calls). */
     CvmReg args[64];
     int actual = n_args < 64 ? n_args : 64;
     for (int i = 0; i < actual; i++) {
@@ -901,6 +968,19 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
             return 0;
         }
         args[i] = caller_frame->regs[aid];
+    }
+
+    /* Host intrinsics take priority over in-module resolution. */
+    const CvmIntrinsic* intrin = cvm_find_intrinsic(func_name);
+    if (intrin) {
+        return intrin->fn(args, actual);
+    }
+
+    /* Resolve callee */
+    MirFunction* callee = mir_module_find_function(vm->module, func_name);
+    if (!callee) {
+        cvm_diag(vm, "[CVM] unresolved function '%s'\n", func_name ? func_name : "(null)");
+        return 0;
     }
 
     /* Tiering check */

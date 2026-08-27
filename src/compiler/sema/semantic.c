@@ -518,6 +518,9 @@ static void analyze_variable_expr(SemanticAnalyzer* analyzer, Expr* expr) {
 
     // If it's a class type, propagate the class name
     if (symbol->type == TYPE_CLASS && symbol->class_info) {
+        /* This expr may be visited more than once (loop-body fixpoint) — free
+         * any name from a previous visit before overwriting. */
+        if (expr->class_name) free(expr->class_name);
         expr->class_name = strdup(symbol->class_info->name);
     }
 }
@@ -874,6 +877,8 @@ static void analyze_new_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
 
     expr->data_type = TYPE_CLASS;
+    /* May be re-visited by the loop-body fixpoint — free any prior name. */
+    if (expr->class_name) free(expr->class_name);
     expr->class_name = strdup(class_sym->name);
 }
 
@@ -1770,30 +1775,234 @@ static void analyze_print_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     analyze_expr(analyzer, print->expression);
 }
 
+/* Conservative "does control flow definitely leave this statement without
+ * falling through to the following statement?" — used so a branch that always
+ * returns/throws/breaks/continues does not dilute a move-state merge at a join
+ * point it cannot actually reach. Recurses through blocks (last stmt), if/else
+ * (both sides), and match (all arms) so nested divergence is detected. */
+static bool branch_diverges(Stmt* s) {
+    if (!s) return false;
+    switch (s->type) {
+        case STMT_RETURN:
+        case STMT_THROW:
+        case STMT_BREAK:
+        case STMT_CONTINUE:
+            return true;
+        case STMT_BLOCK: {
+            BlockStmt* b = &s->as.block;
+            for (int i = 0; i < b->stmt_count; i++) {
+                if (b->statements[i] && branch_diverges(b->statements[i])) return true;
+            }
+            return false;
+        }
+        case STMT_IF: {
+            IfStmt* f = &s->as.if_stmt;
+            /* Diverges only if BOTH sides diverge (and there is an else). */
+            return f->else_branch &&
+                   branch_diverges(f->then_branch) &&
+                   branch_diverges(f->else_branch);
+        }
+        case STMT_MATCH: {
+            MatchStmt* m = &s->as.match_stmt;
+            if (m->arm_count == 0) return false;
+            for (int i = 0; i < m->arm_count; i++) {
+                if (!branch_diverges(m->arms[i].body)) return false;
+            }
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+/* True if `s` contains a `move x` expression anywhere in its subtree that
+ * could move an outer variable across a loop back-edge. Cheap AST pre-scan so
+ * loops with no moves skip the extra fixpoint pass entirely. */
+static bool expr_has_move(Expr* e);
+static bool stmt_has_move(Stmt* s);
+
+static bool expr_has_move(Expr* e) {
+    if (!e) return false;
+    if (e->type == EXPR_VARIABLE && e->as.variable.is_move) return true;
+    switch (e->type) {
+        case EXPR_BINARY:
+            return expr_has_move(e->as.binary.left) || expr_has_move(e->as.binary.right);
+        case EXPR_UNARY:  return expr_has_move(e->as.unary.operand);
+        case EXPR_CALL:
+            if (expr_has_move(e->as.call.callee)) return true;
+            for (int i = 0; i < e->as.call.arg_count; i++)
+                if (expr_has_move(e->as.call.arguments[i])) return true;
+            return false;
+        case EXPR_MEMBER_ACCESS:
+            if (expr_has_move(e->as.member.object)) return true;
+            for (int i = 0; i < e->as.member.arg_count; i++)
+                if (expr_has_move(e->as.member.arguments[i])) return true;
+            return false;
+        case EXPR_INDEX:
+            return expr_has_move(e->as.index.array) || expr_has_move(e->as.index.index);
+        case EXPR_AWAIT: return expr_has_move(e->as.await_expr.expression);
+        case EXPR_ARRAY_LITERAL:
+            for (int i = 0; i < e->as.array_literal.element_count; i++)
+                if (expr_has_move(e->as.array_literal.elements[i])) return true;
+            return false;
+        default: return false;
+    }
+}
+
+static bool stmt_has_move(Stmt* s) {
+    if (!s) return false;
+    switch (s->type) {
+        case STMT_DECLARATION:
+        case STMT_CONST_DECL:   return expr_has_move(s->as.declaration.initializer);
+        case STMT_ASSIGNMENT:   return expr_has_move(s->as.assignment.target) ||
+                                       expr_has_move(s->as.assignment.value);
+        case STMT_PRINT:        return expr_has_move(s->as.print.expression);
+        case STMT_EXPR:         return expr_has_move(s->as.expr_stmt.expression);
+        case STMT_RETURN:       return expr_has_move(s->as.return_stmt.value);
+        case STMT_THROW:        return expr_has_move(s->as.throw_stmt.value);
+        case STMT_IF:
+            return expr_has_move(s->as.if_stmt.condition) ||
+                   stmt_has_move(s->as.if_stmt.then_branch) ||
+                   stmt_has_move(s->as.if_stmt.else_branch);
+        case STMT_WHILE:
+            return expr_has_move(s->as.while_stmt.condition) ||
+                   stmt_has_move(s->as.while_stmt.body);
+        case STMT_FOR:
+            return expr_has_move(s->as.for_stmt.initializer) ||
+                   expr_has_move(s->as.for_stmt.condition) ||
+                   stmt_has_move(s->as.for_stmt.increment) ||
+                   stmt_has_move(s->as.for_stmt.body);
+        case STMT_FOR_IN:
+            return expr_has_move(s->as.for_in_stmt.iterable) ||
+                   stmt_has_move(s->as.for_in_stmt.body);
+        case STMT_BLOCK:
+            for (int i = 0; i < s->as.block.stmt_count; i++)
+                if (stmt_has_move(s->as.block.statements[i])) return true;
+            return false;
+        case STMT_MATCH:
+            if (expr_has_move(s->as.match_stmt.subject)) return true;
+            for (int i = 0; i < s->as.match_stmt.arm_count; i++)
+                if (stmt_has_move(s->as.match_stmt.arms[i].body)) return true;
+            return false;
+        default: return false;
+    }
+}
+
+/* Analyse a loop body with a fixpoint so cross-iteration moves are caught.
+ * The move-set lattice is monotone (a variable never becomes un-moved within
+ * the analysis), so one priming pass captures every body-carried move into the
+ * loop-head state; a second (final) pass from that widened head then reports a
+ * cross-iteration reuse exactly once, alongside any genuine single-iteration
+ * error. Loops whose body contains no `move` skip straight to a single
+ * ordinary pass.
+ *
+ * The loop may execute zero times, so the exit state is union(entry, body). */
+static void analyze_loop_body_fixpoint(SemanticAnalyzer* analyzer, Stmt* body) {
+    if (!body) return;
+
+    bool prev_suppress = g_ownership_ctx.suppress_diagnostics;
+
+    if (!stmt_has_move(body)) {
+        analyze_stmt(analyzer, body);
+        return;
+    }
+
+    OwnStateSnapshot entry;
+    own_state_snapshot(&g_ownership_ctx, &entry);
+
+    /* Priming pass — silent; widen the loop head with body-carried moves. */
+    g_ownership_ctx.suppress_diagnostics = true;
+    analyze_stmt(analyzer, body);
+    g_ownership_ctx.suppress_diagnostics = prev_suppress;
+
+    OwnStateSnapshot after_prime;
+    own_state_snapshot(&g_ownership_ctx, &after_prime);
+
+    OwnStateSnapshot head;
+    own_state_copy(&head, &entry);
+    own_state_merge_union(&head, &after_prime);
+    own_state_free(&after_prime);
+
+    /* Final pass — diagnostics enabled, from the widened head state. */
+    own_state_restore(&g_ownership_ctx, &head);
+    analyze_stmt(analyzer, body);
+
+    OwnStateSnapshot after_final;
+    own_state_snapshot(&g_ownership_ctx, &after_final);
+
+    /* Exit state: union(entry, post-body) — the body may not run at all. */
+    OwnStateSnapshot exit_s;
+    own_state_copy(&exit_s, &entry);
+    own_state_merge_union(&exit_s, &after_final);
+    own_state_restore(&g_ownership_ctx, &exit_s);
+
+    own_state_free(&after_final);
+    own_state_free(&exit_s);
+    own_state_free(&head);
+    own_state_free(&entry);
+}
+
 static void analyze_if_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     IfStmt* if_stmt = &stmt->as.if_stmt;
-    
+
     if (!if_stmt->condition) {
         report_semantic_error(stmt->line, stmt->column,
             "Missing if condition");
         return;
     }
-    
+
     analyze_expr(analyzer, if_stmt->condition);
-    
+
     if (if_stmt->condition->data_type != TYPE_ERROR &&
         if_stmt->condition->data_type != TYPE_BOOL) {
         report_type_error(if_stmt->condition->line, if_stmt->condition->column,
             "If condition must be boolean");
     }
-    
+
+    /* Path-sensitive move analysis: analyse each branch from a common
+     * pre-branch snapshot, then merge so a move on one path does not leak
+     * onto the other or past the join. */
+    OwnStateSnapshot pre;
+    own_state_snapshot(&g_ownership_ctx, &pre);
+
+    OwnStateSnapshot then_s;
     if (if_stmt->then_branch) {
         analyze_stmt(analyzer, if_stmt->then_branch);
     }
-    
+    own_state_snapshot(&g_ownership_ctx, &then_s);
+
+    own_state_restore(&g_ownership_ctx, &pre);
+    OwnStateSnapshot else_s;
     if (if_stmt->else_branch) {
         analyze_stmt(analyzer, if_stmt->else_branch);
     }
+    own_state_snapshot(&g_ownership_ctx, &else_s);
+
+    bool then_div = branch_diverges(if_stmt->then_branch);
+    bool else_div = if_stmt->else_branch ? branch_diverges(if_stmt->else_branch) : false;
+
+    /* Merge: a variable is MOVED after the join only if every path that can
+     * reach the join moved it. A branch that diverges cannot reach the join
+     * and is excluded. With no else branch, the implicit fall-through path is
+     * `pre` (nothing moved there). */
+    if (then_div && else_div) {
+        /* Join is unreachable dead code; leave state at the pre-branch value. */
+        own_state_restore(&g_ownership_ctx, &pre);
+    } else if (then_div) {
+        own_state_restore(&g_ownership_ctx, &else_s);
+    } else if (else_div) {
+        own_state_restore(&g_ownership_ctx, &then_s);
+    } else {
+        OwnStateSnapshot merged;
+        own_state_copy(&merged, &then_s);
+        own_state_merge_intersect(&merged, &else_s);
+        own_state_restore(&g_ownership_ctx, &merged);
+        own_state_free(&merged);
+    }
+
+    own_state_free(&pre);
+    own_state_free(&then_s);
+    own_state_free(&else_s);
 }
 
 static void analyze_for_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
@@ -1849,14 +2058,14 @@ static void analyze_for_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     // Enter loop - increment loop_depth for break/continue validation
     analyzer->loop_depth++;
     
-    // Analyze body
+    // Analyze body (fixpoint for cross-iteration move detection)
     if (for_stmt->body) {
-        analyze_stmt(analyzer, for_stmt->body);
+        analyze_loop_body_fixpoint(analyzer, for_stmt->body);
     }
-    
+
     // Exit loop
     analyzer->loop_depth--;
-    
+
     exit_scope(analyzer->symbols, &analyzer->scope_depth);
 }
 
@@ -1881,9 +2090,9 @@ static void analyze_while_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     analyzer->loop_depth++;
     
     if (while_stmt->body) {
-        analyze_stmt(analyzer, while_stmt->body);
+        analyze_loop_body_fixpoint(analyzer, while_stmt->body);
     }
-    
+
     // Exit loop
     analyzer->loop_depth--;
 }
@@ -1904,7 +2113,7 @@ static void analyze_for_in_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     add_symbol(analyzer->symbols, fi->var_name, SYMBOL_VARIABLE, TYPE_I64, scope);
 
     analyzer->loop_depth++;
-    if (fi->body) analyze_stmt(analyzer, fi->body);
+    if (fi->body) analyze_loop_body_fixpoint(analyzer, fi->body);
     analyzer->loop_depth--;
 
     exit_scope(analyzer->symbols, &scope);
@@ -1919,12 +2128,36 @@ static void analyze_match_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     }
     analyze_expr(analyzer, ms->subject);
 
+    /* Path-sensitive move merge across arms: each arm is analysed from the
+     * same pre-match snapshot; a variable is MOVED after the match only if
+     * every non-diverging arm moved it. We cannot cheaply prove exhaustiveness,
+     * so the implicit "no arm matched" fall-through (pre-match state) is also
+     * folded in — a move confined to one arm never escapes the match. */
+    OwnStateSnapshot pre;
+    own_state_snapshot(&g_ownership_ctx, &pre);
+
+    OwnStateSnapshot acc;       /* accumulated intersection of reachable arms */
+    own_state_copy(&acc, &pre); /* start from fall-through (nothing extra moved) */
+
     for (int i = 0; i < ms->arm_count; i++) {
         if (ms->arms[i].pattern)  /* NULL == wildcard _  */
             analyze_expr(analyzer, ms->arms[i].pattern);
+
+        own_state_restore(&g_ownership_ctx, &pre);
         if (ms->arms[i].body)
             analyze_stmt(analyzer, ms->arms[i].body);
+
+        if (!branch_diverges(ms->arms[i].body)) {
+            OwnStateSnapshot arm_s;
+            own_state_snapshot(&g_ownership_ctx, &arm_s);
+            own_state_merge_intersect(&acc, &arm_s);
+            own_state_free(&arm_s);
+        }
     }
+
+    own_state_restore(&g_ownership_ctx, &acc);
+    own_state_free(&acc);
+    own_state_free(&pre);
 }
 
 /* ─── throw statement ─── */
@@ -1962,15 +2195,8 @@ static void analyze_try_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     if (t->finally_body) analyze_stmt(analyzer, t->finally_body);
 }
 
-/* ─── trait declaration ─── */
-static void analyze_trait_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
-    /* Traits are purely compile-time contracts.
-     * We just validate that method signatures use known types. */
-    TraitStmt* tr = &stmt->as.trait_stmt;
-    (void)analyzer;
-    (void)tr;
-    /* TODO: register trait in a trait table for impl-check in semantic pass */
-}
+/* trait declaration analysis lives further down, near analyze_impl_stmt, since
+ * it shares the trait-table registration helper. */
 
 static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     FunctionStmt* func = &stmt->as.function;
@@ -2048,6 +2274,7 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     escape_analyzer_reset(&g_escape_ctx);
     drop_planner_enter_scope(&g_drop_ctx);
     linear_view_log_reset(&g_linear_view_log);
+    ownership_reset_function(&g_ownership_ctx);
 
     /* Register parameters for escape analysis and drop planning */
     for (int i = 0; i < func->param_count; i++) {
@@ -2359,9 +2586,437 @@ static void analyze_extern_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     if (param_types) free(param_types);
 }
 
+/* Pre-register a struct as a named type (pass 1), mirroring preregister_class
+ * minus methods/inheritance/traits/generics. Structs share the ClassSymbol
+ * namespace via add_class so the rest of the compiler can resolve a struct
+ * name as a type (params, `new`, member access) through lookup_class. */
+static void preregister_struct(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    StructStmt* struct_stmt = &stmt->as.struct_stmt;
+
+    if (!add_class(analyzer->symbols, struct_stmt->name, NULL, analyzer->scope_depth)) {
+        /* The name is already claimed by another type (class or struct) in
+         * this scope. Report here — pass 1 processes declarations in source
+         * order, so the first declaration wins and this one is the conflict. */
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Struct '%s' already declared", struct_stmt->name);
+        report_type_error(stmt->line, stmt->column, msg);
+        return;
+    }
+
+    ClassSymbol* struct_sym = lookup_class(analyzer->symbols, struct_stmt->name);
+    if (!struct_sym) return;
+
+    for (int i = 0; i < struct_stmt->field_count; i++) {
+        StructField* field = &struct_stmt->fields[i];
+        add_field_to_class(struct_sym, field->name, field->type,
+                           field->class_name, /*is_static*/ false, ACCESS_PUBLIC,
+                           /*is_const*/ false, /*is_mutable*/ true);
+    }
+}
+
+static void analyze_struct_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    StructStmt* struct_stmt = &stmt->as.struct_stmt;
+
+    /* Struct name conflicts (with a class or another struct) are detected and
+     * reported during pre-registration; bail out here so we don't validate
+     * this struct's fields against the unrelated symbol that owns the name. */
+    ClassSymbol* struct_sym = lookup_class(analyzer->symbols, struct_stmt->name);
+    if (!struct_sym) {
+        if (lookup_symbol(analyzer->symbols, struct_stmt->name)) {
+            return; /* name taken by another symbol — already reported in pass 1 */
+        }
+        if (!add_class(analyzer->symbols, struct_stmt->name, NULL, analyzer->scope_depth)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Struct '%s' already declared", struct_stmt->name);
+            report_type_error(stmt->line, stmt->column, msg);
+            return;
+        }
+        struct_sym = lookup_class(analyzer->symbols, struct_stmt->name);
+        if (!struct_sym) return;
+    }
+
+    for (int i = 0; i < struct_stmt->field_count; i++) {
+        StructField* field = &struct_stmt->fields[i];
+
+        /* Duplicate field name within this struct */
+        for (int j = 0; j < i; j++) {
+            if (strcmp(struct_stmt->fields[j].name, field->name) == 0) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Duplicate field '%s' in struct '%s'",
+                         field->name, struct_stmt->name);
+                report_semantic_error(stmt->line, stmt->column, msg);
+                break;
+            }
+        }
+
+        /* Field type validation: a named (class/struct) type must resolve */
+        if (field->type == TYPE_CLASS && field->class_name) {
+            if (!lookup_class(analyzer->symbols, field->class_name)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Undefined type '%s' for field '%s' in struct '%s'",
+                         field->class_name, field->name, struct_stmt->name);
+                report_semantic_error(stmt->line, stmt->column, msg);
+            }
+        }
+    }
+}
+
+/* Pre-register an enum as a named type (pass 1), mirroring preregister_struct.
+ * Enums share the ClassSymbol namespace via add_class so a name collision with
+ * a class/struct/enum is caught here regardless of declaration order. Variants
+ * (and any data-carrying payloads) are validated in analyze_enum_stmt. */
+static void preregister_enum(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    EnumStmt* enum_stmt = &stmt->as.enum_stmt;
+
+    if (!add_class(analyzer->symbols, enum_stmt->name, NULL, analyzer->scope_depth)) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Enum '%s' already declared", enum_stmt->name);
+        report_type_error(stmt->line, stmt->column, msg);
+        return;
+    }
+}
+
+static void analyze_enum_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    EnumStmt* enum_stmt = &stmt->as.enum_stmt;
+
+    /* Name conflicts (with a class/struct/enum) are detected and reported
+     * during pre-registration; if the symbol is missing, register it now and
+     * report if that fails. */
+    if (!lookup_class(analyzer->symbols, enum_stmt->name)) {
+        if (lookup_symbol(analyzer->symbols, enum_stmt->name)) {
+            return; /* name taken by another symbol — already reported in pass 1 */
+        }
+        if (!add_class(analyzer->symbols, enum_stmt->name, NULL, analyzer->scope_depth)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Enum '%s' already declared", enum_stmt->name);
+            report_type_error(stmt->line, stmt->column, msg);
+            return;
+        }
+    }
+
+    for (int i = 0; i < enum_stmt->variant_count; i++) {
+        EnumVariant* variant = &enum_stmt->variants[i];
+
+        /* Duplicate variant name within this enum */
+        for (int j = 0; j < i; j++) {
+            if (strcmp(enum_stmt->variants[j].name, variant->name) == 0) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Duplicate variant '%s' in enum '%s'",
+                         variant->name, enum_stmt->name);
+                report_semantic_error(stmt->line, stmt->column, msg);
+                break;
+            }
+        }
+
+        /* Payload type validation: any named (class/struct/enum) payload type
+         * must resolve. The parser stores the type name in payload_names[k]
+         * for TYPE_CLASS payloads (NULL for primitives). */
+        for (int k = 0; k < variant->payload_count; k++) {
+            if (variant->payload_types[k] == TYPE_CLASS &&
+                variant->payload_names && variant->payload_names[k]) {
+                if (!lookup_class(analyzer->symbols, variant->payload_names[k])) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "Undefined type '%s' in payload of variant '%s' in enum '%s'",
+                             variant->payload_names[k], variant->name, enum_stmt->name);
+                    report_semantic_error(stmt->line, stmt->column, msg);
+                }
+            }
+        }
+    }
+}
+
+/* Pre-register a union as a named type (pass 1), mirroring preregister_enum.
+ * Unions share the ClassSymbol namespace via add_class so a name collision with
+ * a class/struct/enum/union is caught here regardless of declaration order.
+ * Member validation happens in analyze_union_stmt. */
+static void preregister_union(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    UnionStmt* union_stmt = &stmt->as.union_stmt;
+
+    if (!add_class(analyzer->symbols, union_stmt->name, NULL, analyzer->scope_depth)) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Union '%s' already declared", union_stmt->name);
+        report_type_error(stmt->line, stmt->column, msg);
+        return;
+    }
+}
+
+static void analyze_union_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    UnionStmt* union_stmt = &stmt->as.union_stmt;
+
+    /* Name conflicts (with a class/struct/enum/union) are detected and reported
+     * during pre-registration; if the symbol is missing, register it now and
+     * report if that fails. */
+    if (!lookup_class(analyzer->symbols, union_stmt->name)) {
+        if (lookup_symbol(analyzer->symbols, union_stmt->name)) {
+            return; /* name taken by another symbol — already reported in pass 1 */
+        }
+        if (!add_class(analyzer->symbols, union_stmt->name, NULL, analyzer->scope_depth)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Union '%s' already declared", union_stmt->name);
+            report_type_error(stmt->line, stmt->column, msg);
+            return;
+        }
+    }
+
+    for (int i = 0; i < union_stmt->field_count; i++) {
+        UnionField* field = &union_stmt->fields[i];
+
+        /* Duplicate member name within this union */
+        for (int j = 0; j < i; j++) {
+            if (strcmp(union_stmt->fields[j].name, field->name) == 0) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Duplicate member '%s' in union '%s'",
+                         field->name, union_stmt->name);
+                report_semantic_error(stmt->line, stmt->column, msg);
+                break;
+            }
+        }
+
+        /* Member type validation: the parser resolves member types via
+         * parse_type(), which does not retain a class name, so an unresolved
+         * named type surfaces as TYPE_ERROR. */
+        if (field->type == TYPE_ERROR) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "Invalid type for member '%s' in union '%s'",
+                     field->name, union_stmt->name);
+            report_semantic_error(stmt->line, stmt->column, msg);
+        }
+    }
+}
+
+/* Register a trait's required-method signatures into the trait table. Shared
+ * with analyze_trait_stmt so both pass-1 pre-registration and (fallback)
+ * pass-2 analysis populate identically. Emits a diagnostic for duplicate
+ * method names within the trait. */
+static void register_trait_methods(SemanticAnalyzer* analyzer, Stmt* stmt,
+                                   TraitSymbol* trait_sym) {
+    (void)analyzer;
+    TraitStmt* tr = &stmt->as.trait_stmt;
+
+    for (int i = 0; i < tr->method_count; i++) {
+        TraitMethodDecl* m = &tr->methods[i];
+
+        bool dup = false;
+        for (int j = 0; j < i; j++) {
+            if (strcmp(tr->methods[j].name, m->name) == 0) { dup = true; break; }
+        }
+        if (dup) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "Duplicate method '%s' in trait '%s'", m->name, tr->name);
+            report_semantic_error(stmt->line, stmt->column, msg);
+            continue;
+        }
+
+        DataType* pt = NULL;
+        if (m->param_count > 0) {
+            pt = ALLOCATE(DataType, m->param_count);
+            for (int k = 0; k < m->param_count; k++) pt[k] = m->parameters[k].type;
+        }
+        add_method_to_trait(trait_sym, m->name, m->return_type,
+                            m->return_class_name, pt, m->param_count, m->has_default);
+        if (pt) free(pt);
+    }
+}
+
+/* Pre-register a trait as a named type (pass 1). Traits share the same type
+ * namespace as class/struct/enum/union via the add_trait name-collision scan,
+ * so a conflict with any of them is caught here regardless of declaration
+ * order. */
+static void preregister_trait(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    TraitStmt* tr = &stmt->as.trait_stmt;
+
+    if (!add_trait(analyzer->symbols, tr->name, analyzer->scope_depth)) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Trait '%s' already declared", tr->name);
+        report_type_error(stmt->line, stmt->column, msg);
+        return;
+    }
+
+    TraitSymbol* trait_sym = lookup_trait(analyzer->symbols, tr->name);
+    if (!trait_sym) return;
+    register_trait_methods(analyzer, stmt, trait_sym);
+}
+
+static void analyze_trait_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    TraitStmt* tr = &stmt->as.trait_stmt;
+
+    /* Name conflicts are detected and reported during pre-registration. If the
+     * trait is missing here it is either (a) a conflict already reported in
+     * pass 1 — the name belongs to another symbol — in which case stay silent,
+     * or (b) pass 1 did not run for this statement, in which case register it
+     * now. */
+    TraitSymbol* trait_sym = lookup_trait(analyzer->symbols, tr->name);
+    if (!trait_sym) {
+        if (lookup_symbol(analyzer->symbols, tr->name)) {
+            return; /* name taken by another symbol — already reported */
+        }
+        if (!add_trait(analyzer->symbols, tr->name, analyzer->scope_depth)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Trait '%s' already declared", tr->name);
+            report_type_error(stmt->line, stmt->column, msg);
+            return;
+        }
+        trait_sym = lookup_trait(analyzer->symbols, tr->name);
+        if (!trait_sym) return;
+        register_trait_methods(analyzer, stmt, trait_sym);
+    }
+
+    for (int i = 0; i < tr->method_count; i++) {
+        TraitMethodDecl* m = &tr->methods[i];
+
+        /* Named return type must resolve (parameters carry no class name from
+         * the parser, so only the return type is checkable here). */
+        if (m->return_type == TYPE_CLASS && m->return_class_name) {
+            if (!lookup_class(analyzer->symbols, m->return_class_name)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Undefined type '%s' in return of trait method '%s' in trait '%s'",
+                         m->return_class_name, m->name, tr->name);
+                report_semantic_error(stmt->line, stmt->column, msg);
+            }
+        }
+
+        /* Type-check default bodies (skipped entirely before this pass). A
+         * default body is a function body, so establish function context and a
+         * fresh scope for it; there is no `self`-type context for traits, so
+         * this is best-effort. */
+        if (m->has_default && m->default_body) {
+            bool prev_in_function = analyzer->in_function;
+            DataType prev_return_type = analyzer->current_function_return_type;
+            analyzer->in_function = true;
+            analyzer->current_function_return_type = m->return_type;
+
+            enter_scope(analyzer->symbols, &analyzer->scope_depth);
+            for (int k = 0; k < m->param_count; k++) {
+                if (m->parameters[k].name) {
+                    add_symbol(analyzer->symbols, m->parameters[k].name,
+                               SYMBOL_PARAMETER, m->parameters[k].type,
+                               analyzer->scope_depth);
+                }
+            }
+            analyze_stmt(analyzer, m->default_body);
+            exit_scope(analyzer->symbols, &analyzer->scope_depth);
+
+            analyzer->in_function = prev_in_function;
+            analyzer->current_function_return_type = prev_return_type;
+        }
+    }
+}
+
+static void analyze_impl_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
+    ImplStmt* impl = &stmt->as.impl_stmt;
+
+    /* Target type must exist (class/struct/enum/union all live in the class
+     * namespace). */
+    if (impl->target_name && !lookup_class(analyzer->symbols, impl->target_name)) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "impl target type '%s' is not defined", impl->target_name);
+        report_semantic_error(stmt->line, stmt->column, msg);
+    }
+
+    /* Trait-impl compliance checking. */
+    if (impl->trait_name) {
+        TraitSymbol* trait_sym = lookup_trait(analyzer->symbols, impl->trait_name);
+        if (!trait_sym) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "Unknown trait '%s' in impl for '%s'",
+                     impl->trait_name, impl->target_name ? impl->target_name : "?");
+            report_semantic_error(stmt->line, stmt->column, msg);
+        } else {
+            /* Completeness: every required method must be provided unless it
+             * has a default implementation. */
+            for (int i = 0; i < trait_sym->method_count; i++) {
+                TraitMethodSymbol* req = &trait_sym->methods[i];
+                if (req->has_default) continue;
+
+                bool found = false;
+                for (int j = 0; j < impl->method_count; j++) {
+                    Stmt* ms = impl->methods[j];
+                    if (ms && ms->type == STMT_FUNCTION &&
+                        ms->as.function.name &&
+                        strcmp(ms->as.function.name, req->name) == 0) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "impl of trait '%s' for '%s' is missing method '%s'",
+                             impl->trait_name,
+                             impl->target_name ? impl->target_name : "?", req->name);
+                    report_type_error(stmt->line, stmt->column, msg);
+                }
+            }
+
+            /* Signature compliance for each impl method that matches a trait
+             * method by name. Extra methods not in the trait are allowed. */
+            for (int j = 0; j < impl->method_count; j++) {
+                Stmt* ms = impl->methods[j];
+                if (!ms || ms->type != STMT_FUNCTION || !ms->as.function.name) continue;
+                FunctionStmt* fn = &ms->as.function;
+
+                TraitMethodSymbol* req = find_trait_method(trait_sym, fn->name);
+                if (!req) continue;
+
+                if (fn->param_count != req->param_count) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "method '%s' in impl of trait '%s' for '%s': expected %d parameter(s), found %d",
+                             fn->name, impl->trait_name,
+                             impl->target_name ? impl->target_name : "?",
+                             req->param_count, fn->param_count);
+                    report_type_error(stmt->line, stmt->column, msg);
+                } else {
+                    for (int k = 0; k < fn->param_count; k++) {
+                        DataType have = fn->parameters[k].type;
+                        DataType want = req->param_types ? req->param_types[k] : TYPE_VOID;
+                        if (!types_compatible(have, want)) {
+                            char msg[256];
+                            snprintf(msg, sizeof(msg),
+                                     "method '%s' in impl of trait '%s' for '%s': parameter %d expected %s, found %s",
+                                     fn->name, impl->trait_name,
+                                     impl->target_name ? impl->target_name : "?",
+                                     k + 1, type_to_string(want), type_to_string(have));
+                            report_type_error(stmt->line, stmt->column, msg);
+                        }
+                    }
+                }
+
+                if (!types_compatible(fn->return_type, req->return_type)) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "method '%s' in impl of trait '%s' for '%s': return type expected %s, found %s",
+                             fn->name, impl->trait_name,
+                             impl->target_name ? impl->target_name : "?",
+                             type_to_string(req->return_type),
+                             type_to_string(fn->return_type));
+                    report_type_error(stmt->line, stmt->column, msg);
+                }
+            }
+        }
+    }
+
+    /* Analyze each method body (unchanged behaviour). */
+    for (int i = 0; i < impl->method_count; i++) {
+        if (impl->methods[i]) {
+            analyze_stmt(analyzer, impl->methods[i]);
+        }
+    }
+}
+
 static void analyze_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     if (!stmt) return;
-    
+
     switch (stmt->type) {
         case STMT_DECLARATION:
             analyze_declaration_stmt(analyzer, stmt);
@@ -2415,14 +3070,13 @@ static void analyze_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             analyze_extern_stmt(analyzer, stmt);
             break;
         case STMT_STRUCT:
-            // Struct declarations: register as named type (similar to class)
-            // For now, just validate field types are valid
+            analyze_struct_stmt(analyzer, stmt);
             break;
         case STMT_ENUM:
-            // Enum declarations: register variants
+            analyze_enum_stmt(analyzer, stmt);
             break;
         case STMT_UNION:
-            // Union declarations: validate field types
+            analyze_union_stmt(analyzer, stmt);
             break;
         case STMT_FOR_IN:
             analyze_for_in_stmt(analyzer, stmt);
@@ -2444,12 +3098,7 @@ static void analyze_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             analyze_declaration_stmt(analyzer, stmt);
             break;
         case STMT_IMPL:
-            // Impl blocks: analyze each method body
-            for (int i = 0; i < stmt->as.impl_stmt.method_count; i++) {
-                if (stmt->as.impl_stmt.methods[i]) {
-                    analyze_stmt(analyzer, stmt->as.impl_stmt.methods[i]);
-                }
-            }
+            analyze_impl_stmt(analyzer, stmt);
             break;
     }
 }
@@ -2460,7 +3109,15 @@ static void preregister_class(SemanticAnalyzer* analyzer, Stmt* stmt) {
     ClassStmt* class_stmt = &stmt->as.class_stmt;
 
     if (!add_class(analyzer->symbols, class_stmt->name, class_stmt->parent_name, analyzer->scope_depth)) {
-        /* Silently skip — will be reported in full analysis if truly a dup */
+        /* Name already claimed by another type (class/struct/enum) in this
+         * scope. Pass 1 runs in source order, so the first declaration wins
+         * and this one is the conflict. (A genuine class/class redeclaration
+         * is also reported here.) */
+        if (lookup_class(analyzer->symbols, class_stmt->name)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Class '%s' already declared", class_stmt->name);
+            report_type_error(stmt->line, stmt->column, msg);
+        }
         return;
     }
 
@@ -2525,6 +3182,18 @@ bool analyze_program(SemanticAnalyzer* analyzer, Stmt** statements, int count) {
                 break;
             case STMT_CLASS:
                 preregister_class(analyzer, statements[i]);
+                break;
+            case STMT_STRUCT:
+                preregister_struct(analyzer, statements[i]);
+                break;
+            case STMT_ENUM:
+                preregister_enum(analyzer, statements[i]);
+                break;
+            case STMT_UNION:
+                preregister_union(analyzer, statements[i]);
+                break;
+            case STMT_TRAIT:
+                preregister_trait(analyzer, statements[i]);
                 break;
             case STMT_FUNCTION: {
                 /* Pre-register function signature (without body analysis) */

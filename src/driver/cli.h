@@ -50,6 +50,12 @@ typedef struct {
     bool                 safe_mode;
     bool                 size_opt;
 
+    /* --execute: run the compiled program in-process via the CVM interpreter
+     * instead of emitting an output artifact. Implies --mir and is terminal
+     * (no assemble/link/serialize). The program's main() return value becomes
+     * the process exit code. */
+    bool                 execute;
+
     /* Diagnostic options */
     DiagFormat      diag_format;
     int             max_errors;

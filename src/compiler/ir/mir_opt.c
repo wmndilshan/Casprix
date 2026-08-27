@@ -727,9 +727,84 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
     }
 }
 
+void mir_remove_unreachable_blocks(MirFunction* func) {
+    if (!func || func->is_extern || !func->entry_block) return;
+
+    int num_blocks = 0;
+    for (MirBlock* b = func->block_list; b; b = b->next_block) {
+        num_blocks++;
+    }
+    if (num_blocks <= 1) return;
+
+    /* Find max block ID to size seen array safely */
+    uint32_t max_id = 0;
+    for (MirBlock* b = func->block_list; b; b = b->next_block) {
+        if (b->id > max_id) max_id = b->id;
+    }
+
+    bool* seen = (bool*)calloc(max_id + 1, sizeof(bool));
+    if (!seen) return;
+
+    MirBlock** q = (MirBlock**)malloc((max_id + 1) * sizeof(MirBlock*));
+    if (!q) {
+        free(seen);
+        return;
+    }
+
+    int qh = 0, qt = 0;
+    q[qt++] = func->entry_block;
+    seen[func->entry_block->id] = true;
+
+    while (qh < qt) {
+        MirBlock* cur = q[qh++];
+        for (int i = 0; i < cur->succ_count; i++) {
+            MirBlock* s = cur->successors[i];
+            if (s && s->id <= max_id && !seen[s->id]) {
+                seen[s->id] = true;
+                q[qt++] = s;
+            }
+        }
+    }
+    free(q);
+
+    /* Unlink unreachable blocks and remove them from predecessor lists of their successors */
+    MirBlock* prev = NULL;
+    MirBlock* curr = func->block_list;
+    while (curr) {
+        if (curr != func->entry_block && !seen[curr->id]) {
+            /* Remove this dead block from predecessor lists of its successors */
+            for (int s = 0; s < curr->succ_count; s++) {
+                if (curr->successors[s]) {
+                    cfg_remove_pred(curr->successors[s], curr);
+                }
+            }
+            /* Unlink from list */
+            if (prev) {
+                prev->next_block = curr->next_block;
+            } else {
+                func->block_list = curr->next_block;
+            }
+            /* Move to next block, do not update prev */
+            curr = curr->next_block;
+        } else {
+            prev = curr;
+            curr = curr->next_block;
+        }
+    }
+    free(seen);
+
+    /* Renumber remaining blocks sequentially */
+    int new_id = 0;
+    for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
+        bb->id = new_id++;
+    }
+    func->block_count = new_id;
+}
+
 void mir_optimize_module(MirModule* module, MirOptLevel level, MirOptStats* stats) {
     if (stats) memset(stats, 0, sizeof(MirOptStats));
     for (MirFunction* f = module->func_list; f; f = f->next_func) {
         mir_optimize_function(f, level, stats);
+        mir_remove_unreachable_blocks(f);
     }
 }

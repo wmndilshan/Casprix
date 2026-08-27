@@ -1,0 +1,28 @@
+class Foo {
+    mut val: int
+    func set_val(v: int) {
+        this.val = v
+    }
+}
+
+func test_borrow(cond: bool) -> int {
+    let f = new Foo()
+    f.set_val(42)
+
+    if cond {
+        let y = move f
+    } else {
+        f.set_val(10)
+    }
+
+    f.set_val(20) // invalid use-after-move!
+
+    return 0
+}
+
+func main() -> int {
+    test_borrow(true)
+    return 0
+}
+
+main()

@@ -1,0 +1,18 @@
+class Foo {
+    mut val: int
+
+    func set_val(v: int) -> void {
+        this.val = v
+    }
+}
+
+func main() -> int {
+    let f = new Foo()
+    f.set_val(42)
+
+    let y: int = 10
+    let assign_shorthand = |x: int| => x = y
+    print(assign_shorthand(5))
+
+    return 0
+}

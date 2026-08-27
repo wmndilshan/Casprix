@@ -6,6 +6,7 @@
  */
 
 #include "mir_inline.h"
+#include "mir_opt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -613,5 +614,6 @@ void mir_inline_module(MirModule* module, int opt_level, MirInlineStats* stats) 
     for (MirFunction* func = module->func_list; func; func = func->next_func) {
         if (func->is_extern) continue;
         mir_inline_function(module, func, config, stats);
+        mir_remove_unreachable_blocks(func);
     }
 }
