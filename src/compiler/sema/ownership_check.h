@@ -43,12 +43,77 @@ typedef struct OwnershipInfo {
     int         consume_count;
 } OwnershipInfo;
 
+/* ─── Path-sensitive move state ──────────────────────────────────────────────
+ *
+ * The move bit for each variable is tracked in a per-path map keyed by Symbol*
+ * (stable for a variable's lifetime within a function body), NOT in the
+ * per-symbol OwnershipInfo. This lets if/else and loop analysis snapshot the
+ * state, analyse each path from a common start, and merge at join points so a
+ * move on one path does not leak onto the others.
+ *
+ * A Symbol present in the map with `moved == true` is "definitely moved on the
+ * current path". Absent ⇒ not moved.
+ */
+typedef struct {
+    void* sym;         /* Symbol* — opaque here to avoid a symtable.h cycle */
+    bool  moved;
+    int   move_line;
+} OwnMoveEntry;
+
+typedef struct {
+    OwnMoveEntry* entries;
+    int count;
+    int capacity;
+} OwnMoveState;
+
+/* A detached copy of an OwnMoveState, produced by own_state_snapshot(). */
+typedef OwnMoveState OwnStateSnapshot;
+
 // Ownership checker context
 typedef struct OwnershipChecker {
     SemanticAnalyzer* analyzer;
     int current_scope;
     bool in_unsafe_block;
+
+    /* Path-sensitive move state for the function body currently being
+     * analysed. Reset at each function entry. */
+    OwnMoveState move_state;
+
+    /* When true, diagnostics from check_ownership_valid / mark_moved are
+     * suppressed. Used for the first (priming) pass over a loop body so that
+     * a genuine in-body error is only reported once, on the final pass. */
+    bool suppress_diagnostics;
 } OwnershipChecker;
+
+/* ─── Path-sensitive move-state operations ───────────────────────────────── */
+
+/* Copy the checker's current move state into `out` (caller owns `out` and must
+ * pass it to own_state_free). */
+void own_state_snapshot(OwnershipChecker* checker, OwnStateSnapshot* out);
+
+/* Replace the checker's current move state with a copy of `snap`. */
+void own_state_restore(OwnershipChecker* checker, const OwnStateSnapshot* snap);
+
+/* dst := intersection(dst, src) — a variable stays MOVED only if it is moved
+ * in BOTH. Used to merge sibling branches at a join point. */
+void own_state_merge_intersect(OwnStateSnapshot* dst, const OwnStateSnapshot* src);
+
+/* dst := union(dst, src) — a variable is MOVED if moved in EITHER. Used to fold
+ * a loop back-edge into the loop-head state. */
+void own_state_merge_union(OwnStateSnapshot* dst, const OwnStateSnapshot* src);
+
+/* out := deep copy of src (out must be uninitialised or already freed). */
+void own_state_copy(OwnStateSnapshot* out, const OwnStateSnapshot* src);
+
+/* Structural equality of two move states (order-independent). */
+bool own_state_equal(const OwnStateSnapshot* a, const OwnStateSnapshot* b);
+
+/* Release a snapshot's storage. */
+void own_state_free(OwnStateSnapshot* snap);
+
+/* Drop map entries for symbols declared at `scope_level` — call when that
+ * scope exits and its Symbols are about to be freed. */
+void own_state_forget_scope(OwnershipChecker* checker, int scope_level);
 
 // Initialize ownership checker
 void ownership_checker_init(OwnershipChecker* checker, SemanticAnalyzer* analyzer);
@@ -73,6 +138,9 @@ bool is_move_expr(Expr* expr);
 
 // Validate ownership at end of scope
 void validate_scope_end(OwnershipChecker* checker, int scope_level);
+
+// Reset path-sensitive move state (call at function-body entry)
+void ownership_reset_function(OwnershipChecker* checker);
 
 /* ─── Linear Type System (StringView) hooks ───────────────────────────────
  *

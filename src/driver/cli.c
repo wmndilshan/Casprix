@@ -31,6 +31,7 @@ CompilerConfig g_config = {
     .opt_level                    = 2,
     .safe_mode                    = false,
     .size_opt                     = false,
+    .execute                      = false,
     .diag_format                  = DIAG_FMT_HUMAN,
     .max_errors                   = 0,
     .diag_no_color                = false,
@@ -73,6 +74,8 @@ void cli_print_usage(const char* program_name) {
     printf("  --vm                  Emit VM bytecode via MIR backend\n");
     printf("  --jit                 Emit a JIT package via MIR backend\n");
     printf("  --emit-c              Emit C source via MIR backend\n");
+    printf("  --execute             Run the program in-process via the CVM (implies --mir);\n");
+    printf("                        main()'s return value becomes the process exit code\n");
     printf("  --opt-level=N         Optimization level 0-3 (default: 2)\n");
     printf("  --safe-mode           Enable borrow checking (implies --mir)\n");
     printf("  --size-opt            Optimize for code size\n");
@@ -156,6 +159,15 @@ int cli_parse_args(int argc, char* argv[], const char** input_file) {
         else if (strcmp(argv[i], "--emit-c") == 0) {
             g_config.output_kind = OUTPUT_C;
             g_config.use_mir     = true;
+        }
+        else if (strcmp(argv[i], "--execute") == 0) {
+            /* Run the program in-process via the CVM. Standalone (no --vm
+             * needed) and terminal: the driver runs the program and exits
+             * with main()'s return value, emitting no output artifact even
+             * if combined with --vm/--jit. --vm/--jit *without* --execute
+             * are unchanged (serialize-and-exit). */
+            g_config.execute = true;
+            g_config.use_mir = true;
         }
         else if (strncmp(argv[i], "--opt-level=", 12) == 0) {
             g_config.opt_level = atoi(argv[i] + 12);

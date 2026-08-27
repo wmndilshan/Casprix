@@ -40,15 +40,15 @@ Attention* attention_create(i32 hidden_dim, i32 num_heads) {
     return attn;
 }
 
-void attention_forward(Attention* attn, const Tensor* x, Tensor* out, Arena* arena) {
+void attention_forward(Attention* attn, const Tensor* x, Tensor* out, TensorArena* arena) {
     i32 batch = x->shape[0];
     i32 seq_len = x->shape[1];
     i32 hidden_dim = x->shape[2];
     
     // Q, K, V projections: [batch*seq_len, hidden_dim] × [hidden_dim, hidden_dim]
-    Tensor* Q = arena_alloc_tensor(arena, 3, (i32[]){batch, seq_len, hidden_dim});
-    Tensor* K = arena_alloc_tensor(arena, 3, (i32[]){batch, seq_len, hidden_dim});
-    Tensor* V = arena_alloc_tensor(arena, 3, (i32[]){batch, seq_len, hidden_dim});
+    Tensor* Q = tensor_arena_alloc_tensor(arena, 3, (i32[]){batch, seq_len, hidden_dim});
+    Tensor* K = tensor_arena_alloc_tensor(arena, 3, (i32[]){batch, seq_len, hidden_dim});
+    Tensor* V = tensor_arena_alloc_tensor(arena, 3, (i32[]){batch, seq_len, hidden_dim});
     
     gemm_f32(x->data, attn->Wq->data, Q->data, batch*seq_len, hidden_dim, hidden_dim);
     gemm_f32(x->data, attn->Wk->data, K->data, batch*seq_len, hidden_dim, hidden_dim);
@@ -66,11 +66,11 @@ void attention_forward(Attention* attn, const Tensor* x, Tensor* out, Arena* are
         f32* V_b = V->data + b * seq_len * hidden_dim;
         
         // Transpose K: [seq_len, hidden_dim] -> [hidden_dim, seq_len]
-        Tensor* K_T = arena_alloc_tensor(arena, 2, (i32[]){hidden_dim, seq_len});
+        Tensor* K_T = tensor_arena_alloc_tensor(arena, 2, (i32[]){hidden_dim, seq_len});
         transpose_f32(K_b, K_T->data, seq_len, hidden_dim);
         
         // Scores: Q_b * K_T = [seq_len, hidden_dim] × [hidden_dim, seq_len] -> [seq_len, seq_len]
-        Tensor* scores = arena_alloc_tensor(arena, 2, (i32[]){seq_len, seq_len});
+        Tensor* scores = tensor_arena_alloc_tensor(arena, 2, (i32[]){seq_len, seq_len});
         gemm_f32(Q_b, K_T->data, scores->data, seq_len, hidden_dim, seq_len);
         
         // Scale by 1/sqrt(head_dim)
@@ -81,7 +81,7 @@ void attention_forward(Attention* attn, const Tensor* x, Tensor* out, Arena* are
         softmax_f32(scores->data, scores->data, seq_len, seq_len);
         
         // Attention output: scores * V = [seq_len, seq_len] × [seq_len, hidden_dim] -> [seq_len, hidden_dim]
-        Tensor* attn_out_b = arena_alloc_tensor(arena, 2, (i32[]){seq_len, hidden_dim});
+        Tensor* attn_out_b = tensor_arena_alloc_tensor(arena, 2, (i32[]){seq_len, hidden_dim});
         gemm_f32(scores->data, V_b, attn_out_b->data, seq_len, seq_len, hidden_dim);
         
         // Output projection
@@ -120,13 +120,13 @@ FFN* ffn_create(i32 hidden_dim, i32 ffn_dim) {
     return ffn;
 }
 
-void ffn_forward(FFN* ffn, const Tensor* x, Tensor* out, Arena* arena) {
+void ffn_forward(FFN* ffn, const Tensor* x, Tensor* out, TensorArena* arena) {
     i32 batch_seq = x->shape[0] * x->shape[1];
     i32 hidden_dim = x->shape[2];
     i32 ffn_dim = ffn->W1->shape[1];
     
     // First layer: x * W1
-    Tensor* hidden = arena_alloc_tensor(arena, 2, (i32[]){batch_seq, ffn_dim});
+    Tensor* hidden = tensor_arena_alloc_tensor(arena, 2, (i32[]){batch_seq, ffn_dim});
     gemm_f32(x->data, ffn->W1->data, hidden->data, batch_seq, hidden_dim, ffn_dim);
     
     // Add bias
@@ -181,30 +181,30 @@ TransformerBlock* transformer_block_create(i32 hidden_dim, i32 num_heads, i32 ff
 }
 
 void transformer_block_forward(TransformerBlock* block, const Tensor* x, 
-                                 Tensor* out, Arena* arena) {
+                                 Tensor* out, TensorArena* arena) {
     i32 batch_seq = x->shape[0] * x->shape[1];
     i32 hidden_dim = x->shape[2];
     
     // Pre-normalization
-    Tensor* ln1_out = arena_alloc_tensor(arena, 3, x->shape);
+    Tensor* ln1_out = tensor_arena_alloc_tensor(arena, 3, x->shape);
     layernorm_f32(x->data, block->ln1_gamma->data, block->ln1_beta->data,
                   ln1_out->data, batch_seq, hidden_dim, 1e-5f);
     
     // Self-attention
-    Tensor* attn_out = arena_alloc_tensor(arena, 3, x->shape);
+    Tensor* attn_out = tensor_arena_alloc_tensor(arena, 3, x->shape);
     attention_forward(block->attn, ln1_out, attn_out, arena);
     
     // Residual connection
-    Tensor* residual1 = arena_alloc_tensor(arena, 3, x->shape);
+    Tensor* residual1 = tensor_arena_alloc_tensor(arena, 3, x->shape);
     vec_add_f32(x->data, attn_out->data, residual1->data, x->size);
     
     // Pre-norm for FFN
-    Tensor* ln2_out = arena_alloc_tensor(arena, 3, x->shape);
+    Tensor* ln2_out = tensor_arena_alloc_tensor(arena, 3, x->shape);
     layernorm_f32(residual1->data, block->ln2_gamma->data, block->ln2_beta->data,
                   ln2_out->data, batch_seq, hidden_dim, 1e-5f);
     
     // FFN
-    Tensor* ffn_out = arena_alloc_tensor(arena, 3, x->shape);
+    Tensor* ffn_out = tensor_arena_alloc_tensor(arena, 3, x->shape);
     ffn_forward(block->ffn, ln2_out, ffn_out, arena);
     
     // Final residual
@@ -304,11 +304,11 @@ void transformer_forward(TransformerModel* model, const i32* token_ids,
     i32 hidden_dim = model->hidden_dim;
     
     // Embedding
-    Tensor* x = arena_alloc_tensor(mem->activations, 3, (i32[]){batch, seq_len, hidden_dim});
+    Tensor* x = tensor_arena_alloc_tensor(mem->activations, 3, (i32[]){batch, seq_len, hidden_dim});
     embeddings_forward(model->embeddings, token_ids, batch, seq_len, x);
     
     // Transformer blocks
-    Tensor* block_out = arena_alloc_tensor(mem->activations, 3, (i32[]){batch, seq_len, hidden_dim});
+    Tensor* block_out = tensor_arena_alloc_tensor(mem->activations, 3, (i32[]){batch, seq_len, hidden_dim});
     for (i32 i = 0; i < model->num_layers; i++) {
         transformer_block_forward(model->blocks[i], x, block_out, mem->activations);
         // Swap for next layer
@@ -318,7 +318,7 @@ void transformer_forward(TransformerModel* model, const i32* token_ids,
     }
     
     // Final LayerNorm
-    Tensor* ln_out = arena_alloc_tensor(mem->activations, 3, (i32[]){batch, seq_len, hidden_dim});
+    Tensor* ln_out = tensor_arena_alloc_tensor(mem->activations, 3, (i32[]){batch, seq_len, hidden_dim});
     layernorm_f32(x->data, model->ln_final_gamma->data, model->ln_final_beta->data,
                   ln_out->data, batch*seq_len, hidden_dim, 1e-5f);
     

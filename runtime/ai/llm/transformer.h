@@ -25,7 +25,7 @@ Attention* attention_create(i32 hidden_dim, i32 num_heads);
 // Forward pass
 // x: [batch, seq_len, hidden_dim]
 // out: [batch, seq_len, hidden_dim]
-void attention_forward(Attention* attn, const Tensor* x, Tensor* out, Arena* arena);
+void attention_forward(Attention* attn, const Tensor* x, Tensor* out, TensorArena* arena);
 
 // Destroy attention module
 void attention_destroy(Attention* attn);
@@ -45,7 +45,7 @@ FFN* ffn_create(i32 hidden_dim, i32 ffn_dim);
 // Forward pass
 // x: [batch, seq_len, hidden_dim]
 // out: [batch, seq_len, hidden_dim]
-void ffn_forward(FFN* ffn, const Tensor* x, Tensor* out, Arena* arena);
+void ffn_forward(FFN* ffn, const Tensor* x, Tensor* out, TensorArena* arena);
 
 // Destroy FFN
 void ffn_destroy(FFN* ffn);
@@ -68,7 +68,7 @@ TransformerBlock* transformer_block_create(i32 hidden_dim, i32 num_heads, i32 ff
 // x: [batch, seq_len, hidden_dim]
 // out: [batch, seq_len, hidden_dim]
 void transformer_block_forward(TransformerBlock* block, const Tensor* x, 
-                                 Tensor* out, Arena* arena);
+                                 Tensor* out, TensorArena* arena);
 
 // Destroy transformer block
 void transformer_block_destroy(TransformerBlock* block);

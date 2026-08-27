@@ -22,7 +22,7 @@ void cpx_attention_flash2(
     float*       out,
     int batch, int heads, int seq_len, int head_dim,
     float scale,
-    Arena* arena
+    TensorArena* arena
 );
 
 /* GQA: Grouped Query Attention.
@@ -38,7 +38,7 @@ void cpx_attention_gqa(
     float*       out,
     int batch, int num_q_heads, int num_kv_heads,
     int seq_len, int head_dim, float scale,
-    Arena* arena
+    TensorArena* arena
 );
 
 #endif /* LLM_ATTENTION_H */

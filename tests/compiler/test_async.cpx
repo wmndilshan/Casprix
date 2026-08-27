@@ -1,6 +1,6 @@
-extern func some_async_op(x: i64): i64;
+extern func some_async_op(x: i64) -> i64;
 
-async func my_async_func(x: i64): i64 {
+async func my_async_func(x: i64) -> i64 {
     let y = await some_async_op(x);
     let z = y + 1;
     return z;

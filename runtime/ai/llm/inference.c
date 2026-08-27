@@ -24,14 +24,14 @@ i32 cpx_argmax(const float* logits, i32 vocab_size) {
 }
 
 i32 cpx_sample_topk(const float* logits, i32 vocab_size,
-                     i32 k, float temperature, Arena* scratch) {
+                     i32 k, float temperature, TensorArena* scratch) {
     assert(logits  != NULL);
     assert(scratch != NULL);
     assert(vocab_size > 0);
     if (k <= 0 || k > vocab_size) k = vocab_size;
 
     /* Allocate score copy from arena. */
-    float* scores = (float*)arena_alloc(scratch, (size_t)vocab_size * sizeof(float),
+    float* scores = (float*)tensor_arena_alloc(scratch, (size_t)vocab_size * sizeof(float),
                                         sizeof(float));
     assert(scores != NULL);
     memcpy(scores, logits, (size_t)vocab_size * sizeof(float));
@@ -45,11 +45,11 @@ i32 cpx_sample_topk(const float* logits, i32 vocab_size,
     /* Partial selection sort to find the k-th largest threshold.
      * O(vocab_size * k) — acceptable for small k at inference.
      * For large k, replace with nth_element equivalent. */
-    int*  indices = (int*)arena_alloc(scratch, (size_t)k * sizeof(int), sizeof(int));
+    int*  indices = (int*)tensor_arena_alloc(scratch, (size_t)k * sizeof(int), sizeof(int));
     assert(indices != NULL);
 
     /* Mask tracking which indices have been picked. */
-    uint8_t* used = (uint8_t*)arena_alloc(scratch, (size_t)vocab_size, 1);
+    uint8_t* used = (uint8_t*)tensor_arena_alloc(scratch, (size_t)vocab_size, 1);
     assert(used != NULL);
     memset(used, 0, (size_t)vocab_size);
 
@@ -128,7 +128,7 @@ const float* cpx_mcu_decode_step(CpxMCUInferenceCtx* ctx, i32 token_id) {
     assert(ctx != NULL);
 
     /* Allocate logits buffer from SRAM arena — no heap. */
-    float* logits = (float*)arena_alloc(&ctx->arena,
+    float* logits = (float*)tensor_arena_alloc(&ctx->arena,
                                          (size_t)ctx->vocab_size * sizeof(float),
                                          sizeof(float));
     if (!logits) return NULL;  /* SRAM exhausted */
@@ -166,7 +166,7 @@ const float* cpx_mcu_decode_step(CpxMCUInferenceCtx* ctx, i32 token_id) {
     return logits;
 }
 
-void cpx_mcu_arena_reset(CpxMCUInferenceCtx* ctx) {
+void cpx_mcu_tensor_arena_reset(CpxMCUInferenceCtx* ctx) {
     assert(ctx != NULL);
     /* Reset arena offset only — weights_flash and config are unchanged. */
     ctx->arena.offset = 0;

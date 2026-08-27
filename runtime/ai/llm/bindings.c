@@ -110,7 +110,7 @@ f32* cpx_transformer_forward(void* model, const i32* token_ids,
     
     // Allocate output logits
     i32 vocab_size = m->vocab_size;
-    Tensor* logits = arena_alloc_tensor(mem->activations, 3, 
+    Tensor* logits = tensor_arena_alloc_tensor(mem->activations, 3, 
                                         (i32[]){batch, seq_len, vocab_size});
     
     // Forward pass
@@ -201,7 +201,7 @@ f32 cpx_train_step(void* model_handle, void* opt_handle, const i32* tokens,
     MemoryPools* mem = mempool_create(0, act_size, grad_size);
 
     // Allocate logits tensor
-    Tensor* logits = arena_alloc_tensor(mem->activations, 3,
+    Tensor* logits = tensor_arena_alloc_tensor(mem->activations, 3,
                                          (i32[]){batch, seq_len, vocab_size});
 
     // Forward pass
@@ -240,7 +240,7 @@ f32 cpx_eval_step(void* model_handle, const i32* tokens, const i32* targets,
     size_t act_size = (size_t)batch * seq_len * hidden_dim * 4;
     MemoryPools* mem = mempool_create(0, act_size, 0);
 
-    Tensor* logits = arena_alloc_tensor(mem->activations, 3,
+    Tensor* logits = tensor_arena_alloc_tensor(mem->activations, 3,
                                          (i32[]){batch, seq_len, vocab_size});
 
     transformer_forward(model, tokens, batch, seq_len, logits, mem);
@@ -336,7 +336,7 @@ i32* cpx_generate(void* model_handle, const i32* prompt_tokens, i32 prompt_len,
         size_t act_size = (size_t)cur_len * hidden_dim * 4;
         MemoryPools* mem = mempool_create(0, act_size, 0);
 
-        Tensor* logits = arena_alloc_tensor(mem->activations, 3,
+        Tensor* logits = tensor_arena_alloc_tensor(mem->activations, 3,
                                              (i32[]){1, cur_len, vocab_size});
 
         // Forward pass

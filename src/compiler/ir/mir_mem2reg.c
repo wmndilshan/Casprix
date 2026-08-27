@@ -399,6 +399,7 @@ static bool is_promotable(MirFunction* func, MirInst* alloca_inst,
                     case MIR_CONST_BOOL: case MIR_CONST_STRING:
                     case MIR_CONST_NULL: case MIR_CONST_FUNC:
                     case MIR_ALLOCA: case MIR_PHI:
+                    case MIR_GLOBAL_ADDR: case MIR_OBJ_ALLOC:
                         uses = false;
                         break;
                     default:

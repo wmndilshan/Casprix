@@ -41,6 +41,21 @@ void free_symbol_table(SymbolTable* table) {
             if (cls->methods) free(cls->methods);
             free(cls);
         }
+        if (table->symbols[i]->kind == SYMBOL_TRAIT && table->symbols[i]->trait_info) {
+            TraitSymbol* tr = table->symbols[i]->trait_info;
+            free(tr->name);
+            for (int j = 0; j < tr->method_count; j++) {
+                free(tr->methods[j].name);
+                if (tr->methods[j].return_class_name) {
+                    free(tr->methods[j].return_class_name);
+                }
+                if (tr->methods[j].param_types) {
+                    free(tr->methods[j].param_types);
+                }
+            }
+            if (tr->methods) free(tr->methods);
+            free(tr);
+        }
         free(table->symbols[i]);
     }
     FREE_ARRAY(Symbol*, table->symbols, table->capacity);
@@ -76,6 +91,7 @@ bool add_symbol(SymbolTable* table, const char* name, SymbolKind kind,
     symbol->param_count = 0;
     symbol->return_type = TYPE_ERROR;
     symbol->class_info = NULL;
+    symbol->trait_info = NULL;
     symbol->is_extern = false;
     symbol->is_async = false;
     symbol->is_closure_value = false;
@@ -390,4 +406,77 @@ bool is_subclass_of(ClassSymbol* child, ClassSymbol* parent) {
     }
 
     return false;
+}
+
+// Trait-specific operations
+
+bool add_trait(SymbolTable* table, const char* name, int scope_depth) {
+    // Check for redeclaration against any symbol of the same name in scope
+    // (classes, structs, enums, unions and traits share one type namespace).
+    for (int i = table->count - 1; i >= 0; i--) {
+        if (table->symbols[i]->scope_depth < scope_depth) break;
+        if (strcmp(table->symbols[i]->name, name) == 0) {
+            return false; // Already declared
+        }
+    }
+
+    if (!add_symbol(table, name, SYMBOL_TRAIT, TYPE_VOID, scope_depth)) {
+        return false;
+    }
+
+    Symbol* trait_symbol = table->symbols[table->count - 1];
+    TraitSymbol* tr = ALLOCATE(TraitSymbol, 1);
+    tr->name = strdup(name);
+    tr->methods = NULL;
+    tr->method_count = 0;
+    trait_symbol->trait_info = tr;
+    return true;
+}
+
+TraitSymbol* lookup_trait(SymbolTable* table, const char* name) {
+    for (int i = table->count - 1; i >= 0; i--) {
+        if (table->symbols[i]->kind == SYMBOL_TRAIT &&
+            strcmp(table->symbols[i]->name, name) == 0) {
+            return table->symbols[i]->trait_info;
+        }
+    }
+    return NULL;
+}
+
+bool add_method_to_trait(TraitSymbol* trait_sym, const char* name, DataType return_type,
+                         const char* return_class_name, DataType* param_types,
+                         int param_count, bool has_default) {
+    for (int i = 0; i < trait_sym->method_count; i++) {
+        if (strcmp(trait_sym->methods[i].name, name) == 0) {
+            return false; // Duplicate method
+        }
+    }
+
+    trait_sym->methods = realloc(trait_sym->methods,
+                                 sizeof(TraitMethodSymbol) * (trait_sym->method_count + 1));
+
+    TraitMethodSymbol* m = &trait_sym->methods[trait_sym->method_count];
+    m->name = strdup(name);
+    m->return_type = return_type;
+    m->return_class_name = return_class_name ? strdup(return_class_name) : NULL;
+    m->param_count = param_count;
+    m->has_default = has_default;
+    if (param_count > 0) {
+        m->param_types = ALLOCATE(DataType, param_count);
+        memcpy(m->param_types, param_types, sizeof(DataType) * param_count);
+    } else {
+        m->param_types = NULL;
+    }
+
+    trait_sym->method_count++;
+    return true;
+}
+
+TraitMethodSymbol* find_trait_method(TraitSymbol* trait_sym, const char* name) {
+    for (int i = 0; i < trait_sym->method_count; i++) {
+        if (strcmp(trait_sym->methods[i].name, name) == 0) {
+            return &trait_sym->methods[i];
+        }
+    }
+    return NULL;
 }

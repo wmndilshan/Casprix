@@ -9,6 +9,7 @@ typedef struct {
     SymbolTable* symbols;
     int scope_depth;
     DataType current_function_return_type;
+    DataType* current_lambda_return_type;  // Pointer to active lambda's return_type for inference
     bool in_function;
     bool in_async_function;
     ClassSymbol* current_class;  // NULL when not in a class method

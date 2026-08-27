@@ -189,10 +189,16 @@ typedef enum {
     EXPR_INDEX,          // Array indexing: arr[index]
     EXPR_LAMBDA,         // Lambda: |x: Int, y: Int| => x + y
     EXPR_GENERIC_INST,   // Generic instantiation: List<Int>
-    EXPR_AWAIT           // Await expression: await future
+    EXPR_AWAIT,          // Await expression: await future
+    EXPR_ARRAY_LITERAL   // Array literal: [1, 2, 3]
 } ExprType;
 
 typedef struct Expr Expr;
+
+typedef struct {
+    Expr** elements;
+    int element_count;
+} ArrayLiteralExpr;
 
 typedef struct {
     Expr* expression;
@@ -222,6 +228,10 @@ typedef struct {
 typedef struct {
     char* name;
     bool  is_move;   // True when prefixed with `move`: `y = move x`
+    bool  is_closure_value;
+    int   closure_capture_count;
+    int   closure_lambda_id;
+    DataType* closure_capture_types;
 } VariableExpr;
 
 typedef struct {
@@ -343,6 +353,7 @@ struct Expr {
         LambdaExpr lambda;
         GenericInstExpr generic_inst;
         AwaitExpr await_expr;
+        ArrayLiteralExpr array_literal;
     } as;
 };
 
@@ -684,6 +695,7 @@ Expr* create_this_expr(char* class_name, int line, int col);
 Expr* create_new_expr(char* class_name, Expr** arguments, int arg_count, int line, int col);
 Expr* create_index_expr(Expr* array, Expr* index, int line, int col);
 Expr* create_await_expr(Expr* expression, int line, int col);
+Expr* create_array_literal_expr(Expr** elements, int count, int line, int col);
 
 Stmt* create_declaration_stmt(char* name, DataType type, Expr* init, int line, int col);
 Stmt* create_assignment_stmt(Expr* target, Expr* value, int line, int col);
@@ -709,6 +721,7 @@ Stmt* create_enum_stmt(char* name, EnumVariant* variants, int variant_count, int
 Stmt* create_union_stmt(char* name, UnionField* fields, int field_count, int line, int col);
 
 // Memory management
+Expr* clone_expr(const Expr* expr);
 void free_expr(Expr* expr);
 void free_stmt(Stmt* stmt);
 

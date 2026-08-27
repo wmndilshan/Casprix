@@ -37,6 +37,7 @@ struct HttpServer {
     HttpRoute* routes;
     Middleware* middlewares;
     int middleware_count;
+    void* pool;
     bool running;
 };
 

@@ -46,6 +46,9 @@ void mir_optimize_module(MirModule* module, MirOptLevel level, MirOptStats* stat
 /* Run optimization pipeline on a single function. */
 void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* stats);
 
+/* Standalone block/CFG cleanup utility */
+void mir_remove_unreachable_blocks(MirFunction* func);
+
 /* Individual passes (can be called standalone) */
 int mir_pass_constant_fold(MirFunction* func);
 int mir_pass_copy_propagate(MirFunction* func);

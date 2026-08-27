@@ -27,7 +27,7 @@ i32 cpx_argmax(const float* logits, i32 vocab_size);
  * runs softmax, returns sampled token index.
  * All scratch allocated from arena — no malloc. */
 i32 cpx_sample_topk(const float* logits, i32 vocab_size,
-                     i32 k, float temperature, Arena* scratch);
+                     i32 k, float temperature, TensorArena* scratch);
 
 /* ═══════════════════════════════════════════════════════════════════
  * MCU inference context
@@ -38,7 +38,7 @@ i32 cpx_sample_topk(const float* logits, i32 vocab_size,
  *                           vocab, dim, layers, heads, max_seq);
  *   const float* logits = cpx_mcu_decode_step(&ctx, token);
  *   i32 next = cpx_argmax(logits, ctx.vocab_size);
- *   cpx_mcu_arena_reset(&ctx);       // reclaim activations
+ *   cpx_mcu_tensor_arena_reset(&ctx);       // reclaim activations
  * ═══════════════════════════════════════════════════════════════════ */
 
 #ifdef CPX_PROFILE_MCU
@@ -54,8 +54,8 @@ typedef struct {
     /* Static SRAM: activations + KV state for one decode step. */
     uint8_t        sram_pool[CPX_MCU_SRAM_BUDGET];
 
-    /* Arena built over sram_pool. Reset between tokens. */
-    Arena          arena;
+    /* TensorArena built over sram_pool. Reset between tokens. */
+    TensorArena          arena;
 
     /* Model config (filled by cpx_mcu_inference_init). */
     i32  vocab_size;
@@ -76,13 +76,13 @@ int cpx_mcu_inference_init(CpxMCUInferenceCtx* ctx,
                              i32 max_seq_len);
 
 /* Run one decode step: input token_id → logits[vocab_size].
- * Returns pointer into the arena (valid until next cpx_mcu_arena_reset).
+ * Returns pointer into the arena (valid until next cpx_mcu_tensor_arena_reset).
  * Returns NULL on arena overflow. */
 const float* cpx_mcu_decode_step(CpxMCUInferenceCtx* ctx, i32 token_id);
 
 /* Reset activation arena for next decode step.
  * Does NOT reset weights or model config. */
-void cpx_mcu_arena_reset(CpxMCUInferenceCtx* ctx);
+void cpx_mcu_tensor_arena_reset(CpxMCUInferenceCtx* ctx);
 
 #endif /* CPX_PROFILE_MCU */
 

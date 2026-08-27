@@ -64,7 +64,10 @@ int main(int argc, char* argv[]) {
 
     /* 5. Compile → intermediate artifact (.asm / .c / .cpxbc …) */
     int result = pipeline_compile(input_file, output_file_path);
-    if (result != 0 || g_config.parse_only || g_config.check_only) {
+    if (result != 0 || g_config.parse_only || g_config.check_only ||
+        g_config.execute) {
+        /* --execute is terminal: pipeline_compile ran the program in-process
+         * and `result` is already main()'s exit code — no assemble/link. */
         goto done;
     }
 
