@@ -725,6 +725,8 @@ void mir_optimize_function(MirFunction* func, MirOptLevel level, MirOptStats* st
         if (stats) stats->total_passes++;
         if (total_changes == 0) break; /* Fixed point reached */
     }
+
+    (void)mir_validate_function(func);
 }
 
 void mir_remove_unreachable_blocks(MirFunction* func) {

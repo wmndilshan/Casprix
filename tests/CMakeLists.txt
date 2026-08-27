@@ -6,6 +6,7 @@ set(RUNTIME_TEST_SRCS
     runtime/test_stdlib.c
     runtime/test_scheduler.c
     runtime/test_networking.c
+    runtime/test_arc_gc.c
     runtime/benchmark.c
 )
 
@@ -25,6 +26,27 @@ foreach(test_src ${RUNTIME_TEST_SRCS})
         add_test(NAME ${test_name} COMMAND ${test_name})
     endif()
 endforeach()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_mir_validation.c")
+    add_executable(test_mir_validation
+        runtime/test_mir_validation.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+    )
+    target_include_directories(test_mir_validation PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_mir_validation PRIVATE
+        casprix_compile_options
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    add_test(NAME test_mir_validation COMMAND test_mir_validation)
+endif()
 
 find_package(ZLIB QUIET)
 

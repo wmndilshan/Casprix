@@ -1,30 +1,125 @@
 // Casperix Runtime - ARC Implementation
-// Thread-safe automatic reference counting
+// Thread-safe automatic reference counting with weak references
 
 #include "arc.h"
+
+#include <assert.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <assert.h>
 
-/* ATOMIC_* macros are defined in arc.h and shared with cycle_gc.c */
+// Platform-specific atomic helpers
+#ifdef _MSC_VER
+    #include <intrin.h>
+
+static inline int32_t arc_atomic_load_i32(const volatile int32_t* value) {
+    return (int32_t)_InterlockedCompareExchange((volatile long*)value, 0, 0);
+}
+
+static inline int32_t arc_atomic_fetch_sub_i32(volatile int32_t* value, int32_t delta) {
+    return (int32_t)_InterlockedExchangeAdd((volatile long*)value, -delta);
+}
+
+static inline bool arc_atomic_compare_exchange_i32(volatile int32_t* value,
+                                                   int32_t* expected, int32_t desired) {
+    long observed = _InterlockedCompareExchange((volatile long*)value,
+                                                (long)desired, (long)*expected);
+    if ((int32_t)observed == *expected) {
+        return true;
+    }
+    *expected = (int32_t)observed;
+    return false;
+}
+
+static inline uint32_t arc_atomic_load_u32(const volatile uint32_t* value) {
+    return (uint32_t)_InterlockedCompareExchange((volatile long*)value, 0, 0);
+}
+
+static inline uint32_t arc_atomic_fetch_or_u32(volatile uint32_t* value, uint32_t mask) {
+    return (uint32_t)_InterlockedOr((volatile long*)value, (long)mask);
+}
+#elif defined(__GNUC__) || defined(__clang__)
+static inline int32_t arc_atomic_load_i32(const volatile int32_t* value) {
+    return __atomic_load_n(value, __ATOMIC_ACQUIRE);
+}
+
+static inline int32_t arc_atomic_fetch_sub_i32(volatile int32_t* value, int32_t delta) {
+    return __atomic_fetch_sub(value, delta, __ATOMIC_ACQ_REL);
+}
+
+static inline bool arc_atomic_compare_exchange_i32(volatile int32_t* value,
+                                                   int32_t* expected, int32_t desired) {
+    return __atomic_compare_exchange_n(value, expected, desired, false,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
+static inline uint32_t arc_atomic_load_u32(const volatile uint32_t* value) {
+    return __atomic_load_n(value, __ATOMIC_ACQUIRE);
+}
+
+static inline uint32_t arc_atomic_fetch_or_u32(volatile uint32_t* value, uint32_t mask) {
+    return __atomic_fetch_or(value, mask, __ATOMIC_ACQ_REL);
+}
+#else
+static inline int32_t arc_atomic_load_i32(const volatile int32_t* value) {
+    return *value;
+}
+
+static inline int32_t arc_atomic_fetch_sub_i32(volatile int32_t* value, int32_t delta) {
+    int32_t old = *value;
+    *value -= delta;
+    return old;
+}
+
+static inline bool arc_atomic_compare_exchange_i32(volatile int32_t* value,
+                                                   int32_t* expected, int32_t desired) {
+    if (*value == *expected) {
+        *value = desired;
+        return true;
+    }
+    *expected = *value;
+    return false;
+}
+
+static inline uint32_t arc_atomic_load_u32(const volatile uint32_t* value) {
+    return *value;
+}
+
+static inline uint32_t arc_atomic_fetch_or_u32(volatile uint32_t* value, uint32_t mask) {
+    uint32_t old = *value;
+    *value |= mask;
+    return old;
+}
+#endif
 
 // Global ARC statistics
 static ArcStats g_arc_stats = {0};
 
-// --- Internal helpers ---
+static void arc_abort_count_error(const char* message) {
+    fprintf(stderr, "ARC ERROR: %s\n", message);
+    abort();
+}
 
-#ifndef _WIN32
-extern char __data_start;
-extern char _end;
-#endif
+static bool is_power_of_two(size_t value) {
+    return value != 0 && (value & (value - 1)) == 0;
+}
 
-static inline bool is_static_ptr(void* obj) {
-#ifndef _WIN32
-    return (char*)obj >= &__data_start && (char*)obj < &_end;
-#else
-    return false; // Windows implementation would need GetModuleHandle/GetModuleInformation
-#endif
+static size_t arc_default_alignment(void) {
+    size_t align = _Alignof(max_align_t);
+    if (align < _Alignof(ArcHeader*)) {
+        align = _Alignof(ArcHeader*);
+    }
+    return align;
+}
+
+static bool add_sizes(size_t lhs, size_t rhs, size_t* out) {
+    if (!out || lhs > SIZE_MAX - rhs) {
+        return false;
+    }
+    *out = lhs + rhs;
+    return true;
 }
 
 static inline ArcHeader* get_header(void* obj) {
@@ -34,206 +129,434 @@ static inline ArcHeader* get_header(void* obj) {
 
 static inline const ArcHeader* get_header_const(const void* obj) {
     assert(obj != NULL);
-    return (const ArcHeader*)((const char*)(obj) - ARC_HEADER_SIZE);
+    return ARC_OBJ_TO_HEADER((void*)obj);
 }
 
-static void arc_dealloc(ArcHeader* header) {
-    // Call destructor if registered
+static bool arc_header_is_deallocating(const ArcHeader* header) {
+    return (arc_atomic_load_u32((const volatile uint32_t*)&header->flags) &
+            ARC_FLAG_DEALLOCATING) != 0;
+}
+
+static bool arc_header_is_finalized(const ArcHeader* header) {
+    int32_t strong_count;
+
+    if (!header) {
+        return true;
+    }
+    if (arc_header_is_deallocating(header)) {
+        return true;
+    }
+    strong_count = arc_atomic_load_i32(&header->strong_count);
+    return strong_count <= 0 &&
+           (header->color == ARC_COLOR_WHITE ||
+            header->color == ARC_COLOR_GRAY ||
+            (arc_atomic_load_u32(&header->flags) & ARC_FLAG_BUFFERED) != 0);
+}
+
+static bool arc_try_inc_count(volatile int32_t* count, const char* overflow_message) {
+    int32_t current = arc_atomic_load_i32(count);
+
+    while (true) {
+        if (current < 0) {
+            arc_abort_count_error("reference count underflow detected");
+        }
+        if (current == INT32_MAX) {
+            arc_abort_count_error(overflow_message);
+        }
+        if (arc_atomic_compare_exchange_i32(count, &current, current + 1)) {
+            return true;
+        }
+    }
+}
+
+static void arc_zero_payload(const ArcHeader* header) {
+    if (header && header->user_data && header->size > 0) {
+        memset(header->user_data, 0, header->size);
+    }
+}
+
+static void arc_free_allocation(ArcHeader* header) {
+    void* allocation_base = header ? header->allocation_base : NULL;
+    free(allocation_base);
+}
+
+static void arc_finalize_zero_strong(ArcHeader* header) {
+    int32_t old_weak;
+
+    if (!header) {
+        return;
+    }
+
     if ((header->flags & ARC_FLAG_HAS_DESTRUCTOR) && header->destructor) {
-        void* obj = ARC_HEADER_TO_OBJ(header);
-        header->destructor(obj);
+        header->destructor(header->user_data);
     }
 
-    ATOMIC_INC_SZ(&g_arc_stats.total_frees);
-    ATOMIC_DEC_SZ(&g_arc_stats.current_objects);
-    ATOMIC_SUB_SZ(&g_arc_stats.current_bytes, header->size);
+    header->scanner = NULL;
+    header->color = ARC_COLOR_BLACK;
+    header->flags &= ~(ARC_FLAG_BUFFERED | ARC_FLAG_CYCLE_SUSPECT);
 
-    /* Atomically drop the +1 weak-count held on behalf of all strong refs.
-       If the result is 0, no weak handles remain and we can free immediately.
-       Otherwise zero the user data and let the last arc_weak_release free it. */
-    int32_t wc = ATOMIC_DEC(&header->weak_count);
-    if (wc == 0) {
-        free(header);
+    g_arc_stats.total_frees++;
+    if (g_arc_stats.current_objects > 0) {
+        g_arc_stats.current_objects--;
+    }
+    if (g_arc_stats.current_bytes >= header->size) {
+        g_arc_stats.current_bytes -= header->size;
     } else {
-        void* obj = ARC_HEADER_TO_OBJ(header);
-        memset(obj, 0, header->size);
+        g_arc_stats.current_bytes = 0;
     }
+
+    old_weak = arc_atomic_fetch_sub_i32(&header->weak_count, 1);
+    if (old_weak <= 0) {
+        arc_abort_count_error("weak count underflow while finalizing object");
+    }
+    if (old_weak == 1) {
+        arc_free_allocation(header);
+        return;
+    }
+
+    arc_zero_payload(header);
+}
+
+static bool arc_start_deallocation(ArcHeader* header) {
+    uint32_t old_flags;
+
+    if (!header) {
+        return false;
+    }
+
+    old_flags = arc_atomic_fetch_or_u32(&header->flags, ARC_FLAG_DEALLOCATING);
+    if ((old_flags & ARC_FLAG_DEALLOCATING) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool arc_release_impl(void* obj) {
+    ArcHeader* header;
+    int32_t current;
+
+    if (!obj) {
+        return false;
+    }
+
+    header = get_header(obj);
+    current = arc_atomic_load_i32(&header->strong_count);
+
+    while (true) {
+        if (current <= 0) {
+            if (arc_header_is_finalized(header)) {
+                return false;
+            }
+            arc_abort_count_error("over-release detected");
+        }
+        if (arc_atomic_compare_exchange_i32(&header->strong_count, &current, current - 1)) {
+            break;
+        }
+    }
+
+    if (current == 1) {
+        if (arc_start_deallocation(header)) {
+            arc_finalize_zero_strong(header);
+        }
+        return false;
+    }
+
+    return true;
 }
 
 // --- Core ARC API ---
 
 void* arc_alloc(size_t size) {
-    return arc_alloc_full(size, NULL, NULL);
+    return arc_alloc_full_aligned(size, 0, NULL, NULL);
+}
+
+void* arc_alloc_aligned(size_t size, size_t alignment) {
+    return arc_alloc_full_aligned(size, alignment, NULL, NULL);
 }
 
 void* arc_alloc_with_destructor(size_t size, arc_destructor_fn destructor) {
-    return arc_alloc_full(size, destructor, NULL);
+    return arc_alloc_full_aligned(size, 0, destructor, NULL);
+}
+
+void* arc_alloc_with_destructor_aligned(size_t size, size_t alignment,
+                                        arc_destructor_fn destructor) {
+    return arc_alloc_full_aligned(size, alignment, destructor, NULL);
 }
 
 void* arc_alloc_full(size_t size, arc_destructor_fn destructor, arc_scan_fn scanner) {
-    if (size == 0) return NULL;
+    return arc_alloc_full_aligned(size, 0, destructor, scanner);
+}
 
-    size_t total = ARC_HEADER_SIZE + size;
-    ArcHeader* header = (ArcHeader*)malloc(total);
-    if (!header) return NULL;
+void* arc_alloc_full_aligned(size_t size, size_t alignment,
+                             arc_destructor_fn destructor, arc_scan_fn scanner) {
+    ArcHeader* header;
+    void* raw;
+    void* user_data;
+    ArcHeader** slot;
+    uintptr_t raw_addr;
+    uintptr_t payload_addr;
+    size_t total = 0;
+    size_t metadata_size;
 
-    // Initialize header
+    if (size == 0) {
+        return NULL;
+    }
+
+    alignment = alignment ? alignment : arc_default_alignment();
+    if (!is_power_of_two(alignment)) {
+        return NULL;
+    }
+    if (alignment < arc_default_alignment()) {
+        alignment = arc_default_alignment();
+    }
+
+    metadata_size = sizeof(ArcHeader) + ARC_HEADER_SLOT_SIZE;
+    if (!add_sizes(metadata_size, size, &total) ||
+        !add_sizes(total, alignment - 1, &total)) {
+        return NULL;
+    }
+
+    raw = malloc(total);
+    if (!raw) {
+        return NULL;
+    }
+
+    header = (ArcHeader*)raw;
+    raw_addr = (uintptr_t)raw + metadata_size;
+    payload_addr = (raw_addr + (alignment - 1)) & ~((uintptr_t)alignment - 1U);
+    user_data = (void*)payload_addr;
+    slot = (ArcHeader**)((uint8_t*)user_data - ARC_HEADER_SLOT_SIZE);
+
+    memset(header, 0, sizeof(*header));
+    memset(user_data, 0, size);
+
+    header->allocation_base = raw;
+    header->user_data = user_data;
+    header->size = size;
+    header->alignment = alignment;
     header->strong_count = 1;
     header->weak_count = 1;  // +1 held by strong refs collectively
     header->flags = ARC_FLAG_NONE;
-    header->size = (uint32_t)size;
     header->color = ARC_COLOR_BLACK;
-    header->destructor = NULL;
-    header->scanner = NULL;
+    header->destructor = destructor;
+    header->scanner = scanner;
 
     if (destructor) {
-        header->destructor = destructor;
         header->flags |= ARC_FLAG_HAS_DESTRUCTOR;
     }
 
-    if (scanner) {
-        header->scanner = scanner;
-    }
+    *slot = header;
 
-    // Zero-initialize user data
-    void* obj = ARC_HEADER_TO_OBJ(header);
-    memset(obj, 0, size);
+    g_arc_stats.total_allocations++;
+    g_arc_stats.current_objects++;
+    g_arc_stats.current_bytes += size;
 
-    ATOMIC_INC_SZ(&g_arc_stats.total_allocations);
-    ATOMIC_INC_SZ(&g_arc_stats.current_objects);
-    ATOMIC_ADD_SZ(&g_arc_stats.current_bytes, size);
-
-    return obj;
+    return user_data;
 }
 
 void* arc_retain(void* obj) {
-    if (!obj || is_static_ptr(obj)) return obj;
+    ArcHeader* header;
 
-    ArcHeader* header = get_header(obj);
-    assert(header->strong_count > 0 && "arc_retain on dead object");
-    assert(!(header->flags & ARC_FLAG_MOVED) && "arc_retain on moved object");
+    if (!obj) {
+        return NULL;
+    }
 
-    ATOMIC_INC(&header->strong_count);
-    ATOMIC_INC_SZ(&g_arc_stats.total_retains);
+    header = get_header(obj);
+    if (arc_header_is_finalized(header)) {
+        arc_abort_count_error("arc_retain on dead or moved object");
+    }
+    if ((arc_atomic_load_u32(&header->flags) & ARC_FLAG_MOVED) != 0) {
+        arc_abort_count_error("arc_retain on moved object");
+    }
+
+    arc_try_inc_count(&header->strong_count, "strong count overflow on retain");
+    g_arc_stats.total_retains++;
 
     return obj;
 }
 
 void arc_release(void* obj) {
-    if (!obj || is_static_ptr(obj)) return;
-
-    ArcHeader* header = get_header(obj);
-    assert(header->strong_count > 0 && "arc_release on dead object");
-
-    ATOMIC_INC_SZ(&g_arc_stats.total_releases);
-
-    int32_t new_count = ATOMIC_DEC(&header->strong_count);
-    if (new_count == 0) {
-        // Last strong reference dropped - deallocate
-        arc_dealloc(header);
-    } else if (new_count < 0) {
-        // Over-release detected
-        fprintf(stderr, "ARC ERROR: over-release detected (strong_count went negative)\n");
-        abort();
+    if (!obj) {
+        return;
     }
+
+    g_arc_stats.total_releases++;
+    (void)arc_release_impl(obj);
+}
+
+bool arc_release_survived(void* obj) {
+    if (!obj) {
+        return false;
+    }
+
+    g_arc_stats.total_releases++;
+    return arc_release_impl(obj);
 }
 
 int32_t arc_strong_count(const void* obj) {
-    if (!obj) return 0;
-    // Cast away const for atomic load - read-only operation is safe
-    ArcHeader* header = (ArcHeader*)get_header_const(obj);
-    return ATOMIC_LOAD(&header->strong_count);
+    const ArcHeader* header;
+
+    if (!obj) {
+        return 0;
+    }
+
+    header = get_header_const(obj);
+    return arc_atomic_load_i32(&header->strong_count);
 }
 
 // --- Weak References ---
 
 ArcWeak arc_weak_create(void* obj) {
     ArcWeak weak = { NULL };
-    if (!obj) return weak;
+    ArcHeader* header;
 
-    ArcHeader* header = get_header(obj);
-    assert(header->strong_count > 0 && "arc_weak_create on dead object");
+    if (!obj) {
+        return weak;
+    }
 
-    ATOMIC_INC(&header->weak_count);
-    header->flags |= ARC_FLAG_HAS_WEAK;
+    header = get_header(obj);
+    if (arc_header_is_finalized(header) || arc_atomic_load_i32(&header->strong_count) <= 0) {
+        arc_abort_count_error("arc_weak_create on dead object");
+    }
+
+    arc_try_inc_count(&header->weak_count, "weak count overflow on weak create");
+    arc_atomic_fetch_or_u32(&header->flags, ARC_FLAG_HAS_WEAK);
 
     weak.header = header;
-    ATOMIC_INC_SZ(&g_arc_stats.weak_refs_created);
+    g_arc_stats.weak_refs_created++;
 
     return weak;
 }
 
 void* arc_weak_upgrade(ArcWeak weak) {
-    if (!weak.header) {
-        ATOMIC_INC_SZ(&g_arc_stats.weak_upgrade_fails);
+    ArcHeader* header = weak.header;
+    int32_t strong;
+
+    if (!header) {
+        g_arc_stats.weak_upgrade_fails++;
         return NULL;
     }
 
-    /* CAS Loop: try to increment strong count, but only if it's currently > 0.
-       This prevents a TOCTOU race where the object is freed between the check
-       and the increment. */
-    int32_t count = ATOMIC_LOAD(&weak.header->strong_count);
-    while (count > 0) {
-        int32_t old_count = ATOMIC_CAS(&weak.header->strong_count, count, count + 1);
-        if (old_count == count) {
-            ATOMIC_INC_SZ(&g_arc_stats.total_retains);
-            ATOMIC_INC_SZ(&g_arc_stats.weak_upgrades);
-            return ARC_HEADER_TO_OBJ(weak.header);
+    strong = arc_atomic_load_i32(&header->strong_count);
+    while (true) {
+        if (strong <= 0 || arc_header_is_finalized(header)) {
+            g_arc_stats.weak_upgrade_fails++;
+            return NULL;
         }
-        count = old_count;
+        if (strong == INT32_MAX) {
+            arc_abort_count_error("strong count overflow during weak upgrade");
+        }
+        if (arc_atomic_compare_exchange_i32(&header->strong_count, &strong, strong + 1)) {
+            g_arc_stats.total_retains++;
+            g_arc_stats.weak_upgrades++;
+            return ARC_HEADER_TO_OBJ(header);
+        }
     }
-
-    ATOMIC_INC_SZ(&g_arc_stats.weak_upgrade_fails);
-    return NULL;
 }
 
 void arc_weak_release(ArcWeak* weak) {
-    if (!weak || !weak->header) return;
+    ArcHeader* header;
+    int32_t old_weak;
 
-    ArcHeader* header = weak->header;
+    if (!weak || !weak->header) {
+        return;
+    }
+
+    header = weak->header;
     weak->header = NULL;
 
-    int32_t new_weak = ATOMIC_DEC(&header->weak_count);
-    if (new_weak == 0 && ATOMIC_LOAD(&header->strong_count) <= 0) {
-        /* Both strong and weak counts are zero - free the header.
-           Use ATOMIC_LOAD for strong_count to avoid a TOCTOU race
-           in multithreaded contexts (Bug #6 fix). */
-        free(header);
+    old_weak = arc_atomic_fetch_sub_i32(&header->weak_count, 1);
+    if (old_weak <= 0) {
+        arc_abort_count_error("weak count underflow on weak release");
+    }
+    if (old_weak == 1 && arc_atomic_load_i32(&header->strong_count) <= 0) {
+        arc_free_allocation(header);
     }
 }
 
 bool arc_weak_is_alive(ArcWeak weak) {
-    if (!weak.header) return false;
-    return ATOMIC_LOAD(&weak.header->strong_count) > 0;
+    if (!weak.header) {
+        return false;
+    }
+    if (arc_header_is_finalized(weak.header)) {
+        return false;
+    }
+    return arc_atomic_load_i32(&weak.header->strong_count) > 0;
 }
 
 // --- Object Info ---
 
 ArcHeader* arc_get_header(void* obj) {
-    if (!obj) return NULL;
+    if (!obj) {
+        return NULL;
+    }
     return get_header(obj);
 }
 
 const ArcHeader* arc_get_header_const(const void* obj) {
-    if (!obj) return NULL;
+    if (!obj) {
+        return NULL;
+    }
     return get_header_const(obj);
 }
 
+bool arc_is_deallocating(const void* obj) {
+    if (!obj) {
+        return false;
+    }
+    return arc_header_is_deallocating(get_header_const(obj));
+}
+
 bool arc_is_moved(const void* obj) {
-    if (!obj) return false;
-    return (get_header_const(obj)->flags & ARC_FLAG_MOVED) != 0;
+    if (!obj) {
+        return false;
+    }
+    return (arc_atomic_load_u32(&get_header_const(obj)->flags) & ARC_FLAG_MOVED) != 0;
 }
 
 void arc_mark_moved(void* obj) {
-    if (!obj) return;
-    get_header(obj)->flags |= ARC_FLAG_MOVED;
+    if (!obj) {
+        return;
+    }
+    arc_atomic_fetch_or_u32(&get_header(obj)->flags, ARC_FLAG_MOVED);
 }
 
 void arc_mark_acyclic(void* obj) {
-    if (!obj) return;
-    ArcHeader* header = get_header(obj);
-    header->flags |= ARC_FLAG_ACYCLIC;
+    ArcHeader* header;
+
+    if (!obj) {
+        return;
+    }
+
+    header = get_header(obj);
+    arc_atomic_fetch_or_u32(&header->flags, ARC_FLAG_ACYCLIC);
     header->color = ARC_COLOR_GREEN;
+}
+
+size_t arc_allocation_alignment(const void* obj) {
+    if (!obj) {
+        return 0;
+    }
+    return get_header_const(obj)->alignment;
+}
+
+bool arc_cycle_collect(void* obj) {
+    ArcHeader* header;
+
+    if (!obj) {
+        return false;
+    }
+
+    header = get_header(obj);
+    if (arc_atomic_load_i32(&header->strong_count) > 0) {
+        return false;
+    }
+    if (!arc_start_deallocation(header)) {
+        return false;
+    }
+
+    arc_finalize_zero_strong(header);
+    return true;
 }
 
 // --- Statistics ---
@@ -249,9 +572,15 @@ void arc_reset_stats(void) {
 /* Called by the cycle collector when it frees ARC-managed objects directly
    (bypassing arc_release) so that global stats stay accurate. */
 void arc_notify_freed(size_t size) {
-    ATOMIC_INC_SZ(&g_arc_stats.total_frees);
-    ATOMIC_DEC_SZ(&g_arc_stats.current_objects);
-    ATOMIC_SUB_SZ(&g_arc_stats.current_bytes, size);
+    g_arc_stats.total_frees++;
+    if (g_arc_stats.current_objects > 0) {
+        g_arc_stats.current_objects--;
+    }
+    if (g_arc_stats.current_bytes >= size) {
+        g_arc_stats.current_bytes -= size;
+    } else {
+        g_arc_stats.current_bytes = 0;
+    }
 }
 
 void arc_print_stats(void) {

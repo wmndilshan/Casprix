@@ -2,6 +2,8 @@
 
 #include "memory.h"
 #include "tlocal_heap.h"
+#include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -9,6 +11,25 @@
 // MinGW printf compatibility: use %llu with casts for size_t
 #define FMT_SIZE "%llu"
 #define SZ(x) ((unsigned long long)(x))
+
+static bool add_sizes(size_t lhs, size_t rhs, size_t* out) {
+    if (!out || lhs > SIZE_MAX - rhs) {
+        return false;
+    }
+    *out = lhs + rhs;
+    return true;
+}
+
+static bool mul_sizes(size_t lhs, size_t rhs, size_t* out) {
+    if (!out) {
+        return false;
+    }
+    if (lhs != 0 && rhs > SIZE_MAX / lhs) {
+        return false;
+    }
+    *out = lhs * rhs;
+    return true;
+}
 
 // --- Lifecycle ---
 
@@ -149,17 +170,13 @@ void mem_arc_release(MemoryManager* mm, void* obj) {
     // Check if this might create a cycle suspect
     // We need to check BEFORE releasing, because release might free
     bool has_scanner = header && header->scanner != NULL;
-    bool might_survive = header && header->strong_count > 1;
-
-    arc_release(obj);
+    bool might_survive = header && arc_strong_count(obj) > 1;
+    bool survived = arc_release_survived(obj);
 
     // If the object survived release and can contain refs, add as suspect
-    if (has_scanner && might_survive && mm && mm->cycle_collector) {
-        // Object might still be alive - only add if not freed
-        if (header->strong_count > 0) {
-            cycle_gc_add_suspect(mm->cycle_collector, obj);
-            cycle_gc_collect_if_needed(mm->cycle_collector);
-        }
+    if (survived && has_scanner && might_survive && mm && mm->cycle_collector) {
+        cycle_gc_add_suspect(mm->cycle_collector, obj);
+        cycle_gc_collect_if_needed(mm->cycle_collector);
     }
 }
 
@@ -178,7 +195,12 @@ static void string_destructor(void* obj) {
 }
 
 void* mem_alloc_string(MemoryManager* mm, const char* data, size_t length) {
-    size_t alloc_size = sizeof(StringRepr) + length + 1;
+    size_t alloc_size;
+
+    if (!add_sizes(sizeof(StringRepr), length, &alloc_size) ||
+        !add_sizes(alloc_size, 1, &alloc_size)) {
+        return NULL;
+    }
     void* obj = mem_arc_alloc_with_destructor(mm, alloc_size, string_destructor);
     if (!obj) return NULL;
 
@@ -197,9 +219,14 @@ void* mem_alloc_string(MemoryManager* mm, const char* data, size_t length) {
 }
 
 void* mem_alloc_strbuf(MemoryManager* mm, size_t initial_capacity) {
+    size_t alloc_size;
+
     if (initial_capacity < 16) initial_capacity = 16;
 
-    size_t alloc_size = sizeof(StringRepr) + initial_capacity + 1;
+    if (!add_sizes(sizeof(StringRepr), initial_capacity, &alloc_size) ||
+        !add_sizes(alloc_size, 1, &alloc_size)) {
+        return NULL;
+    }
     void* obj = mem_arc_alloc_with_destructor(mm, alloc_size, string_destructor);
     if (!obj) return NULL;
 
@@ -229,8 +256,13 @@ static void array_destructor(void* obj) {
 
 void* mem_alloc_array(MemoryManager* mm, size_t element_size, size_t count,
                       arc_scan_fn scanner) {
-    size_t data_size = element_size * count;
-    size_t alloc_size = sizeof(ArrayRepr) + data_size;
+    size_t data_size;
+    size_t alloc_size;
+
+    if (!mul_sizes(element_size, count, &data_size) ||
+        !add_sizes(sizeof(ArrayRepr), data_size, &alloc_size)) {
+        return NULL;
+    }
 
     void* obj;
     if (scanner) {
