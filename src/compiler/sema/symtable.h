@@ -89,6 +89,11 @@ typedef struct {
     DataType* param_types;
     int param_count;
     DataType return_type;
+    /* When this symbol's callable type has a structured signature that the flat
+     * DataType fields cannot express (e.g. `-> lambda(int) -> int`, or a
+     * lambda-typed parameter), this holds the full function TypeInfo. Owned by
+     * the AST (a borrowed pointer into a Stmt/Parameter); not freed here. */
+    struct TypeInfo* return_type_info;
     bool is_extern;
     bool is_async;         // True for async functions
     bool is_closure_value; // Function-valued binding backed by a closure handle

@@ -783,6 +783,21 @@ static MirValueId lower_lambda(MirLowerCtx* ctx, Expr* expr) {
     LambdaExpr* lam = &expr->as.lambda;
     const char* lambda_name = lambda_symbol_name(ctx, lam);
 
+    /* B3 scope: by-reference mutable captures are implemented in the default
+     * AST backend only. The MIR closure lowering still snapshots captures by
+     * value (and has a separate pre-existing gap for captured globals), so a
+     * mutable capture here would silently lose the write or crash. Fail the
+     * MIR lowering cleanly instead; `--execute` / `--mir` / `--native` report
+     * this rather than miscompiling. Tracked for a follow-up MIR pass. */
+    if (lam->has_mutable_capture) {
+        fprintf(stderr,
+            "error: closures with mutable captures are not supported by the "
+            "MIR backend yet (use the default backend)\n");
+        ctx->error_count++;
+        return mir_build_const_null(&ctx->builder,
+                                    mir_type_ptr(ctx->module, mir_type_i8(ctx->module)));
+    }
+
     /* Create MIR function for the lambda body */
     MirType* ret_type = lower_type(ctx, lam->return_type);
     int total_params = lam->param_count + lam->capture_count;
@@ -1542,5 +1557,9 @@ MirModule* mir_lower_program(Stmt** statements, int stmt_count,
     }
 
     free(ctx.var_map);
+
+    if (ctx.error_count > 0) {
+        return NULL;   /* pipeline reports "MIR lowering failed" and exits 65 */
+    }
     return module;
 }

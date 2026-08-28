@@ -1,5 +1,19 @@
 .vscode/**
 .git/**
 *.vsix
-node_modules/**
 tests/**
+package-lock.json
+**/*.map
+
+# Bundle only the runtime dependency tree (vscode-languageclient + its deps).
+# Everything else under node_modules is dev-only.
+node_modules/**
+!node_modules/vscode-languageclient/**
+!node_modules/vscode-languageserver-protocol/**
+!node_modules/vscode-languageserver-types/**
+!node_modules/vscode-jsonrpc/**
+!node_modules/semver/**
+!node_modules/minimatch/**
+!node_modules/balanced-match/**
+!node_modules/brace-expansion/**
+!node_modules/concat-map/**

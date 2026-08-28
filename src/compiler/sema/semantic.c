@@ -153,6 +153,20 @@ static TypeInfo* build_function_type_info(DataType* param_types, int param_count
     return info;
 }
 
+/* Like build_function_type_info, but if `rich_return` is a structured function
+ * TypeInfo (e.g. from a `-> lambda(int) -> int` return annotation), use a clone
+ * of it as the return type so callers can arity-check the returned callable. */
+static TypeInfo* build_function_type_info_ex(DataType* param_types, int param_count,
+                                             DataType return_type,
+                                             const TypeInfo* rich_return) {
+    TypeInfo* info = build_function_type_info(param_types, param_count, return_type);
+    if (rich_return && rich_return->base == TYPE_FUNC) {
+        if (info->return_type) free_type_info(info->return_type);
+        info->return_type = clone_type_info((TypeInfo*)rich_return);
+    }
+    return info;
+}
+
 static TypeInfo* build_function_type_info_from_params(Parameter* params, int param_count,
                                                       DataType return_type) {
     TypeInfo* info = create_type_info(TYPE_FUNC);
@@ -167,8 +181,27 @@ static TypeInfo* build_function_type_info_from_params(Parameter* params, int par
     return info;
 }
 
-static bool lambda_direct_call_supported(LambdaExpr* lambda) {
-    return lambda && !lambda->has_mutable_capture;
+/* Copy a `lambda(P...) -> R` signature (parsed into a TypeInfo) onto a
+ * function-typed variable/parameter symbol, so a call through that binding is
+ * arity- and (loosely) type-checked against the declared signature rather than
+ * defaulting to zero parameters. */
+static void apply_fn_signature_to_symbol(Symbol* symbol, const TypeInfo* fn_info) {
+    if (!symbol || !fn_info || fn_info->base != TYPE_FUNC) return;
+
+    if (symbol->param_types) {
+        free(symbol->param_types);
+        symbol->param_types = NULL;
+    }
+    symbol->param_count = fn_info->param_count;
+    if (fn_info->param_count > 0) {
+        symbol->param_types = ALLOCATE(DataType, fn_info->param_count);
+        for (int i = 0; i < fn_info->param_count; i++) {
+            symbol->param_types[i] = fn_info->param_types && fn_info->param_types[i]
+                ? fn_info->param_types[i]->base
+                : TYPE_ERROR;
+        }
+    }
+    symbol->return_type = fn_info->return_type ? fn_info->return_type->base : TYPE_VOID;
 }
 
 static void clear_symbol_closure_info(Symbol* symbol) {
@@ -464,9 +497,10 @@ static void analyze_variable_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         if (expr->type_info) {
             free_type_info(expr->type_info);
         }
-        expr->type_info = build_function_type_info(symbol->param_types,
-                                                   symbol->param_count,
-                                                   symbol->return_type);
+        expr->type_info = build_function_type_info_ex(symbol->param_types,
+                                                     symbol->param_count,
+                                                     symbol->return_type,
+                                                     symbol->return_type_info);
         return;
     }
 
@@ -511,9 +545,10 @@ static void analyze_variable_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         if (expr->type_info) {
             free_type_info(expr->type_info);
         }
-        expr->type_info = build_function_type_info(symbol->param_types,
-                                                   symbol->param_count,
-                                                   symbol->return_type);
+        expr->type_info = build_function_type_info_ex(symbol->param_types,
+                                                     symbol->param_count,
+                                                     symbol->return_type,
+                                                     symbol->return_type_info);
     }
 
     // If it's a class type, propagate the class name
@@ -591,13 +626,13 @@ static void analyze_call_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
 
     if (!supported_callable && call->callee->type == EXPR_LAMBDA) {
-        LambdaExpr* lambda = &call->callee->as.lambda;
-        if (!lambda_direct_call_supported(lambda)) {
-            report_semantic_error(expr->line, expr->column,
-                "Direct calls of lambdas with mutable captures are not implemented yet");
-            expr->data_type = TYPE_ERROR;
-            return;
-        }
+        /* Mutable captures are supported: mutated captures are bound by
+         * reference in codegen (asmgen.c / mir_lower.c) so the mutation is
+         * visible to the enclosing scope. UNCHECKED SAFETY (v1): the borrow
+         * checker does not yet reason about a closure aliasing the variables
+         * it captures by reference, nor about two such closures aliasing the
+         * same variable. Returning such a closure is still rejected below
+         * (see the "Returning capturing closure values" gate). */
         supported_callable = true;
     }
 
@@ -662,10 +697,19 @@ static void analyze_call_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             has_error = true;
         }
 
+        /* Plain function references and non-capturing lambdas may be passed as
+         * function-typed arguments (the ABI is a bare code pointer). A
+         * *capturing* closure value cannot yet: the AST backend does not
+         * marshal the closure handle (code ptr + captured environment) across a
+         * call boundary, so the callee would invoke a bare pointer and crash.
+         * Reject it here with a clear message rather than miscompiling.
+         * (Direct calls of capturing closures, and binding/reassigning them,
+         * are supported — see the mutable-capture work.) */
         if (expected_type == TYPE_FUNC &&
             expr_is_stack_closure_value(analyzer, call->arguments[i])) {
             report_semantic_error(call->arguments[i]->line, call->arguments[i]->column,
-                "Passing capturing closure values as function arguments is not implemented yet");
+                "Passing a capturing closure value as a function argument is not "
+                "supported yet (pass a plain function or a non-capturing lambda)");
             has_error = true;
         }
     }
@@ -678,6 +722,13 @@ static void analyze_call_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             (expr->data_type == TYPE_CLASS || expr->data_type == TYPE_GENERIC)) {
             expr->class_name = strdup(signature->return_type->type_name);
         }
+        /* NOTE: a `-> lambda(...) -> R` return signature is deliberately NOT
+         * propagated onto the call result here. The AST backend cannot yet
+         * round-trip a function *value* out of a function and call it, so
+         * allowing the call through semantically would compile to a crash.
+         * Calling the result of such a call therefore still hits the generic
+         * "callable expression" arity path (a pre-existing limitation), which
+         * is safe. Only lambda-typed *parameters* are fully supported. */
     }
 }
 
@@ -1230,6 +1281,10 @@ static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             free(lambda->captured_types);
             lambda->captured_types = NULL;
         }
+        if (lambda->captured_is_mutable) {
+            free(lambda->captured_is_mutable);
+            lambda->captured_is_mutable = NULL;
+        }
 
         lambda->capture_count = closure_meta->environment
             ? closure_meta->environment->count
@@ -1238,10 +1293,13 @@ static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         if (lambda->capture_count > 0) {
             lambda->captured_vars = ALLOCATE(char*, lambda->capture_count);
             lambda->captured_types = ALLOCATE(DataType, lambda->capture_count);
+            lambda->captured_is_mutable = ALLOCATE(bool, lambda->capture_count);
             for (int i = 0; i < lambda->capture_count; i++) {
                 lambda->captured_vars[i] = strdup(
                     closure_meta->environment->variables[i].var_name);
                 lambda->captured_types[i] = closure_meta->environment->variables[i].type;
+                lambda->captured_is_mutable[i] =
+                    closure_meta->environment->variables[i].is_mutable;
                 if (closure_meta->environment->variables[i].is_mutable) {
                     lambda->has_mutable_capture = true;
                 }
@@ -1449,6 +1507,11 @@ static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
 }
 
+/* Retained for future gates; the mutable-capture let-binding gate that used
+ * this was removed when by-reference captures landed. */
+static void register_error_declaration(SemanticAnalyzer* analyzer,
+                                       DeclarationStmt* decl,
+                                       Stmt* stmt) __attribute__((unused));
 static void register_error_declaration(SemanticAnalyzer* analyzer,
                                        DeclarationStmt* decl,
                                        Stmt* stmt) {
@@ -1520,17 +1583,12 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             mark_moved(&g_ownership_ctx, decl->initializer->as.variable.name, stmt->line);
         }
 
-        if (decl->initializer->type == EXPR_LAMBDA) {
-            LambdaExpr* lambda = &decl->initializer->as.lambda;
-            if (lambda->capture_count > 0) {
-                if (lambda->has_mutable_capture) {
-                    report_semantic_error(stmt->line, stmt->column,
-                        "Capturing lambda values with mutable captures are not implemented yet");
-                    register_error_declaration(analyzer, decl, stmt);
-                    return;
-                }
-            }
-        }
+        /* A capturing lambda with mutable captures may be bound to a let/mut:
+         * mutated captures are bound by reference in codegen so writes inside
+         * the lambda reach the original variable. UNCHECKED SAFETY (v1): the
+         * borrow checker does not verify that the captured variables outlive
+         * the binding or that no conflicting aliases exist. Returning such a
+         * closure from a function is still rejected (analyze_return_stmt). */
 
         // Type inference: if type is TYPE_ERROR (from := syntax), infer from initializer
         if (decl->type == TYPE_ERROR && decl->initializer->data_type != TYPE_ERROR) {
@@ -1742,11 +1800,10 @@ static void analyze_assignment_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             if (symbol->type == TYPE_FUNC) {
                 if (assign->value->type == EXPR_LAMBDA) {
                     LambdaExpr* lambda = &assign->value->as.lambda;
-                    if (lambda->capture_count > 0 && lambda->has_mutable_capture) {
-                        report_semantic_error(stmt->line, stmt->column,
-                            "Assigning capturing lambda values with mutable captures is not implemented yet");
-                        return;
-                    }
+                    /* Reassigning a func-typed binding to a capturing lambda
+                     * with mutable captures is supported (by-reference capture
+                     * codegen). UNCHECKED SAFETY (v1): no alias/lifetime
+                     * verification for the captured variables. */
                     set_symbol_closure_info(symbol, lambda);
                 } else if (assign->value->type == EXPR_VARIABLE &&
                            assign->value->as.variable.name) {
@@ -2231,6 +2288,15 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     } else {
         if (param_types) free(param_types);
     }
+
+    /* Carry a `-> lambda(...) -> R` return signature onto the symbol so a call
+     * of this function yields a result whose arity can be checked. */
+    {
+        Symbol* fn_sym = lookup_symbol(analyzer->symbols, func->name);
+        if (fn_sym && fn_sym->kind == SYMBOL_FUNCTION && func->return_type_info) {
+            fn_sym->return_type_info = func->return_type_info;
+        }
+    }
     
     // Analyze function body in new scope
     enter_scope(analyzer->symbols, &analyzer->scope_depth);
@@ -2256,6 +2322,13 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
                     if (class_sym) {
                         param->class_info = class_sym;
                     }
+                }
+
+                // Retain a `lambda(...) -> R` parameter's inner signature so
+                // calls through the parameter are arity-checked correctly.
+                if (func->parameters[i].type == TYPE_FUNC &&
+                    func->parameters[i].type_info) {
+                    apply_fn_signature_to_symbol(param, func->parameters[i].type_info);
                 }
             }
         }
@@ -2510,6 +2583,11 @@ static void analyze_class_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
                         if (param_class) {
                             param->class_info = param_class;
                         }
+                    }
+
+                    if (method->parameters[j].type == TYPE_FUNC &&
+                        method->parameters[j].type_info) {
+                        apply_fn_signature_to_symbol(param, method->parameters[j].type_info);
                     }
                 }
             }

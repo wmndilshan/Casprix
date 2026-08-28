@@ -6,6 +6,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Skia GUI: buttons no longer resize on hover/click. `widget_button` and the
+  base box widget set `flex_shrink = 0.0f` so state changes mark paint dirty
+  without triggering a layout resize.
+
+### Removed
+- Deleted stale/aspirational documentation and root-level scratch clutter:
+  four large design blueprints moved under `docs/design/` with a
+  "not implemented" banner; session-debugging notes
+  (`runtime/net2/cx_worker_patch.md`, `runtime/skia/BUTTON_RESIZE_FIX.md`)
+  removed; `examples/` reduced to a curated set that all compile with the
+  current compiler.
+
+### Changed
+- `docs/CASPRIX_SYNTAX_EBNF.md` and
+  `docs/CASPRIX_SYNTAX_CONFORMANCE_MATRIX.md` corrected: `async`/`await` are
+  implemented, not planned.
+- `README.md` rewritten to describe only current, verified behavior.
+
+---
+
 ## [1.0.0] — 2026-03-26
 
 ### Added

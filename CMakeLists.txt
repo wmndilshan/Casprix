@@ -32,6 +32,7 @@ endif()
 # ============================================================================
 
 option(BUILD_COMPILER        "Build Casprix compiler executable"     ON)
+option(BUILD_LSP             "Build casprix-lsp language server"     ${BUILD_COMPILER})
 option(BUILD_RUNTIME         "Build libcasprix_runtime static lib"   ON)
 option(BUILD_PACKAGE_MANAGER "Build casprix-pkg utility"             ON)
 option(BUILD_TESTS           "Build and register the test suite"     ON)
@@ -226,12 +227,28 @@ if(BUILD_COMPILER)
         $<$<NOT:$<BOOL:${MSVC}>>:m>
     )
 
-    add_executable(casprix src/main.c)
+    # `src/driver/pipeline.c` (inside casprix_compiler) calls into the CVM
+    # engine + JIT bridge for the `--execute` flag. These four runtime sources
+    # provide those symbols. They are compiled directly into the driver
+    # executable (mirroring the GNU Makefile's CVM_EXEC_OBJECTS) rather than
+    # pulled from casprix_runtime — that library is heavier (pthread/ws2_32/
+    # net/llm/…) and is defined later in this file. _GNU_SOURCE (needed by
+    # jit_bridge.c for MAP_ANONYMOUS) comes from casprix_compile_options.
+    set(CASPRIX_CVM_EXEC_SOURCES
+        runtime/vm/cvm_engine.c
+        runtime/vm/jit_bridge.c
+        runtime/io/direct_io.c
+        runtime/io/fast_format.c
+    )
+
+    add_executable(casprix src/main.c ${CASPRIX_CVM_EXEC_SOURCES})
+    target_include_directories(casprix PRIVATE ${CMAKE_SOURCE_DIR}/runtime)
     target_link_libraries(casprix PRIVATE
         casprix_compiler
         casprix_compile_options
         casprix_include_dirs
         $<$<NOT:$<BOOL:${MSVC}>>:m>
+        $<$<NOT:$<BOOL:${MSVC}>>:pthread>
     )
 
     set_target_properties(casprix PROPERTIES
@@ -239,6 +256,15 @@ if(BUILD_COMPILER)
     )
 
     install(TARGETS casprix DESTINATION bin)
+endif()
+
+# ============================================================================
+# Language Server (casprix-lsp)
+# ============================================================================
+
+if(BUILD_LSP AND BUILD_COMPILER AND
+   EXISTS "${CMAKE_SOURCE_DIR}/tools/casprix-lsp/CMakeLists.txt")
+    add_subdirectory(tools/casprix-lsp)
 endif()
 
 # ============================================================================

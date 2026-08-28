@@ -309,6 +309,7 @@ typedef struct {
     // Filled by semantic analysis:
     char** captured_vars;      // Names of captured variables
     DataType* captured_types;  // Types of captured variables
+    bool* captured_is_mutable; // Per-capture: true if this var is assigned inside the lambda
     int capture_count;
     bool has_mutable_capture;  // True if any captured variable is mutated
     int closure_id;            // Unique ID for code generation
@@ -433,6 +434,7 @@ typedef struct {
     Parameter* parameters;
     int param_count;
     DataType return_type;
+    TypeInfo* return_type_info; // Full signature when return_type is a `lambda(...) -> R` (else NULL)
     Stmt* body;
     bool is_async;
     // Generic support

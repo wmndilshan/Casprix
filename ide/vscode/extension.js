@@ -2,7 +2,10 @@
  * extension.js — Casprix Language Extension for Visual Studio Code
  *
  * Features:
- *  - Error diagnostics: runs `casprix --check-only` on save / on type
+ *  - LSP:              live diagnostics + document symbols + go-to-definition
+ *                      via the `casprix-lsp` language server (preferred).
+ *  - Fallback:         `casprix --check-only` diagnostics when the LSP binary
+ *                      is unavailable or `casprix.enableLsp` is false.
  *  - Auto-complete:     keywords, types, built-ins, snippets
  *  - Hover info:        keyword documentation on hover
  */
@@ -12,6 +15,8 @@ const cp = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+
+let lsClient = null; // vscode-languageclient LanguageClient, when running
 
 // ============================================================================
 // Constants
@@ -337,38 +342,147 @@ const hoverProvider = {
 };
 
 // ============================================================================
+// Language Server client (casprix-lsp)
+// ============================================================================
+
+/** Resolve the casprix-lsp executable: explicit setting → workspace build/ →
+ *  PATH. Returns an absolute path, or null if nothing usable is found. */
+function resolveLspBinary(config) {
+    const exe = os.platform() === 'win32' ? '.exe' : '';
+    const configured = config.get('lspPath', 'casprix-lsp');
+
+    if (path.isAbsolute(configured) && fs.existsSync(configured)) return configured;
+
+    const folders = vscode.workspace.workspaceFolders || [];
+    for (const f of folders) {
+        for (const rel of ['build/casprix-lsp' + exe,
+                           'build/bin/casprix-lsp' + exe,
+                           'casprix-lsp' + exe]) {
+            const cand = path.join(f.uri.fsPath, rel);
+            if (fs.existsSync(cand)) return cand;
+        }
+    }
+
+    // Search PATH for a bare command name, plus a few common install dirs the
+    // GUI process may not have on PATH.
+    const name = configured + exe;
+    const home = os.homedir();
+    const searchDirs = [
+        ...(process.env.PATH || '').split(path.delimiter),
+        path.join(home, '.local', 'bin'),
+        path.join(home, 'bin'),
+        '/usr/local/bin',
+        '/usr/bin',
+        '/opt/homebrew/bin',
+    ];
+    for (const d of searchDirs) {
+        if (!d) continue;
+        const cand = path.join(d, name);
+        try { if (fs.existsSync(cand)) return cand; } catch (_) { /* ignore */ }
+    }
+    return null;
+}
+
+/** Start the LSP client. Returns true on success. */
+async function startLanguageServer(context, config) {
+    let lc;
+    try {
+        lc = require('vscode-languageclient/node');
+    } catch (_) {
+        // Dependency not bundled — silently fall back to --check-only.
+        return false;
+    }
+
+    const bin = resolveLspBinary(config);
+    if (!bin) {
+        vscode.window.setStatusBarMessage(
+            '$(warning) casprix-lsp not found — using compiler --check-only', 6000);
+        return false;
+    }
+
+    const serverOptions = {
+        run:   { command: bin, args: [], transport: lc.TransportKind.stdio },
+        debug: { command: bin, args: [], transport: lc.TransportKind.stdio },
+    };
+    const clientOptions = {
+        documentSelector: [{ scheme: 'file', language: LANGUAGE_ID }],
+        synchronize: {
+            fileEvents: vscode.workspace.createFileSystemWatcher('**/*.cpx'),
+        },
+        outputChannelName: 'Casprix Language Server',
+    };
+
+    lsClient = new lc.LanguageClient(
+        'casprixLsp', 'Casprix Language Server', serverOptions, clientOptions);
+
+    try {
+        await lsClient.start();
+        context.subscriptions.push({ dispose: () => lsClient && lsClient.stop() });
+        vscode.window.setStatusBarMessage('$(check) Casprix LSP active', 4000);
+        console.log('[Casprix] LSP started:', bin);
+        return true;
+    } catch (err) {
+        console.error('[Casprix] LSP failed to start:', err);
+        vscode.window.setStatusBarMessage(
+            '$(error) casprix-lsp failed to start — using --check-only', 6000);
+        lsClient = null;
+        return false;
+    }
+}
+
+// ============================================================================
 // Activate / Deactivate
 // ============================================================================
 
 /** @param {vscode.ExtensionContext} context */
-function activate(context) {
+async function activate(context) {
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('casprix');
     context.subscriptions.push(diagnosticCollection);
 
     const config = vscode.workspace.getConfiguration('casprix');
 
-    // --- On-save diagnostics ---
+    // --- Language Server (preferred). Diagnostics come from the server;
+    //     the --check-only path below is only used as a fallback. ---
+    let lspRunning = false;
+    if (config.get('enableLsp', true)) {
+        lspRunning = await startLanguageServer(context, config);
+    }
+    const useFallbackDiagnostics = !lspRunning;
+
+    // Restart command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('casprix.restartLsp', async () => {
+            if (lsClient) { try { await lsClient.stop(); } catch (_) {} lsClient = null; }
+            const ok = await startLanguageServer(
+                context, vscode.workspace.getConfiguration('casprix'));
+            vscode.window.showInformationMessage(
+                ok ? 'Casprix LSP restarted.' : 'Casprix LSP could not start.');
+        })
+    );
+
+    // --- On-save diagnostics (fallback only; the LSP pushes live) ---
     context.subscriptions.push(
         vscode.workspace.onDidSaveTextDocument(doc => {
-            if (config.get('checkOnSave', true)) {
+            if (useFallbackDiagnostics && config.get('checkOnSave', true)) {
                 checkDocument(doc, diagnosticCollection);
             }
         })
     );
 
-    // --- On-open diagnostics ---
+    // --- On-open diagnostics (fallback only) ---
     context.subscriptions.push(
         vscode.workspace.onDidOpenTextDocument(doc => {
-            if (doc.languageId === LANGUAGE_ID) {
+            if (useFallbackDiagnostics && doc.languageId === LANGUAGE_ID) {
                 checkDocument(doc, diagnosticCollection);
             }
         })
     );
 
-    // --- On-type diagnostics (debounced) ---
+    // --- On-type diagnostics (fallback only, debounced) ---
     let debounceTimer = null;
     context.subscriptions.push(
         vscode.workspace.onDidChangeTextDocument(event => {
+            if (!useFallbackDiagnostics) return;
             if (!config.get('checkOnType', false)) return;
             if (event.document.languageId !== LANGUAGE_ID) return;
             clearTimeout(debounceTimer);
@@ -403,9 +517,9 @@ function activate(context) {
         )
     );
 
-    // Run check on all already-open .cpx documents
+    // Run check on all already-open .cpx documents (fallback only)
     vscode.workspace.textDocuments.forEach(doc => {
-        if (doc.languageId === LANGUAGE_ID) {
+        if (useFallbackDiagnostics && doc.languageId === LANGUAGE_ID) {
             checkDocument(doc, diagnosticCollection);
         }
     });
@@ -413,6 +527,13 @@ function activate(context) {
     console.log('[Casprix] Extension activated');
 }
 
-function deactivate() { }
+function deactivate() {
+    if (lsClient) {
+        const p = lsClient.stop();
+        lsClient = null;
+        return p;
+    }
+    return undefined;
+}
 
 module.exports = { activate, deactivate };

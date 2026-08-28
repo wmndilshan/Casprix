@@ -261,6 +261,7 @@ Stmt* create_function_stmt(char* name, Parameter* params, int param_count,
     stmt->as.function.parameters = params;
     stmt->as.function.param_count = param_count;
     stmt->as.function.return_type = ret_type;
+    stmt->as.function.return_type_info = NULL;
     stmt->as.function.body = body;
     stmt->as.function.type_params = NULL;
     stmt->as.function.type_param_count = 0;
@@ -484,6 +485,9 @@ void free_expr(Expr* expr) {
             if (expr->as.lambda.captured_types) {
                 free(expr->as.lambda.captured_types);
             }
+            if (expr->as.lambda.captured_is_mutable) {
+                free(expr->as.lambda.captured_is_mutable);
+            }
             break;
         case EXPR_GENERIC_INST:
             if (expr->as.generic_inst.base_name) {
@@ -702,6 +706,9 @@ void free_stmt(Stmt* stmt) {
                 }
             }
             free(stmt->as.function.parameters);
+            if (stmt->as.function.return_type_info) {
+                free_type_info(stmt->as.function.return_type_info);
+            }
             free_stmt(stmt->as.function.body);
             // Free generic type parameters
             for (int i = 0; i < stmt->as.function.type_param_count; i++) {

@@ -1,8 +1,8 @@
 {
     "name": "casprix-language",
     "displayName": "Casprix 👻 Language",
-    "description": "Syntax highlighting, auto-complete, and error highlighting for the Casprix programming language (.cpx).",
-    "version": "1.1.0",
+    "description": "Language server (live diagnostics, document symbols, go-to-definition), syntax highlighting, and auto-complete for the Casprix programming language (.cpx).",
+    "version": "1.2.0",
     "publisher": "casprix-dev",
     "license": "MIT",
     "repository": {
@@ -19,7 +19,17 @@
         "Linters"
     ],
     "main": "./extension.js",
+    "activationEvents": [
+        "onLanguage:casprix"
+    ],
     "contributes": {
+        "commands": [
+            {
+                "command": "casprix.restartLsp",
+                "title": "Casprix: Restart Language Server",
+                "category": "Casprix"
+            }
+        ],
         "languages": [
             {
                 "id": "casprix",
@@ -56,10 +66,20 @@
         "configuration": {
             "title": "Casprix",
             "properties": {
+                "casprix.enableLsp": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Use the casprix-lsp language server for diagnostics, document symbols, and go-to-definition. When off (or the server is not found), the extension falls back to `casprix --check-only`."
+                },
+                "casprix.lspPath": {
+                    "type": "string",
+                    "default": "casprix-lsp",
+                    "description": "Path to the casprix-lsp executable. A bare name is looked up on PATH; the extension also probes <workspace>/build/casprix-lsp."
+                },
                 "casprix.compilerPath": {
                     "type": "string",
                     "default": "casprix",
-                    "description": "Path to the Casprix compiler executable used for error checking."
+                    "description": "Path to the Casprix compiler executable (used only for the --check-only fallback when the LSP is unavailable)."
                 },
                 "casprix.checkOnSave": {
                     "type": "boolean",
@@ -85,5 +105,8 @@
     },
     "devDependencies": {
         "@vscode/vsce": "^3.0.0"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
     }
 }

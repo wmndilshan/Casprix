@@ -26,9 +26,9 @@ This matrix defines parser/type-checker acceptance criteria for core syntax gove
 |---|---|---|---|
 | Block function | `func add(a: int, b: int) -> int { return a+b; }` | A | Canonical |
 | Short function | `func add(a: int, b: int) -> int => a+b;` | A | Canonical sugar |
-| Async function | `async func f() -> Result<int, E> { ... }` | C | Planned, parser does not accept it yet |
+| Async function | `async func f() -> i64 { ... }` | A | Parsed and lowered to a state machine |
 | Missing return path | `func f() -> int { }` | D | Non-void must return |
-| Comptime async | `comptime async func f() -> int { ... }` | C | Planned, parser does not accept async yet |
+| Comptime async | `comptime async func f() -> int { ... }` | C | `comptime` not implemented |
 
 ## 4. Structs and Classes
 
@@ -78,7 +78,8 @@ This matrix defines parser/type-checker acceptance criteria for core syntax gove
 | Typed closure | `let f = |a: int| -> int { return a+1; };` | A | Canonical |
 | Expression closure | `let f = |a: int, b: int| => a + b;` | A | Canonical |
 | Ambiguous empty closure params | `let f = || -> int { 1 };` | A | Allowed if parser supports |
-| First-class closure call | `let f = |a: int| => a + 1; f(1);` | C | Lambda literals parse, but first-class closure invocation is not fully accepted yet |
+| First-class closure call | `let f = |a: int| => a + 1; f(1);` | A | Works for non-capturing and read-only-capture closures; mutable-capture closures work when non-escaping |
+| Return a capturing closure | `func g() -> lambda() -> int { return \|:\| => c }` | C | Rejected with a diagnostic; not yet implemented |
 | Hidden capture allocation syntax | compiler-inserted boxing | D | Must be explicit by semantics |
 
 ## 9. Error Handling
@@ -93,10 +94,10 @@ This matrix defines parser/type-checker acceptance criteria for core syntax gove
 
 | Case | Sample | Class | Notes |
 |---|---|---|---|
-| Await call | `let v = await fetch();` | C | Planned, parser does not accept it yet |
-| Await outside async | `func f() { let x = await g(); }` | C | Planned, parser does not accept it yet |
-| Spawn statement | `spawn worker();` | C | Planned, parser does not accept it yet |
-| Structured scope | `scope { ... }` | C | Planned, parser does not accept it yet |
+| Await call | `let v = await fetch();` | A | Valid inside an `async func` |
+| Await outside async | `func f() { let x = await g(); }` | D | Rejected: `await` outside an async function |
+| Spawn statement | `spawn worker();` | C | Parsed; rejected with a "not implemented yet" diagnostic |
+| Structured scope | `scope { ... }` | C | Not implemented |
 
 ## 11. Ownership/Borrowing
 

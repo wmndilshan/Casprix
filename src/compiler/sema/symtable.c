@@ -90,6 +90,7 @@ bool add_symbol(SymbolTable* table, const char* name, SymbolKind kind,
     symbol->param_types = NULL;
     symbol->param_count = 0;
     symbol->return_type = TYPE_ERROR;
+    symbol->return_type_info = NULL;
     symbol->class_info = NULL;
     symbol->trait_info = NULL;
     symbol->is_extern = false;

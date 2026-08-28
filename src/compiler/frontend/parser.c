@@ -307,6 +307,55 @@ static void init_class_field_decl(FieldDecl* field, Token* name_token, DataType 
 // Forward declare parse_type_with_class for recursive use
 static DataType parse_type_with_class(Parser* parser, char** out_class_name);
 
+/* Set whenever the type just parsed was a `lambda(...) -> R` function type, so
+ * the caller (parameter/variable-decl parsing) can retain the inner arity for
+ * arity checking of calls through that binding. Consumed via
+ * take_pending_fn_type_info(); NULL when the last type was not a function type. */
+static TypeInfo* g_pending_fn_type_info = NULL;
+
+static TypeInfo* take_pending_fn_type_info(void) {
+    TypeInfo* ti = g_pending_fn_type_info;
+    g_pending_fn_type_info = NULL;
+    return ti;
+}
+
+/* Build a TypeInfo for a `lambda(P0, P1, ...) -> R` type. The opening `lambda`
+ * identifier has already been consumed; parses `( ... )` and an optional
+ * `-> R`. Parameter/return class names are not retained (only base DataTypes),
+ * matching how the rest of the type system treats function types. */
+static TypeInfo* parse_lambda_type_info(Parser* parser) {
+    TypeInfo* info = create_type_info(TYPE_FUNC);
+    int cap = 4;
+    info->param_types = ALLOCATE(TypeInfo*, cap);
+    info->param_count = 0;
+
+    if (match(parser, TOKEN_LPAREN)) {
+        while (!check(parser, TOKEN_RPAREN) && !check(parser, TOKEN_EOF)) {
+            char* pcn = NULL;
+            DataType pt = parse_type_with_class(parser, &pcn);
+            free(pcn);
+            if (info->param_count >= cap) {
+                cap *= 2;
+                info->param_types = GROW_ARRAY(TypeInfo*, info->param_types,
+                                               info->param_count, cap);
+            }
+            info->param_types[info->param_count++] = create_type_info(pt);
+            if (!match(parser, TOKEN_COMMA)) break;
+        }
+        consume(parser, TOKEN_RPAREN, "Expected ')' after lambda type parameters");
+    }
+
+    if (match(parser, TOKEN_ARROW)) {
+        char* rcn = NULL;
+        DataType rt = parse_type_with_class(parser, &rcn);
+        free(rcn);
+        info->return_type = create_type_info(rt);
+    } else {
+        info->return_type = create_type_info(TYPE_VOID);
+    }
+    return info;
+}
+
 // Parse a generic type parameter: <T>
 // Expects '<' already consumed or about to be consumed
 static DataType parse_inner_type_param(Parser* parser, char** out_class_name) {
@@ -317,6 +366,7 @@ static DataType parse_inner_type_param(Parser* parser, char** out_class_name) {
 }
 
 static DataType parse_type(Parser* parser) {
+    g_pending_fn_type_info = NULL;  /* only the `lambda(...)` branch sets this */
     // Borrow types: &T (immutable borrow), &mut T (mutable borrow)
     if (match(parser, TOKEN_BITAND)) {
         if (match(parser, TOKEN_MUT)) {
@@ -406,20 +456,7 @@ static DataType parse_type(Parser* parser) {
         }
         if (token_text_equals(&parser->current, "lambda")) {
             advance(parser);
-            if (match(parser, TOKEN_LPAREN)) {
-                while (!check(parser, TOKEN_RPAREN) && !check(parser, TOKEN_EOF)) {
-                    char* lambda_class_name = NULL;
-                    parse_type_with_class(parser, &lambda_class_name);
-                    free(lambda_class_name);
-                    if (!match(parser, TOKEN_COMMA)) break;
-                }
-                consume(parser, TOKEN_RPAREN, "Expected ')' after lambda type parameters");
-            }
-            if (match(parser, TOKEN_ARROW)) {
-                char* lambda_return_class = NULL;
-                parse_type_with_class(parser, &lambda_return_class);
-                free(lambda_return_class);
-            }
+            g_pending_fn_type_info = parse_lambda_type_info(parser);
             return TYPE_FUNC;
         }
         if (len == 1 && name[0] >= 'A' && name[0] <= 'Z') {
@@ -485,6 +522,7 @@ static DataType parse_type(Parser* parser) {
 // Parse type and return class name if it's a class/named type
 static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
     *out_class_name = NULL;
+    g_pending_fn_type_info = NULL;  /* only the `lambda(...)` branch sets this */
 
     // Borrow types: &T (immutable borrow), &mut T (mutable borrow)
     if (match(parser, TOKEN_BITAND)) {
@@ -571,20 +609,7 @@ static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
         }
         if (token_text_equals(&parser->current, "lambda")) {
             advance(parser);
-            if (match(parser, TOKEN_LPAREN)) {
-                while (!check(parser, TOKEN_RPAREN) && !check(parser, TOKEN_EOF)) {
-                    char* lambda_class_name = NULL;
-                    parse_type_with_class(parser, &lambda_class_name);
-                    free(lambda_class_name);
-                    if (!match(parser, TOKEN_COMMA)) break;
-                }
-                consume(parser, TOKEN_RPAREN, "Expected ')' after lambda type parameters");
-            }
-            if (match(parser, TOKEN_ARROW)) {
-                char* lambda_return_class = NULL;
-                parse_type_with_class(parser, &lambda_return_class);
-                free(lambda_return_class);
-            }
+            g_pending_fn_type_info = parse_lambda_type_info(parser);
             return TYPE_FUNC;
         }
         if (len == 1 && name[0] >= 'A' && name[0] <= 'Z') {
@@ -759,7 +784,9 @@ static Expr* lambda_expression(Parser* parser) {
             char* param_class_name = NULL;
             params[param_count].type = parse_type_with_class(parser, &param_class_name);
             params[param_count].class_name = param_class_name;
-            params[param_count].type_info = NULL;
+            /* Retain a `lambda(...) -> R` signature so calls through this
+             * parameter can be arity-checked (see semantic.c). */
+            params[param_count].type_info = take_pending_fn_type_info();
             params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
@@ -780,6 +807,9 @@ static Expr* lambda_expression(Parser* parser) {
     expr->as.lambda.parameters = params;
     expr->as.lambda.param_count = param_count;
     expr->as.lambda.captured_vars = NULL;
+    expr->as.lambda.captured_types = NULL;
+    expr->as.lambda.captured_is_mutable = NULL;
+    expr->as.lambda.has_mutable_capture = false;
     expr->as.lambda.capture_count = 0;
     expr->as.lambda.capture_mode = capture_mode;
     expr->as.lambda.closure_id = 0;  // Will be assigned during semantic analysis
@@ -1894,7 +1924,9 @@ static Stmt* function_declaration(Parser* parser) {
             char* param_class_name = NULL;
             params[param_count].type = parse_type_with_class(parser, &param_class_name);
             params[param_count].class_name = param_class_name;
-            params[param_count].type_info = NULL;
+            /* Retain a `lambda(...) -> R` signature so calls through this
+             * parameter can be arity-checked (see semantic.c). */
+            params[param_count].type_info = take_pending_fn_type_info();
             params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
@@ -1905,10 +1937,14 @@ static Stmt* function_declaration(Parser* parser) {
 
     // Return type is optional: func foo() { ... } defaults to void
     DataType return_type = TYPE_VOID;
+    TypeInfo* return_type_info = NULL;
     if (match(parser, TOKEN_ARROW)) {
         char* return_class_name = NULL;
         return_type = parse_type_with_class(parser, &return_class_name);
         free(return_class_name);
+        /* Retain a `-> lambda(...) -> R` signature for arity checking of calls
+         * made on this function's result. */
+        return_type_info = take_pending_fn_type_info();
     }
 
     Stmt* body;
@@ -1919,6 +1955,7 @@ static Stmt* function_declaration(Parser* parser) {
     }
 
     Stmt* stmt = create_function_stmt(name, params, param_count, return_type, body, line, col);
+    stmt->as.function.return_type_info = return_type_info;
     // Add generic type parameters
     stmt->as.function.type_params = type_params;
     stmt->as.function.type_param_count = type_param_count;
@@ -2063,9 +2100,13 @@ static Stmt* class_declaration(Parser* parser) {
             advance(parser);
 
             // Method declaration
-            // Allow either TOKEN_IDENTIFIER or TOKEN_NEW for method names.
-            // Constructors are either the legacy "new" spelling or the class name.
-            if (!match(parser, TOKEN_IDENTIFIER) && !match(parser, TOKEN_NEW)) {
+            // Allow TOKEN_IDENTIFIER or TOKEN_NEW for method names. TOKEN_PRINT
+            // is also accepted contextually: `print` is a statement keyword but
+            // is unambiguous as a method name here, and postfix member-access
+            // parsing already treats `.print()` as an ordinary call.
+            if (!match(parser, TOKEN_IDENTIFIER) &&
+                !match(parser, TOKEN_NEW) &&
+                !match(parser, TOKEN_PRINT)) {
                 error_at_current(parser, "Expected method name");
                 continue;
             }
@@ -2108,7 +2149,7 @@ static Stmt* class_declaration(Parser* parser) {
                     char* param_class_name = NULL;
                     params[param_count].type = parse_type_with_class(parser, &param_class_name);
                     params[param_count].class_name = param_class_name;
-                    params[param_count].type_info = NULL;
+                    params[param_count].type_info = take_pending_fn_type_info();
                     params[param_count].ownership = OWNERSHIP_OWNED;
 
                     param_count++;
@@ -2201,7 +2242,9 @@ static Stmt* class_declaration(Parser* parser) {
                     field->default_value = expression(parser);
                 }
 
-                consume(parser, TOKEN_SEMICOLON, "Expected ';' after field declaration");
+                // Trailing semicolon is optional, matching the 'field'-keyword
+                // and modern 'let'/'mut'/'const' member paths above.
+                match(parser, TOKEN_SEMICOLON);
             } else {
                 error_at_current(parser, "Expected ':' after field name or 'func' for method");
             }
@@ -2542,7 +2585,9 @@ static Stmt* extern_declaration(Parser* parser) {
             char* param_class_name = NULL;
             params[param_count].type = parse_type_with_class(parser, &param_class_name);
             params[param_count].class_name = param_class_name;
-            params[param_count].type_info = NULL;
+            /* Retain a `lambda(...) -> R` signature so calls through this
+             * parameter can be arity-checked (see semantic.c). */
+            params[param_count].type_info = take_pending_fn_type_info();
             params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
@@ -2610,6 +2655,7 @@ static Stmt* trait_statement(Parser* parser) {
                 params[pcnt].ownership = OWNERSHIP_OWNED;
                 if (match(parser, TOKEN_COLON)) {
                     params[pcnt].type = parse_type(parser);
+                    params[pcnt].type_info = take_pending_fn_type_info();
                 }
                 pcnt++;
             } while (match(parser, TOKEN_COMMA));

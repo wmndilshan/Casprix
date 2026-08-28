@@ -24,6 +24,8 @@ typedef struct {
     /* Per-function stack frame for local variables/params */
     char** local_names;      /* Variable names in current scope */
     int*   local_offsets;    /* Positive offset from rbp base (subtracted at use) */
+    int*   local_is_ref;     /* 1 => slot holds a pointer to the value (by-ref
+                              *      closure capture); load/store deref once. */
     int    local_count;
     int    local_capacity;
     int    frame_size;       /* Total bytes allocated for locals (rounded up to 16) */

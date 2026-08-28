@@ -1,6 +1,13 @@
 # CASPRIX v1 Syntax Grammar (EBNF Draft)
 
-This grammar defines the normalized CASPRIX surface syntax for parser implementation and syntax governance.
+This grammar defines the normalized CASPRIX surface syntax for parser
+implementation and syntax governance.
+
+Status: this is a drafting document. The grammar tracks the intended v1 surface;
+the implemented parser is close but not identical. Where this file and the
+compiler disagree, the compiler is authoritative. Known implemented features not
+fully reflected below include `async` / `await` (state-machine lowering is in
+`src/compiler/middle/async.c`) and range patterns in `match`.
 
 ## 1. Lexical Notes
 
@@ -9,10 +16,17 @@ This grammar defines the normalized CASPRIX surface syntax for parser implementa
 - Line comments: `// ...`
 - Block comments: `/* ... */`
 
-Planned or currently unsupported surface forms:
-- `async`, `await`, `spawn`
-- `where`
-- `scope`
+Implemented but not fully specified below:
+- `async` / `await` — accepted by the parser and lowered to state machines;
+  `await` is only valid inside an `async func`.
+
+Parsed but not yet implemented (compiler emits a "not implemented yet"
+diagnostic):
+- `spawn`
+
+Not yet supported at all:
+- `where` clauses on generic declarations
+- `scope` blocks
 
 ## 2. Top-Level
 
@@ -266,5 +280,10 @@ Lexical constraints (semantic phase):
 - Legacy class field spellings like `field name: T;` and bare `name: T;` remain
   parser-compatible for migration, but they are not part of the normalized v1
   surface.
-- `async` / `await` / `spawn` remain planned and should be rejected with a dedicated diagnostic until the parser grows productions for them.
-- Closure literals parse, but first-class closure invocation is still incomplete in the current front end. Keep closure-call examples out of the canonical accepted surface for now.
+- `async` / `await` are implemented (parser productions plus state-machine
+  lowering in `src/compiler/middle/async.c`). `spawn` parses but is rejected
+  with a "not implemented yet" diagnostic.
+- Closure literals parse and compile. Non-capturing lambdas and read-only
+  captures work as values and calls; mutable captures work for non-escaping
+  closures (bound to a local, called, passed to a plain-function parameter).
+  Returning a capturing closure from a function is rejected with a diagnostic.

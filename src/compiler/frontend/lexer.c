@@ -189,6 +189,10 @@ static int is_hex_digit(char c) {
     return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
+static int is_bin_digit(char c) {
+    return c == '0' || c == '1';
+}
+
 static Token number(Lexer* lexer) {
     // Check for hex literal: 0x... or 0X...
     // At this point, the first digit has already been consumed by advance() in scan_token
@@ -205,6 +209,24 @@ static Token number(Lexer* lexer) {
         memcpy(str, token.start, token.length);
         str[token.length] = '\0';
         token.literal.int_value = (int64_t)strtoull(str, NULL, 16);
+        free(str);
+        return token;
+    }
+
+    // Check for binary literal: 0b... or 0B...
+    // Mirrors the hex case above; strtoull does not recognize a "0b" prefix
+    // so we parse from str + 2 with an explicit base of 2.
+    if (first_char == '0' && (peek(lexer) == 'b' || peek(lexer) == 'B')) {
+        advance(lexer); // consume 'b'
+        while (is_bin_digit(peek(lexer))) {
+            advance(lexer);
+        }
+
+        Token token = make_token(lexer, TOKEN_INTEGER);
+        char* str = ALLOCATE(char, token.length + 1);
+        memcpy(str, token.start, token.length);
+        str[token.length] = '\0';
+        token.literal.int_value = (int64_t)strtoull(str + 2, NULL, 2);
         free(str);
         return token;
     }

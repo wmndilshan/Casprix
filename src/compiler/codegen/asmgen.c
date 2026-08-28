@@ -18,6 +18,8 @@ static void emit_lambda_functions_from_expr(AssemblyGenerator* gen, Expr* expr, 
 static void emit_lambda_functions_from_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* symbols);
 static int alloc_local(AssemblyGenerator* gen, const char* name);
 static int find_local(AssemblyGenerator* gen, const char* name);
+static void mark_local_ref(AssemblyGenerator* gen, const char* name);
+static int local_is_ref(AssemblyGenerator* gen, const char* name);
 static void format_global_var_symbol(const char* name, char* buf, size_t buf_size);
 
 /* --- Calling Convention ABI --- */
@@ -55,12 +57,16 @@ static const char* type_to_string(DataType type) {
     return datatype_to_string(type);
 }
 
+/* Capturing-closure codegen supports mutable captures: every capture is passed
+ * to the lambda body as a pointer, and mutated captures are bound by-reference
+ * inside the body (see emit_lambda_function). Read-only captures still get a
+ * value snapshot. Returning such a closure is rejected earlier in semantics. */
 static bool lambda_value_supported(const LambdaExpr* lambda) {
-    return lambda && !lambda->has_mutable_capture;
+    return lambda != NULL;
 }
 
 static bool lambda_direct_call_supported(const LambdaExpr* lambda) {
-    return lambda && !lambda->has_mutable_capture;
+    return lambda != NULL;
 }
 
 static DataType lambda_call_arg_type(const LambdaExpr* lambda, int arg_index) {
@@ -81,7 +87,7 @@ static void format_closure_slot_name(int closure_id, int slot_index,
 }
 
 static void alloc_closure_slots(AssemblyGenerator* gen, const LambdaExpr* lambda) {
-    if (!lambda || lambda->capture_count <= 0 || lambda->has_mutable_capture) {
+    if (!lambda || lambda->capture_count <= 0) {
         return;
     }
 
@@ -95,7 +101,12 @@ static void alloc_closure_slots(AssemblyGenerator* gen, const LambdaExpr* lambda
 static void emit_load_var_addr(AssemblyGenerator* gen, const char* name, const char* reg) {
     int off = find_local(gen, name);
     if (off) {
-        emit_asm(gen, "    lea %s, [rbp - %d]\n", reg, off);
+        if (local_is_ref(gen, name)) {
+            /* the slot already holds the address of the value */
+            emit_asm(gen, "    mov %s, [rbp - %d]\n", reg, off);
+        } else {
+            emit_asm(gen, "    lea %s, [rbp - %d]\n", reg, off);
+        }
     } else {
         char global_name[256];
         format_global_var_symbol(name, global_name, sizeof(global_name));
@@ -198,6 +209,7 @@ void init_asm_generator(AssemblyGenerator* gen, FILE* output, void* unused) {
     gen->loop_depth = 0;
     gen->local_names = NULL;
     gen->local_offsets = NULL;
+    gen->local_is_ref = NULL;
     gen->local_count = 0;
     gen->local_capacity = 0;
     gen->frame_size = 0;
@@ -288,6 +300,7 @@ static int alloc_local(AssemblyGenerator* gen, const char* name) {
         int nc = gen->local_capacity == 0 ? 16 : gen->local_capacity * 2;
         gen->local_names   = realloc(gen->local_names,   sizeof(char*) * nc);
         gen->local_offsets = realloc(gen->local_offsets, sizeof(int)   * nc);
+        gen->local_is_ref  = realloc(gen->local_is_ref,  sizeof(int)   * nc);
         gen->local_capacity = nc;
     }
     int size = 8;
@@ -297,8 +310,28 @@ static int alloc_local(AssemblyGenerator* gen, const char* name) {
     gen->frame_size += size;
     gen->local_names[gen->local_count]   = strdup(name);
     gen->local_offsets[gen->local_count] = gen->frame_size;
+    gen->local_is_ref[gen->local_count]  = 0;
     gen->local_count++;
     return gen->frame_size;
+}
+
+/* Mark an already-allocated local as a by-reference slot (holds a pointer to
+ * the real storage). Used for mutated closure captures. */
+static void mark_local_ref(AssemblyGenerator* gen, const char* name) {
+    for (int i = 0; i < gen->local_count; i++) {
+        if (strcmp(gen->local_names[i], name) == 0) {
+            gen->local_is_ref[i] = 1;
+            return;
+        }
+    }
+}
+
+/* 1 if 'name' is a by-reference local slot, 0 otherwise (incl. globals). */
+static int local_is_ref(AssemblyGenerator* gen, const char* name) {
+    for (int i = 0; i < gen->local_count; i++)
+        if (strcmp(gen->local_names[i], name) == 0)
+            return gen->local_is_ref[i];
+    return 0;
 }
 
 /* Find the stack offset for 'name', or 0 if it is a global. */
@@ -312,9 +345,15 @@ static int find_local(AssemblyGenerator* gen, const char* name) {
 /* Emit a load: mov reg, <variable>.  Prefers stack slot, falls back to .bss. */
 static void emit_load_var(AssemblyGenerator* gen, const char* name, const char* reg) {
     int off = find_local(gen, name);
-    if (off)
-        emit_asm(gen, "    mov %s, [rbp - %d]\n", reg, off);
-    else {
+    if (off) {
+        if (local_is_ref(gen, name)) {
+            /* slot holds a pointer to the value: deref once */
+            emit_asm(gen, "    mov r11, [rbp - %d]\n", off);
+            emit_asm(gen, "    mov %s, [r11]\n", reg);
+        } else {
+            emit_asm(gen, "    mov %s, [rbp - %d]\n", reg, off);
+        }
+    } else {
         char global_name[256];
         format_global_var_symbol(name, global_name, sizeof(global_name));
         emit_asm(gen, "    mov %s, [rel %s]\n", reg, global_name);
@@ -324,9 +363,14 @@ static void emit_load_var(AssemblyGenerator* gen, const char* name, const char* 
 /* Emit a store: mov <variable>, reg.  Prefers stack slot, falls back to .bss. */
 static void emit_store_var(AssemblyGenerator* gen, const char* name, const char* reg) {
     int off = find_local(gen, name);
-    if (off)
-        emit_asm(gen, "    mov [rbp - %d], %s\n", off, reg);
-    else {
+    if (off) {
+        if (local_is_ref(gen, name)) {
+            emit_asm(gen, "    mov r11, [rbp - %d]\n", off);
+            emit_asm(gen, "    mov [r11], %s\n", reg);
+        } else {
+            emit_asm(gen, "    mov [rbp - %d], %s\n", off, reg);
+        }
+    } else {
         char global_name[256];
         format_global_var_symbol(name, global_name, sizeof(global_name));
         emit_asm(gen, "    mov [rel %s], %s\n", global_name, reg);
@@ -337,9 +381,14 @@ static void emit_store_var(AssemblyGenerator* gen, const char* name, const char*
 static void emit_load_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_n) __attribute__((unused));
 static void emit_load_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_n) {
     int off = find_local(gen, name);
-    if (off)
-        emit_asm(gen, "    movq xmm%d, [rbp - %d]\n", xmm_n, off);
-    else {
+    if (off) {
+        if (local_is_ref(gen, name)) {
+            emit_asm(gen, "    mov r11, [rbp - %d]\n", off);
+            emit_asm(gen, "    movq xmm%d, [r11]\n", xmm_n);
+        } else {
+            emit_asm(gen, "    movq xmm%d, [rbp - %d]\n", xmm_n, off);
+        }
+    } else {
         char global_name[256];
         format_global_var_symbol(name, global_name, sizeof(global_name));
         emit_asm(gen, "    movq xmm%d, [rel %s]\n", xmm_n, global_name);
@@ -349,9 +398,14 @@ static void emit_load_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_
 static void emit_store_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_n) __attribute__((unused));
 static void emit_store_var_xmm(AssemblyGenerator* gen, const char* name, int xmm_n) {
     int off = find_local(gen, name);
-    if (off)
-        emit_asm(gen, "    movq [rbp - %d], xmm%d\n", off, xmm_n);
-    else {
+    if (off) {
+        if (local_is_ref(gen, name)) {
+            emit_asm(gen, "    mov r11, [rbp - %d]\n", off);
+            emit_asm(gen, "    movq [r11], xmm%d\n", xmm_n);
+        } else {
+            emit_asm(gen, "    movq [rbp - %d], xmm%d\n", off, xmm_n);
+        }
+    } else {
         char global_name[256];
         format_global_var_symbol(name, global_name, sizeof(global_name));
         emit_asm(gen, "    movq [rel %s], xmm%d\n", global_name, xmm_n);
@@ -2356,8 +2410,17 @@ static void emit_lambda_function(AssemblyGenerator* gen, LambdaExpr* lambda, Sym
             }
             off = find_local(gen, param_name);
             if (j < lambda->capture_count) {
-                emit_asm(gen, "    mov rax, [%s]\n", ABI_I_REGS[j]);
-                emit_asm(gen, "    mov [rbp - %d], rax\n", off);
+                /* Captures arrive as pointers. A mutated capture is kept
+                 * by-reference (store the pointer, deref on access) so writes
+                 * reach the enclosing variable; a read-only capture is
+                 * snapshotted by value into the slot. */
+                if (lambda->captured_is_mutable && lambda->captured_is_mutable[j]) {
+                    emit_asm(gen, "    mov [rbp - %d], %s\n", off, ABI_I_REGS[j]);
+                    mark_local_ref(gen, param_name);
+                } else {
+                    emit_asm(gen, "    mov rax, [%s]\n", ABI_I_REGS[j]);
+                    emit_asm(gen, "    mov [rbp - %d], rax\n", off);
+                }
             } else if (pt == TYPE_FLOAT || pt == TYPE_F32 || pt == TYPE_F64) {
                 emit_asm(gen, "    movq [rbp - %d], xmm%d\n", off, j);
             } else {
@@ -2374,6 +2437,12 @@ static void emit_lambda_function(AssemblyGenerator* gen, LambdaExpr* lambda, Sym
         int off = find_local(gen, param_name);
         emit_asm(gen, "    mov rax, [rbp + %d]\n", stack_offset);
         if (j < lambda->capture_count) {
+            if (lambda->captured_is_mutable && lambda->captured_is_mutable[j]) {
+                /* keep the pointer: by-reference mutable capture */
+                emit_asm(gen, "    mov [rbp - %d], rax\n", off);
+                mark_local_ref(gen, param_name);
+                continue;
+            }
             emit_asm(gen, "    mov rax, [rax]\n");
         }
         emit_asm(gen, "    mov [rbp - %d], rax\n", off);

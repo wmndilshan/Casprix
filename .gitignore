@@ -72,10 +72,21 @@ build.ninja.touch
 /tmp_c_out/
 *.cpx.c
 *.nd.c
+# Double/triple-extension artifacts from repeated `casprix foo.c` compile attempts
+# (produces foo.c.c, foo.c.c.c, ...).
+*.c.c
+*.c.c.c
 
 # Generated assembly output
 *.s
 *.asm_out
+
+# Legacy VM bytecode / JIT package output (emitted next to the source by
+# --vm / --jit; never committed).
+*.cpxbc
+*.cpxjit
+*.cpxv
+*.cpxj
 
 # -------------------------------------------------------------
 # Test & coverage artifacts
@@ -130,11 +141,42 @@ ipch/
 !.vscode/extensions.json
 !.vscode/tasks.json
 !.vscode/launch.json
+.history/
+*.code-workspace
 
-# JetBrains (CLion, etc.)
+# JetBrains (CLion, IntelliJ, etc.)
 .idea/
 cmake-build-*/
 *.iml
+
+# Cursor (keep shared rules under .cursor/rules/, ignore everything else)
+.cursor/*
+!.cursor/rules/
+.cursorignore
+.cursorrules
+
+# Other AI / agent editors and CLIs
+.windsurf/
+.antigravity/
+.zed/
+.aider*
+.continue/
+.cody/
+.tabnine/
+.codeium/
+.sourcegraph/
+.gemini/
+.opencode/
+.goose/
+.roo/
+.cline/
+.kilocode/
+.pearai/
+.trae/
+.void/
+*.aider.chat.history.md
+.ai/
+.llm/
 
 # Vim / Neovim
 *.swp
@@ -149,10 +191,28 @@ Session.vim
 .#*
 
 # -------------------------------------------------------------
-# Claude Code metadata
+# Claude Code / Codex / agent metadata
 # -------------------------------------------------------------
+# Claude Code: keep a committed .claude/ config if one exists, ignore the
+# per-developer and generated parts.
 .claude/worktrees/
 .claude/settings.local.json
+.claude/projects/
+.claude/todos/
+.claude/statsig/
+.claude/shell-snapshots/
+.claude/history.jsonl
+.claude/.credentials.json
+CLAUDE.local.md
+
+# OpenAI Codex CLI
+.codex
+.codex/
+AGENTS.local.md
+
+# Aider
+.aider.tags.cache*
+.aider.conf.yml
 
 # -------------------------------------------------------------
 # VS Code extension build
@@ -195,6 +255,19 @@ third_party/skia/*.so
 third_party/skia-src/out/
 
 # -------------------------------------------------------------
+# Externally-cloned git repositories checked out inside the tree
+# -------------------------------------------------------------
+# These are separate upstream projects cloned in for local reference/experiments.
+# They carry their own .git/ and must never be committed here (git would nest
+# them as broken gitlinks). Vendor real dependencies under third_party/ as plain
+# source, or add them as proper submodules — not loose clones.
+/rbpf/
+# Any directory that is itself a git checkout (defensive; the entry above is the
+# known one). A nested .git dir is the tell-tale.
+**/vendor-src/
+**/.external/
+
+# -------------------------------------------------------------
 # Android build
 # -------------------------------------------------------------
 android-demo-app/.gradle/
@@ -218,6 +291,41 @@ android-demo-app/local.properties
 *.patch
 crash_*.txt
 sanitizer_*.log
+# Hand-captured build/debug logs that don't use the .log extension.
+build_log*.txt
+build_log*
+*_output.log
+debug_*.txt
+strace*.log
+strace.out
+# Windows `nul` sink accidentally created by `... > nul` on a Unix shell.
+/nul
+nul.txt
+
+# -------------------------------------------------------------
+# Generated / one-off Markdown reports (real docs are tracked explicitly)
+# -------------------------------------------------------------
+# Agent- and tool-generated write-ups (audits, inventories, session summaries,
+# handoffs) tend to accumulate. Ignore them by name; the curated docs in the
+# repo root and docs/ are added individually and are unaffected.
+*_report.md
+*_REPORT.md
+*_inventory*.md
+*_INVENTORY*.md
+*_handoff*.md
+*_HANDOFF*.md
+*_summary.md
+*_SUMMARY.md
+*_audit*.md
+*_AUDIT*.md
+*_notes.md
+*-notes.md
+SCRATCH*.md
+NOTES.md
+TODO.local.md
+docs/**/*_report.md
+docs/**/*_inventory*.md
+docs/casprix_inventory_report.md
 
 # -------------------------------------------------------------
 # OS metadata
@@ -235,7 +343,16 @@ $RECYCLE.BIN/
 # -------------------------------------------------------------
 # Local scratch files (test sources and binaries)
 # -------------------------------------------------------------
-/first
+#
+# CONVENTION: put ALL manual/scratch experiments — one-off .cpx snippets,
+# hand-compiled C, throwaway binaries — under scratch/ (see scratch/README.md).
+# Everything in scratch/ except its README is ignored, so nothing there ever
+# needs individual cleanup.
+/scratch/*
+!/scratch/README.md
+
+# Historical root-level scratch names (kept so an old checkout stays clean).
+# New scratch work should live in scratch/, not here.
 /hello.c
 /hello_c_output.c
 /hello_c_output_bin
@@ -246,3 +363,26 @@ $RECYCLE.BIN/
 /test_wrapper.c
 /train_llm*
 /examples/llm_training/train_llm
+
+# Ad-hoc experiments in the repo ROOT — compiled binaries (the compiler
+# defaults the -o name to the source stem, so they have no extension on Unix)
+# AND their stray .cpx / .c sources. Real tests live in tests/; real scratch
+# work goes in scratch/. Anything matching these at the root is throwaway.
+# Anchored with a leading slash so genuine files with these names in subdirs
+# (e.g. tests/compiler/test_*.cpx) are completely unaffected.
+/test_*
+/debug_*
+/*_test
+/*_test.*
+/*_bench
+/*_bench.*
+/fib
+/nested
+/twovar
+/sum
+/u_c
+/hot3
+/rocap
+/bin_repro
+/first
+/first_*

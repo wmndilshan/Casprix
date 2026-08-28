@@ -1,6 +1,0 @@
-trait Greeting {
-    func greet(self: Greeting);
-    func hello(self: Greeting) {
-        print("Hello!");
-    }
-}

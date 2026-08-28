@@ -2,12 +2,25 @@
 # Copyright (c) 2026 Casprix Project
 # SPDX-License-Identifier: MIT
 #
+# SCOPE
+#   This Makefile builds the CORE COMPILER ONLY (bin/casprix) and, on demand,
+#   the runtime static library. It is the fast-iteration path.
+#
+#   The full toolchain — the LSP server (casprix-lsp), the package manager
+#   (casprix-pkg), the APK builder (apk-builder), the Skia GUI framework
+#   (skia_gui) and the C-level test executables — is built with CMake only:
+#       cmake -S . -B build && cmake --build build && ctest --test-dir build
+#
+#   The compiler *source set* (src/compiler/**, src/support/**, src/driver/**,
+#   src/util/**) is kept identical between this Makefile and CMakeLists.txt so
+#   `bin/casprix` is byte-for-byte equivalent under either build system.
+#
 # Usage:
-#   make              — build compiler
+#   make              — build compiler (bin/casprix)
 #   make runtime      — build runtime library
 #   make all-libs     — build compiler + runtime
 #   make test         — run quick smoke test
-#   make test-all     — run full test suite
+#   make test-all     — run full test suite (--parse-only over tests/compiler/)
 #   make clean        — remove all build artefacts
 #   make install      — install to /usr/local (Unix) or ask (Windows)
 #   make help         — show this help
@@ -147,7 +160,8 @@ MIR_SOURCES = \
     $(SRC_DIR)/compiler/ir/mir_c_backend.c \
     $(SRC_DIR)/compiler/ir/mir_mem2reg.c \
     $(SRC_DIR)/compiler/ir/mir_inline.c \
-    $(SRC_DIR)/compiler/ir/mir_async.c
+    $(SRC_DIR)/compiler/ir/mir_async.c \
+    $(SRC_DIR)/compiler/ir/mir_regex.c
 
 # Code generation (x86-64)
 CODEGEN_SOURCES = \
@@ -187,6 +201,16 @@ ALL_COMPILER_SOURCES = \
     $(DRIVER_SOURCES)
 
 COMPILER_OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/compiler/%.o,$(ALL_COMPILER_SOURCES))
+
+# CVM interpreter + minimal I/O it needs — linked into the driver so that
+# `casprix --execute` can run a compiled program in-process (Option A: no
+# .cpxv/.cpxj file round-trip). Built with the runtime object rule (-Iruntime).
+CVM_EXEC_SOURCES = \
+    $(RUNTIME_DIR)/vm/cvm_engine.c \
+    $(RUNTIME_DIR)/vm/jit_bridge.c \
+    $(RUNTIME_DIR)/io/direct_io.c \
+    $(RUNTIME_DIR)/io/fast_format.c
+CVM_EXEC_OBJECTS = $(patsubst $(RUNTIME_DIR)/%.c,$(OBJ_DIR)/runtime/%.o,$(CVM_EXEC_SOURCES))
 
 # ============================================================================
 # Runtime sources
@@ -259,9 +283,9 @@ all-libs: $(TARGET) $(RUNTIME_LIB)
 # Link
 # ============================================================================
 
-$(TARGET): $(COMPILER_OBJECTS) | $(BIN_DIR)
+$(TARGET): $(COMPILER_OBJECTS) $(CVM_EXEC_OBJECTS) | $(BIN_DIR)
 	@echo "[LINK] $@"
-	$(CC) $(COMPILER_OBJECTS) -o $@ $(LDFLAGS)
+	$(CC) $(COMPILER_OBJECTS) $(CVM_EXEC_OBJECTS) -o $@ $(LDFLAGS)
 	@echo "Build complete: $@"
 
 $(RUNTIME_LIB): $(ALL_RUNTIME_OBJECTS) | $(BIN_DIR)
@@ -282,6 +306,14 @@ $(OBJ_DIR)/compiler/%.o: $(SRC_DIR)/%.c
 # ============================================================================
 # Runtime object rules
 # ============================================================================
+
+# CVM exec objects need _GNU_SOURCE for MAP_ANONYMOUS (jit_bridge mmap path).
+# This pattern rule is more specific than the generic runtime rule below and
+# only matches the four CVM_EXEC_SOURCES via the explicit prerequisite list.
+$(CVM_EXEC_OBJECTS): $(OBJ_DIR)/runtime/%.o: $(RUNTIME_DIR)/%.c
+	@$(MKDIR) $(dir $@) 2>/dev/null || true
+	@echo "[CC]   $< (cvm-exec)"
+	$(CC) $(CFLAGS) -D_GNU_SOURCE $(INCLUDES) -I$(RUNTIME_DIR) -c $< -o $@
 
 $(OBJ_DIR)/runtime/%.o: $(RUNTIME_DIR)/%.c
 	@$(MKDIR) $(dir $@) 2>/dev/null || true

@@ -1,406 +1,161 @@
-<div align="center">
+# Casprix
+
+Casprix is a statically-typed, compiled programming language that targets x86-64.
+The compiler is written in C. It has a hand-written lexer and parser, a semantic
+analysis pass with ownership and escape analysis, an SSA-form mid-level IR (MIR)
+with a small optimization pipeline, and two code paths: an AST-based native
+backend (the default) and an MIR-based backend that can emit native code, C, VM
+bytecode, or run a program in-process through a bytecode interpreter (CVM) with
+an experimental JIT.
+
+This is an early-stage project developed by a single author with the assistance
+of AI coding agents. It is not a finished language and is not production-ready.
+The sections below describe what the compiler does today, not what is planned.
+
+## Building
+
+Two build systems are provided.
+
+### Make (compiler only)
 
 ```
- ██████╗ █████╗ ███████╗██████╗ ██████╗ ██╗██╗  ██╗
-██╔════╝██╔══██╗██╔════╝██╔══██╗██╔══██╗██║╚██╗██╔╝
-██║     ███████║███████╗██████╔╝██████╔╝██║ ╚███╔╝ 
-██║     ██╔══██║╚════██║██╔═══╝ ██╔══██╗██║ ██╔██╗ 
-╚██████╗██║  ██║███████║██║     ██║  ██║██║██╔╝ ██╗
- ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝
+make
 ```
 
-**Fast. Modern. Powerful. 👻**
+Produces `bin/casprix`. This path builds only the compiler driver plus the small
+runtime files it needs for the `--execute` mode. It is the fast path for working
+on the compiler itself. `make test-all` runs the compiler over the `.cpx`
+fixtures in `tests/compiler/` in `--parse-only` mode.
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg?style=for-the-badge)](https://github.com/wmndilshan/casprix)
-[![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Author](https://img.shields.io/badge/author-Nuwam-purple.svg?style=for-the-badge)](https://github.com/wmndilshan/casprix)
-[![Language](https://img.shields.io/badge/language-C%20%2B%20x86--64-orange.svg?style=for-the-badge)]()
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg?style=for-the-badge)]()
+### CMake (full toolchain)
 
-*A modern, high-performance compiled programming language with production-grade optimization capabilities.*
-
-[Quick Start](#-quick-start) · [Language Guide](#-language-guide) · [Architecture](#-compiler-architecture) · [Benchmarks](#-performance-benchmarks) · [Package Manager](#-package-manager) · [Docs](#-documentation)
-
-</div>
-
----
-
-## 👻 What is Casprix?
-
-Casprix is a **compiled, statically-typed systems programming language** designed for developers who need both expressiveness and raw performance. It compiles directly to x86-64 native code via a multi-stage optimizing compiler pipeline, achieving runtime speeds **5–10x faster** than unoptimized equivalents — with a compilation pipeline **7.5x faster** thanks to its arena allocator.
-
-Casprix combines:
-- The **safety model** of modern systems languages (ownership, borrow annotations, lifetime regions)
-- The **expressiveness** of high-level languages (closures, generics, async/await, traits)
-- The **performance** of hand-optimized C (SIMD vectorization, register allocation, loop unrolling)
-
----
-
-## ✨ Language Features
-
-![Language Features](diagrams/features.svg)
-
-| Category | Features |
-|----------|----------|
-| **Performance** | Register allocation, SIMD/AVX2 vectorization, loop unrolling (4x), arena allocator |
-| **Safety** | Ownership model, borrow analysis, escape analysis, linear `StringView` borrows, lifetime tracking |
-| **Language** | Closures, generics (monomorphized), async/await, traits, pattern matching |
-| **Memory** | Hybrid model: GC + ownership + memory regions |
-| **Tooling** | Built-in package manager (`casprix-pkg`), semantic versioning, dependency resolution |
-| **Library** | [`lib/`](lib/) Casprix modules, C runtime [`string_ops`](include/casprix/string_ops.h), linear `StringView`, MIR regex subsystem — see [Stdlib / strings / regex](docs/STDLIB_STRINGS_AND_REGEX.md) |
-| **Targets** | x86-64 (primary), ARM64 (planned), MIR VM + experimental JIT bridge, tiered JIT (roadmap) |
-
----
-
-## 🏗️ Compiler Architecture
-
-Casprix uses a **multi-stage optimizing compiler** centered around a typed IR. The pipeline is designed for correctness first, then aggressive optimization.
-
-![Compiler Pipeline](diagrams/pipeline.svg)
-
-The pipeline flows through five distinct stages:
-
-**Frontend** — lexing, parsing, name resolution, type inference, monomorphization, and closure lowering. Produces a clean, typed AST ready for IR conversion.
-
-**IR (typed SSA)** — the heart of the compiler. An explicit control flow graph with basic blocks, phi nodes, ownership annotations, lifetime regions, and stack/heap abstraction. Two analysis passes run here: the **Borrow Checker** (static aliasing and race prevention) and the **Const-Eval Engine** (compile-time execution with termination guarantees).
-
-**Optimization Pipeline** — 8 ordered passes over the IR. Each pass unlocks the next: constant propagation enables copy propagation, which enables dead code elimination, and so on through inlining, escape analysis, strength reduction, control flow simplification, and loop optimization.
-
-**Backend Abstraction Layer** — target-independent interface handling ABI, calling conventions, and register abstraction. Decouples the optimizer from the code generator and enables multiple backends.
-
-**Backends** — AOT native (x86-64 NASM today, ARM64 planned), register-based MIR VM with a CVM interpreter and experimental JIT bridge under `runtime/vm/`, and a fuller tiered JIT (roadmap).
-
----
-
-## 🧠 Memory Model
-
-![Memory Model](diagrams/memory.svg)
-
-Casprix uses a **hybrid memory model** — the compiler's escape analysis pass decides at IR time where each allocation lives:
-
-- **Stack** — locals that don't escape their scope. Zero overhead, freed automatically.
-- **Ownership heap** — values with a single owner that outlive their scope. Freed deterministically on drop.
-- **Memory regions (arena)** — bulk lifetime allocations freed all at once. Responsible for the 7.5x compile speedup.
-- **GC** — available for managed objects and cyclic graphs. Opt-in, not default.
-
-All allocation decisions are static — no runtime type checks, no boxing overhead.
-
----
-
-## ⚙️ VM & JIT Architecture
-
-![VM and JIT](diagrams/vm-jit.svg)
-
-**VM Bytecode** uses a register-based instruction format (not stack-based), reducing instruction count and dispatch overhead. The tree ships a **CVM** interpreter and **JIT bridge** in `runtime/vm/` (used by tests such as `test_vm_jit`); the full productized VM + security story is still evolving.
-
-**Tiered JIT** (target design) operates in four levels:
-1. **Tier 0 (Baseline)** — fast emission, minimal optimization, gets code running immediately
-2. **Profiling** — call counters and branch frequency tracking identify hot paths
-3. **Tier 2 (Optimizing)** — speculative optimization with inline caches and type feedback
-4. **Deopt / OSR** — guard failures trigger deoptimization; on-stack replacement allows mid-execution tier transitions
-
----
-
-## 📊 Performance Benchmarks
-
-![Benchmarks](diagrams/benchmarks.svg)
-
-### Compilation Speed
-
-| Project Size | Without Arena | With Arena | Speedup |
-|:-------------|:-------------:|:----------:|:-------:|
-| 1,000 LOC    | 600 ms        | 80 ms      | **7.5x** |
-| 10,000 LOC   | 5.2 s         | 0.7 s      | **7.4x** |
-
-### Runtime Performance
-
-| Benchmark      | Unoptimized | Optimized | Speedup |
-|:---------------|:-----------:|:---------:|:-------:|
-| Array Sum      | 850 ms      | 95 ms     | **8.9x** |
-| Fibonacci(40)  | 3,200 ms    | 480 ms    | **6.7x** |
-| Matrix Mult    | 4,500 ms    | 520 ms    | **8.7x** |
-
-*Optimizations: register allocation + SIMD vectorization + loop unrolling + constant folding + inlining.*
-
----
-
-## 🚀 Quick Start
-
-### Installation
-
-```bash
-# Clone repository
-git clone https://github.com/wmndilshan/casprix.git
-cd casprix
-
-# Build (Linux / macOS)
-scripts/build.sh
-
-# Build (Windows — cmd from repo root)
-scripts\build.bat
+```
+cmake -S . -B build
+cmake --build build
 ```
 
-On Windows with a multi-config generator (Visual Studio), the compiler is often `build\Release\casprix.exe`. With Ninja or single-config CMake, it is usually `build\casprix.exe`.
+Produces, under `build/`:
 
-### Hello, World!
+- `casprix` — the compiler driver
+- `libcasprix_runtime.a` — the C runtime (memory, async, networking, math,
+  stdlib, and ML subsystems)
+- `casprix-pkg` — a package-manager utility
+- `casprix-lsp` — a language server (diagnostics, document symbols,
+  go-to-definition)
+- the C test executables, registered with CTest
 
-```casprix
-# hello.cpx
-print("Hello, Casprix! 👻")
+Optional components are controlled by CMake options, including `ENABLE_AVX2`
+(on by default) and `ENABLE_SKIA_GUI` (off by default).
+
+## Example
+
 ```
+class Counter {
+    mut value: int
 
-```bash
-build/casprix hello.cpx -o build/hello
-./build/hello
-# → Hello, Casprix! 👻
-```
-
-On Windows, run `build\hello.exe` or `build\Release\hello.exe` depending on your CMake generator.
-
-### Compile with Optimizations
-
-```bash
-casprix program.cpx -o output --opt-level=2
-casprix --help            # -O0, --mir, --native, --vm, --jit, …
-```
-
----
-
-## 📖 Language Guide
-
-### Variables & Types
-
-```casprix
-let x: int    = 42
-let name: string = "Casprix"
-let pi: float = 3.14159
-let flag: bool = true
-```
-
-### Functions
-
-```casprix
-func add(a: int, b: int) -> int {
-    return a + b
-}
-
-let result = add(5, 3)  // result = 8
-```
-
-### Closures
-
-```casprix
-let increment = |x: int| => x + 1
-```
-
-Pipe-lambda syntax is available, but captured closures and first-class closure calls are still being finished in the current front end. See [examples/basic/closures.cpx](examples/basic/closures.cpx) as a planned-surface reference rather than a guaranteed compiling sample.
-
-### Generic Types
-
-```casprix
-class List<T> {
-    mut items: array<T>;
-    mut count: int;
-
-    func add(item: T) {
-        this.items[this.count] = item
-        this.count = this.count + 1
+    func bump() {
+        this.value = this.value + 1
     }
 }
 
-let numbers = new List<int>()
-numbers.add(42)
-```
-
-### Async / Await
-
-Async / await is planned for CASPRIX, but the current parser does not accept it yet. Keep async examples out of the main language guide until the surface syntax is wired end to end.
-
-### Traits
-
-```casprix
-trait Printable {
-    func toString() -> string
-}
-
-class Point {
-    let x: int;
-    let y: int;
-}
-
-impl Printable for Point {
-    func toString() -> string {
-        return "(" + this.x + ", " + this.y + ")"
+func sum(items: Array<Int>) -> Int {
+    total: Int = 0
+    for item in items {
+        total += item
     }
+    return total
+}
+
+func main() -> Int {
+    c: Counter = new Counter()
+    c.bump()
+    c.bump()
+    c.bump()
+
+    nums: Array<Int> = [10, 20, 30]
+    print(sum(nums))   // 60
+    print(c.value)     // 3
+
+    return 0
 }
 ```
 
-### Pattern Matching
-
-```casprix
-func describe(x: int) -> string {
-    match x {
-        0     => "zero",
-        1..9  => "single digit",
-        10..99 => "two digits",
-        _     => "large number"
-    }
-}
+```
+bin/casprix example.cpx -o example
+./example
 ```
 
-### Classes & Inheritance
-
-```casprix
-class Animal {
-    let name: string;
-    func speak() -> string { return "..." }
-}
-
-class Dog extends Animal {
-    func speak() -> string {
-        return "Woof! I'm " + this.name
-    }
-}
-```
-
----
-
-## 🔧 Optimization Pipeline
+Output:
 
 ```
-Pass 1 — Const Propagation      Folds compile-time-known values inline
-Pass 2 — Copy Propagation       Eliminates redundant variable copies
-Pass 3 — Dead Code Elimination  Removes unreachable branches and unused defs
-Pass 4 — Function Inlining      Expands small hot functions at call sites
-Pass 5 — Escape Analysis        Stack-promotes heap allocations where safe
-Pass 6 — Strength Reduction     Replaces expensive ops with cheaper equivalents
-Pass 7 — CF Simplification      Merges/eliminates redundant basic blocks
-Pass 8 — Loop Optimization      Invariant hoisting, 4x unrolling, AVX2 vectorization
+60
+3
 ```
 
-Backend applies **linear scan register allocation** (85–90% utilization) and **AVX2 auto-vectorization** on eligible loops.
+More examples are in `examples/`; every file there compiles with the current
+compiler (verified with `--check-only`).
 
----
+## What works
 
-## 📦 Package Manager
+- Functions, classes with single inheritance and virtual dispatch, traits with
+  `impl` blocks, structs, enums, and unions.
+- Generics with monomorphization.
+- Pattern matching with literal, range, and wildcard arms.
+- Fixed-width integer and float types (`i8`..`i128`, `u8`..`u128`, `f32`, `f64`).
+- Closures: non-capturing lambdas and closures with read-only captures work as
+  values and as calls. Closures that capture a mutable variable work when they
+  do not escape the enclosing function (bound to a local, called in place,
+  passed to a function parameter typed as a plain function).
+- `async` / `await`: `async func` bodies are lowered to state machines. `await`
+  is valid only inside an `async func`.
+- Ownership and escape analysis; a borrow checker over MIR, enabled with
+  `--safe-mode`.
+- Optimization passes over MIR: constant folding and evaluation, mem2reg,
+  inlining, dead-code elimination, and loop and SIMD passes.
+- Backends: default AST native backend (x86-64, via an assembler and linker);
+  MIR backends selected with `--native`/`--aot` (experimental), `--emit-c`,
+  `--vm`, and `--jit`.
+- `--execute`: runs a program in-process through the CVM without writing an
+  executable. This works for functions, recursion, and conditionals; some
+  constructs (for example certain loop shapes) currently fail MIR validation and
+  are not yet supported on this path.
+- Package manager (`casprix-pkg`): project init, dependency declaration in a
+  `casper.json` manifest, and semantic-version constraints.
+- Language server (`casprix-lsp`) and a VS Code extension under `ide/vscode/`.
 
-The CMake target installs as **`casprix-pkg`** (CLI help text uses the `cpkg` command name). Example:
+## Known limitations
 
-```bash
-casprix-pkg init              # initialize project
-casprix-pkg install http      # install package
-casprix-pkg install json@^1.5 # with version constraint
+- The JIT tiers up a bounded set of functions (covered by tests such as
+  `CVM_JIT_tierup`, `JIT_self_recursive_call`, and `JIT_register_allocator`).
+  General function calls through the JIT are not supported yet.
+- Returning a closure that captures variables is rejected by the compiler.
+- Passing a closure that captures variables as a function argument is rejected;
+  plain functions and non-capturing lambdas can be passed.
+- The MIR native backend (`--native`) is experimental and not on par with the
+  default backend.
+- `spawn` is parsed but rejected with a "not implemented yet" diagnostic;
+  `where` clauses and `scope` blocks are not implemented.
+- ARM64 is not a supported target.
+- The networking layer (`runtime/net/`, `runtime/net2/`) has known correctness
+  gaps in its task/scheduler bookkeeping.
+- The GUI framework (`runtime/skia/`) has no accessibility bridge.
+- The design documents under `docs/design/` describe proposed systems that are
+  largely unbuilt; they are marked as such.
+
+## Tests
+
+```
+make test-all          # compiler over tests/compiler/*.cpx (parse-only)
+
+cmake -S . -B build && cmake --build build
+ctest --test-dir build # full suite: runtime, compiler, MIR, JIT
 ```
 
-### Version Constraints
-
-| Syntax | Meaning |
-|--------|---------|
-| `^2.0.0` | Compatible with 2.x.x |
-| `~2.1.0` | Patch updates only (2.1.x) |
-| `>=1.5.0` | At least version 1.5.0 |
-| `2.0.0` | Exact pin |
-
-### `casper.json` (package manifest)
-
-```json
-{
-    "name": "myapp",
-    "version": "1.0.0",
-    "dependencies": {
-        "http":   "^2.0.0",
-        "json":   "^1.5.0",
-        "crypto": "~3.1.0"
-    }
-}
-```
-[Quick Start](#-quick-start) · [Language Guide](#-language-guide) · [Architecture](ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Benchmarks](#-performance-benchmarks) · [Package Manager](#-package-manager) · [Docs](#-documentation)
-
-## 🗂️ Project Structure
-
-```
-casprix/
-├── src/compiler/
-│   ├── frontend/        # Lexer, parser, AST
-│   ├── sema/            # Type checking, escape analysis, ownership
-│   ├── middle/          # Closures, generics, traits, async lowering
-│   ├── ir/              # MIR (SSA), borrow checker, optimizations
-│   ├── codegen/         # x86-64 NASM generation, regalloc
-│   └── opt/             # Loop opt, SIMD, inlining, peephole
-├── runtime/             # Runtime library (C)
-│   ├── memory/          # GC, regions, refcount, ownership
-│   ├── vm/              # CVM interpreter + JIT bridge (MIR VM)
-│   ├── async/           # Async/await coroutine scheduler
-│   ├── net/             # Networking stack
-│   ├── ai/llm/          # Transformer / training runtime (AVX2)
-│   ├── ai/nn/           # Neural-network layers (C API)
-│   └── skia/            # Optional Skia/GDI GUI (ENABLE_SKIA_GUI)
-├── include/             # Public C headers
-├── lib/                 # Casprix standard modules (.cpx)
-├── stdlib/              # Bootstrap stdlib package index
-├── pkg/                 # Package manager (builds as casprix-pkg)
-├── tools/               # apk-builder, training helpers, …
-├── scripts/             # build.sh / build.bat, test runners
-├── tests/               # CTest: runtime, compiler, MIR, Android helpers
-└── examples/
-    ├── basic/           # Hello world, variables, functions
-    ├── advanced/        # Closures, generics, pattern matching
-    ├── gui/             # Skia UI samples (.cpx)
-    ├── llm_training/    # TinyStories-style training sketch
-    ├── network/         # Networking
-    └── tinystories/     # End-to-end TinyStories pipeline (.cpx)
-```
-
----
-
-## 📈 Project Statistics
-
-| Metric | Value |
-|:-------|:------|
-| Compiler source | ~15,000 lines (C + x86-64 asm) |
-| Runtime source | ~8,000 lines (memory, async, net, GUI, ML) |
-| Compilation speedup | **7.5x** (arena allocator) |
-| Runtime speedup | **5–10x** (combined optimizations) |
-| Primary target | Windows x64 |
-| Secondary targets | Linux, macOS |
-
----
-
-## 🗺️ Roadmap
-
-- [x] x86-64 AOT native code generation
-- [x] Arena allocator + MIR optimization pipeline
-- [x] Generics with monomorphization
-- [x] Closures with variable capture (surface still evolving)
-- [x] Async/await runtime
-- [x] Built-in package manager (`casprix-pkg` / `cpkg` CLI)
-- [x] MIR VM + CVM interpreter + experimental JIT bridge (`runtime/vm/`)
-- [ ] Tiered JIT compiler (full pipeline)
-- [ ] ARM64 native target
-- [ ] Full borrow checker (end-to-end)
-- [ ] LSP language server
-- [ ] Self-hosted compiler
-
----
-
-## Documentation
-
-- [Feature Summary](docs/FEATURES.md)
-- [Project Structure](docs/PROJECT_STRUCTURE.md)
-- [Stdlib, strings, StringView, and regex](docs/STDLIB_STRINGS_AND_REGEX.md)
-- [Package Manager Guide](docs/pkg/README.md)
-- Standard library sources live under [`lib/`](lib/) (Casprix modules) and [`stdlib/`](stdlib/) (bootstrap index)
-
----
+`make test-all` currently reports 41 passed, 0 failed. The CTest suite has a
+small number of known failures unrelated to the compiler core (a runtime stdlib
+test with drifted signatures, a SIMD virtualization test, and two compiler
+fixtures that exercise unimplemented library or syntax features).
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-<div align="center">
-
-**Casprix — Fast, Modern, Powerful** 👻
-
-</div>
+MIT. See [LICENSE](LICENSE).
