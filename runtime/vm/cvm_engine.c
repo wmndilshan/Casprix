@@ -304,6 +304,12 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
 
     CvmReg retval = 0;
     MirBlock* cur_block = func->entry_block;
+    /* Predecessor tracking for PHI resolution: the block we transitioned
+     * *from* into `cur_block`. NULL on function entry. Updated at every
+     * block transition (BR / CONDBR / SWITCH / fall-through) before the new
+     * block's instructions — including its PHI nodes — are executed. */
+    MirBlock* prev_block = NULL;
+    (void)prev_block;
 
 #if CVM_USE_COMPUTED_GOTO
     /* ────────────────────────────────────────────────────
@@ -590,16 +596,19 @@ op_get_elem_ptr: {
 }
 
 op_br:
+    prev_block = cur_block;
     cur_block = inst->as.br.target;
     goto block_start;
 
 op_condbr:
+    prev_block = cur_block;
     cur_block = REG(inst->as.condbr.cond) ? inst->as.condbr.true_bb
                                            : inst->as.condbr.false_bb;
     goto block_start;
 
 op_switch: {
     int64_t disc = (int64_t)REG(inst->as.sw.discriminant);
+    prev_block = cur_block;
     cur_block = inst->as.sw.default_bb;
     for (int ci = 0; ci < inst->as.sw.n_cases; ci++) {
         if (inst->as.sw.case_values[ci] == disc) {
@@ -648,17 +657,30 @@ op_call_virtual:
     NEXT_INST();
 
 op_phi: {
-    /* Phi nodes: find the incoming value matching the previous block.
-     * We store the previous block id in a thread-local variable via a simple
-     * trick: the branch instructions above set cur_block before jumping to
-     * block_start, so we can compare pred labels to find the right edge.
-     * For simplicity, use the first matching edge (SSA guarantees uniqueness). */
+    /* Predecessor-aware PHI: pick the incoming value on the edge whose
+     * source block is the one we actually transitioned from (prev_block),
+     * as recorded by the BR / CONDBR / SWITCH / fall-through handlers.
+     * This is required for loop-carried values: without it a loop counter's
+     * PHI always reads the entry-edge value and the loop never terminates. */
     CvmReg phi_val = 0;
+    bool matched = false;
     for (int ei = 0; ei < inst->as.phi.n_edges; ei++) {
-        /* We've already branched here; accept any valid edge value */
-        if (inst->as.phi.edges[ei].value != MIR_VALUE_NONE) {
-            phi_val = REG(inst->as.phi.edges[ei].value);
+        if (inst->as.phi.edges[ei].block == prev_block) {
+            if (inst->as.phi.edges[ei].value != MIR_VALUE_NONE)
+                phi_val = REG(inst->as.phi.edges[ei].value);
+            matched = true;
             break;
+        }
+    }
+    if (!matched) {
+        /* No edge matched prev_block (e.g. entry block has a PHI, or the
+         * predecessor list is incomplete). Fall back to the first non-NONE
+         * edge so behaviour is no worse than before. */
+        for (int ei = 0; ei < inst->as.phi.n_edges; ei++) {
+            if (inst->as.phi.edges[ei].value != MIR_VALUE_NONE) {
+                phi_val = REG(inst->as.phi.edges[ei].value);
+                break;
+            }
         }
     }
     SET(inst->result, phi_val);
@@ -706,7 +728,7 @@ op_extract: {
 
 block_end:
     /* Block ended without a terminator — treat as fall-through to next block */
-    if (cur_block) cur_block = cur_block->next_block;
+    if (cur_block) { prev_block = cur_block; cur_block = cur_block->next_block; }
     goto block_start;
 
 done:
@@ -822,19 +844,38 @@ done:
                     break;
                 }
                 case MIR_PHI: {
-                    if (inst->as.phi.n_edges > 0 && inst->as.phi.edges[0].value != MIR_VALUE_NONE)
-                        SET(inst->result, REG(inst->as.phi.edges[0].value));
+                    /* Predecessor-aware PHI (see the computed-goto op_phi). */
+                    CvmReg pv = 0;
+                    bool m = false;
+                    for (int ei = 0; ei < inst->as.phi.n_edges; ei++) {
+                        if (inst->as.phi.edges[ei].block == prev_block) {
+                            if (inst->as.phi.edges[ei].value != MIR_VALUE_NONE)
+                                pv = REG(inst->as.phi.edges[ei].value);
+                            m = true;
+                            break;
+                        }
+                    }
+                    if (!m) {
+                        for (int ei = 0; ei < inst->as.phi.n_edges; ei++)
+                            if (inst->as.phi.edges[ei].value != MIR_VALUE_NONE) {
+                                pv = REG(inst->as.phi.edges[ei].value); break;
+                            }
+                    }
+                    SET(inst->result, pv);
                     break;
                 }
                 case MIR_BR:
+                    prev_block = cur_block;
                     cur_block = inst->as.br.target;
                     goto next_block_sw;
                 case MIR_CONDBR:
+                    prev_block = cur_block;
                     cur_block = REG(inst->as.condbr.cond) ? inst->as.condbr.true_bb
                                                           : inst->as.condbr.false_bb;
                     goto next_block_sw;
                 case MIR_SWITCH: {
                     int64_t disc = (int64_t)REG(inst->as.sw.discriminant);
+                    prev_block = cur_block;
                     cur_block = inst->as.sw.default_bb;
                     for (int ci = 0; ci < inst->as.sw.n_cases; ci++)
                         if (inst->as.sw.case_values[ci] == disc) { cur_block = inst->as.sw.targets[ci]; break; }
@@ -855,6 +896,7 @@ done:
             if (CVM_UNLIKELY(vm->trap_code)) goto done_sw;
         }
         /* fall-through to next block */
+        prev_block = cur_block;
         cur_block = cur_block ? cur_block->next_block : NULL;
         continue;
 next_block_sw:
@@ -998,7 +1040,9 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
         return jit_regs[0];
     }
 
-    /* Lightweight profiling: compile at threshold, then sample every 64 calls. */
+    /* Lightweight profiling: compile at threshold, then sample every 64 calls.
+     * CVM_TIER_JIT_DENIED functions are skipped forever (no repeated attempts
+     * on a hot but permanently-ineligible function). */
     if (prof->tier == CVM_TIER_INTERPRET && vm->jit &&
         (prof->call_count == CVM_JIT_THRESHOLD ||
          (prof->call_count > CVM_JIT_THRESHOLD && (prof->call_count & 63) == 0))) {
@@ -1006,8 +1050,8 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
         prof->tier = CVM_TIER_JIT_PENDING;
         JitResult jr = cjb_compile_function(vm->jit, vm->module, callee, prof);
         if (jr != JIT_OK) {
-            /* Compilation failed — fall back to interpretation permanently */
-            prof->tier = CVM_TIER_INTERPRET;
+            /* Compilation failed — never retry this function. */
+            prof->tier = CVM_TIER_JIT_DENIED;
         }
     }
 
@@ -1063,7 +1107,7 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
         prof->tier = CVM_TIER_JIT_PENDING;
         JitResult jr = cjb_compile_function(vm->jit, vm->module, func, prof);
         if (jr != JIT_OK) {
-            prof->tier = CVM_TIER_INTERPRET;
+            prof->tier = CVM_TIER_JIT_DENIED;   /* never retry */
         }
     }
 
@@ -1103,6 +1147,7 @@ void cvm_print_stats(CvmState* vm, FILE* out) {
                              p->call_count,
                              p->tier == CVM_TIER_NATIVE ? "native"
                              : p->tier == CVM_TIER_JIT_PENDING ? "pending"
+                             : p->tier == CVM_TIER_JIT_DENIED ? "denied"
                              : "interpret");
         (void)cpx_io_write_all_fd(1, line, n);
     }

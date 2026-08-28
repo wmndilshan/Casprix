@@ -86,6 +86,7 @@ typedef enum {
     CVM_TIER_INTERPRET = 0,   /* being interpreted */
     CVM_TIER_JIT_PENDING,     /* compilation triggered, not yet complete */
     CVM_TIER_NATIVE,          /* native code available via native_fn */
+    CVM_TIER_JIT_DENIED,      /* JIT compilation failed once — never retry */
 } CvmTier;
 
 /* Native function signature: args are passed as a flat CvmReg array;

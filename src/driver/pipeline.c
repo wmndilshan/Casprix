@@ -47,6 +47,7 @@
 
 /* CVM interpreter — for `--execute` (in-process run, no bytecode file). */
 #include "../../runtime/vm/cvm_engine.h"
+#include "../../runtime/vm/jit_bridge.h"
 
 /* ============================================================================
  * CompileCtx — owns all heap-allocated per-compilation state.
@@ -454,8 +455,13 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
          * Entry point is `main` (the Casprix `func main()` convention); if
          * absent, the synthetic `__casprix_entry` (file-scope top-level
          * statements) is used. A no-arg entry is assumed; argv passthrough
-         * and JIT tier-up (jit=NULL here → pure interpretation) are
-         * follow-ups.
+         * is a follow-up.
+         *
+         * A CvmJitBridge is attached so hot functions (past CVM_JIT_THRESHOLD
+         * calls) tier up to the mini x86-64 JIT. jit_function_is_supported()
+         * conservatively bails any function that would exceed the trampoline's
+         * argument capacity or the fixed register map, so tier-up is safe on
+         * arbitrary programs (unsupported functions simply stay interpreted).
          *
          * `--execute` is terminal: whatever the mode (`--execute` alone,
          * `--vm --execute`, …) the driver runs the program and exits with
@@ -475,18 +481,24 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
             }
 
             if (!g_config.compact_output)
-                CPX_INFO("Executing '%s' via CVM interpreter...", entry);
+                CPX_INFO("Executing '%s' via CVM (JIT tier-up enabled)...", entry);
 
-            CvmState* vm = cvm_state_create(ctx.mir_module, /*jit=*/NULL);
+            CvmJitBridge* jit = cjb_create();  /* NULL → CVM falls back to pure interpretation */
+            CvmState* vm = cvm_state_create(ctx.mir_module, jit);
             if (!vm) {
                 printf("\n  [ERROR] --execute: could not create CVM state.\n");
+                if (jit) cjb_destroy(jit);
                 result = 74; goto done;
             }
 
             int64_t rc = cvm_run(vm, entry, /*args=*/NULL, /*n_args=*/0);
             int trap = vm->trap_code;
-            if (g_config.verbose) cvm_print_stats(vm, stdout);
+            if (g_config.verbose) {
+                cvm_print_stats(vm, stdout);
+                if (jit) cjb_print_stats(jit, stdout);
+            }
             cvm_state_destroy(vm);
+            if (jit) cjb_destroy(jit);
 
             debug_phase_end("Execute (CVM)");
 

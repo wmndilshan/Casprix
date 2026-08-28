@@ -209,6 +209,112 @@ if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_vm_jit.c")
         LABELS "vm;jit")
 endif()
 
+# ── JIT capacity bail-out test ─────────────────────────────────────────────────
+# Verifies jit_function_is_supported() refuses functions that exceed the
+# trampoline's argument capacity or the fixed register map, so JIT tier-up
+# cannot generate crashing code (unsupported → stays interpreted).
+if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_jit_caps.c")
+    add_executable(test_jit_caps
+        compiler/test_jit_caps.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/cvm_engine.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/opt/simd.c
+    )
+    target_include_directories(test_jit_caps PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(test_jit_caps PRIVATE
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    add_test(NAME JIT_capacity_bailout COMMAND test_jit_caps)
+    set_tests_properties(JIT_capacity_bailout PROPERTIES TIMEOUT 60 LABELS "vm;jit")
+endif()
+
+if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_jit_regalloc.c")
+    add_executable(test_jit_regalloc
+        compiler/test_jit_regalloc.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/cvm_engine.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/opt/simd.c
+    )
+    target_include_directories(test_jit_regalloc PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(test_jit_regalloc PRIVATE
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    add_test(NAME JIT_register_allocator COMMAND test_jit_regalloc)
+    set_tests_properties(JIT_register_allocator PROPERTIES TIMEOUT 60 LABELS "vm;jit")
+endif()
+
+foreach(_jt test_jit_trampoline test_jit_selfcall)
+    if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/${_jt}.c")
+        add_executable(${_jt}
+            compiler/${_jt}.c
+            ${CMAKE_SOURCE_DIR}/runtime/vm/cvm_engine.c
+            ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
+            ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
+            ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend.c
+            ${CMAKE_SOURCE_DIR}/src/compiler/opt/simd.c
+        )
+        target_include_directories(${_jt} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/runtime)
+        target_link_libraries(${_jt} PRIVATE
+            casprix_compile_options casprix_include_dirs
+            $<$<NOT:$<BOOL:${MSVC}>>:m>)
+    endif()
+endforeach()
+if(TARGET test_jit_trampoline)
+    add_test(NAME JIT_trampoline_spill COMMAND test_jit_trampoline)
+    set_tests_properties(JIT_trampoline_spill PROPERTIES TIMEOUT 60 LABELS "vm;jit")
+endif()
+if(TARGET test_jit_selfcall)
+    add_test(NAME JIT_self_recursive_call COMMAND test_jit_selfcall)
+    set_tests_properties(JIT_self_recursive_call PROPERTIES TIMEOUT 120 LABELS "vm;jit")
+endif()
+
 # ── Compiler integration tests ───────────────────────────────────────────────
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_lang_abi.c")
     add_executable(test_lang_abi test_lang_abi.c)
