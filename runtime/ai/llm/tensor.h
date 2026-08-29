@@ -65,19 +65,19 @@ typedef struct MemoryPools {
 // ===== ARENA ALLOCATOR =====
 
 // Create arena with specified capacity
-TensorArena* tensor_tensor_arena_create(size_t capacity);
+TensorArena* tensor_arena_create(size_t capacity);
 
 // Allocate aligned memory from arena
-void* tensor_tensor_arena_alloc(TensorArena* arena, size_t size, size_t alignment);
+void* tensor_arena_alloc(TensorArena* arena, size_t size, size_t alignment);
 
 // Allocate tensor from arena
-Tensor* tensor_tensor_arena_alloc_tensor(TensorArena* arena, i32 ndim, const i32* shape);
+Tensor* tensor_arena_alloc_tensor(TensorArena* arena, i32 ndim, const i32* shape);
 
 // Reset arena (reuse memory)
-void tensor_tensor_arena_reset(TensorArena* arena);
+void tensor_arena_reset(TensorArena* arena);
 
 // Destroy arena
-void tensor_tensor_arena_destroy(TensorArena* arena);
+void tensor_arena_destroy(TensorArena* arena);
 
 // ===== TENSOR OPERATIONS =====
 
