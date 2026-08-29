@@ -84,7 +84,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.BUILD_DIR }}
-          key: cmake-linux-${{ hashFiles('CMakeLists.txt', 'runtime/CMakeLists.txt') }}
+          key: cmake-linux-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cmake-linux-
 
       - name: Configure
@@ -134,7 +134,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.BUILD_DIR }}
-          key: cmake-windows-${{ hashFiles('CMakeLists.txt', 'runtime/CMakeLists.txt') }}
+          key: cmake-windows-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cmake-windows-
 
       - name: Configure
@@ -178,7 +178,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.BUILD_DIR }}
-          key: cmake-linux-${{ hashFiles('CMakeLists.txt', 'runtime/CMakeLists.txt') }}
+          key: cmake-linux-${{ hashFiles('**/CMakeLists.txt') }}
 
       - name: Rebuild (if cache miss)
         run: |
@@ -226,7 +226,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.BUILD_DIR }}
-          key: cmake-windows-${{ hashFiles('CMakeLists.txt', 'runtime/CMakeLists.txt') }}
+          key: cmake-windows-${{ hashFiles('**/CMakeLists.txt') }}
 
       - name: Rebuild (if cache miss)
         shell: msys2 {0}

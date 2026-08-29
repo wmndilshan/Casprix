@@ -101,4 +101,5 @@ else()
     )
 endif()
 
-add_subdirectory(net2)
+# net2/ archived to archive/net2/ — removed from the active build.
+# See archive/net2/README.md. To revisit: add_subdirectory(${CMAKE_SOURCE_DIR}/archive/net2)

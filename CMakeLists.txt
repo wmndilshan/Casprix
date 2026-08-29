@@ -332,6 +332,15 @@ if(BUILD_RUNTIME)
         list(APPEND RUNTIME_SOURCES runtime/async/coroutine_win32.c)
     elseif(EXISTS "${CMAKE_SOURCE_DIR}/runtime/async/coroutine_posix.c")
         list(APPEND RUNTIME_SOURCES runtime/async/coroutine_posix.c)
+        # coroutine_posix.c calls coro_context_switch(), which is defined in
+        # NASM. Without this object the symbol is unresolved — it previously
+        # broke test_scheduler and left runtime/net/http_server.c (which spins
+        # a coroutine per connection) unlinkable.
+        if(NASM_AVAILABLE AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/async/coro_context.asm")
+            list(APPEND RUNTIME_SOURCES runtime/async/coro_context.asm)
+            set_source_files_properties(runtime/async/coro_context.asm
+                PROPERTIES COMPILE_OPTIONS "")
+        endif()
     endif()
 
     # Concurrent / sync
@@ -412,7 +421,12 @@ if(BUILD_RUNTIME)
     install(TARGETS casprix_runtime DESTINATION lib)
 endif()
 
-add_subdirectory(runtime/net2)
+# net2/ was an experimental reactor + stackful-coroutine async networking
+# rewrite. Archived to archive/net2/ (zero consumers, unfinished protocol
+# support, a known cx_runtime.c build break, and a double-wake scheduler race).
+# runtime/net/ is the actively-maintained implementation. See archive/net2/README.md.
+# To revisit: fix the breaks documented in that README, then re-enable:
+#   add_subdirectory(archive/net2)
 
 # ============================================================================
 # Package manager
