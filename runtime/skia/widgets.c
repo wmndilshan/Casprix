@@ -15,6 +15,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
+
+/* ========================================================================
+ * ui_fatal — used by lib/skia/ui.cpx's ui_require_* helpers.
+ *
+ * Previously those helpers only print()'d a message on a failed precondition
+ * and then let construction proceed with a null / invalid handle, deferring
+ * the crash to a later, harder-to-diagnose dereference. This turns a failed
+ * require into an immediate, labelled abort at the exact bad call site.
+ *
+ * This is deliberately abort(), matching the rest of the runtime's fail-fast
+ * contract violations (runtime/memory/arc.c, runtime/memory/ownership.c) and
+ * the compiler's unhandled-exception path. It is only reachable when calling
+ * code passed an argument the API explicitly forbids.
+ * ======================================================================== */
+void ui_fatal(const char* message) {
+    fprintf(stderr, "[casprix-ui] fatal: %s\n",
+            message ? message : "invalid UI operation");
+    fflush(stderr);
+    abort();
+}
 
 #define WIDGET_FOCUS_RING_COLOR  SG_COLOR_FOCUS
 #define WIDGET_FOCUS_RING_SHADOW 12.0f
@@ -351,6 +372,7 @@ SGNode* widget_button_modern(const char* label, SkiaFont font, ButtonVariant var
     btn->justify = SG_JUSTIFY_CENTER;
     btn->align_items = SG_ALIGN_CENTER;
     btn->flags |= SG_INTERACTIVE;
+    btn->a11y_role = SG_A11Y_ROLE_BUTTON;
 
     /* Default button style */
     widget_style_secondary_button(btn);
@@ -362,8 +384,10 @@ SGNode* widget_button_modern(const char* label, SkiaFont font, ButtonVariant var
     btn->min_width = 108.0f;
     btn->flex_shrink = 0.0f;
 
-    /* Create label child */
+    /* Create label child. It is decorative for a11y purposes — the Button
+     * itself carries the label — so hide the child from the a11y tree. */
     SGNode* text_node = widget_text(label, font, 0xFFFFFFFF);
+    text_node->a11y_hidden = 1;
     sg_node_add_child(btn, text_node);
 
     /* Widget state */
@@ -461,6 +485,7 @@ SGNode* widget_text(const char* text, SkiaFont font, uint32_t color) {
     node->ownership_flags &= ~SG_NODE_OWNS_FONT;
     node->data.text.color = color;
     node->data.text.align = SG_TEXT_ALIGN_LEFT;
+    node->a11y_role = SG_A11Y_ROLE_TEXT;
     return node;
 }
 
@@ -474,6 +499,36 @@ void widget_text_set(SGNode* node, const char* text) {
         node->data.text.text = NULL;
     }
     sg_node_mark_dirty(node, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
+    /* Visible text changed -> the accessibility label may have changed too
+     * (a Button derives its label from this child). Structural notification. */
+    sg_a11y_notify_structural_change();
+}
+
+/* Enable/disable word wrapping for a text label. When enabled, the label
+ * wraps to the width it is laid out at; hard '\n' always starts a new line
+ * regardless of this setting. */
+void widget_text_set_wrap(SGNode* node, int wrap) {
+    if (!node || node->type != SG_NODE_TEXT) return;
+    node->data.text.wrap = wrap ? 1 : 0;
+    sg_node_mark_dirty(node, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
+}
+
+/* Cap the rendered line count. 0 = unlimited. Extra lines are dropped with no
+ * ellipsis (v1). */
+void widget_text_set_max_lines(SGNode* node, int max_lines) {
+    if (!node || node->type != SG_NODE_TEXT) return;
+    node->data.text.max_lines = max_lines > 0 ? max_lines : 0;
+    sg_node_mark_dirty(node, SG_DIRTY_LAYOUT | SG_DIRTY_PAINT);
+}
+
+/* ---- Accessibility (v1b) convenience wrappers ------------------------- */
+
+void widget_set_a11y_label(SGNode* node, const char* label) {
+    sg_node_set_a11y_label(node, label);
+}
+
+void widget_set_a11y_hidden(SGNode* node, int hidden) {
+    sg_node_set_a11y_hidden(node, hidden);
 }
 
 /* ========================================================================
@@ -542,6 +597,7 @@ static void text_input_on_focus_in(SGNode* node, int event_type, void* event_dat
     (void)event_type; (void)event_data; (void)udata;
     TextInputWidgetState* state = (TextInputWidgetState*)node->user_data;
     if (!state) return;
+    if (!state->enabled) return;   /* disabled: no focus, no editing */
     state->focused = 1;
     state->cursor_blink_time = 0;
     text_input_ensure_cursor_visible(node, state);
@@ -569,7 +625,7 @@ static void text_input_on_key_down(SGNode* node, int event_type, void* event_dat
     (void)event_type; (void)udata;
     SGEvent* evt = (SGEvent*)event_data;
     TextInputWidgetState* state = (TextInputWidgetState*)node->user_data;
-    if (!state || !state->focused) return;
+    if (!state || !state->enabled || !state->focused) return;
 
     int key = evt->data.key.keycode;
     int mods = evt->mods;
@@ -645,7 +701,7 @@ static void text_input_on_text(SGNode* node, int event_type, void* event_data, v
     (void)event_type; (void)udata;
     SGEvent* evt = (SGEvent*)event_data;
     TextInputWidgetState* state = (TextInputWidgetState*)node->user_data;
-    if (!state || !state->focused) return;
+    if (!state || !state->enabled || !state->focused) return;
 
     /* Delete selection if any */
     if (text_input_has_selection(state)) {
@@ -674,7 +730,7 @@ static void text_input_on_click(SGNode* node, int event_type, void* event_data, 
     (void)event_type; (void)udata;
     SGEvent* evt = (SGEvent*)event_data;
     TextInputWidgetState* state = (TextInputWidgetState*)node->user_data;
-    if (!state) return;
+    if (!state || !state->enabled) return;   /* disabled: no cursor placement */
 
     /* Approximate cursor position from click x */
     float local_x = evt->data.mouse.local_x - node->style.padding[3];
@@ -695,6 +751,7 @@ static void text_input_on_click(SGNode* node, int event_type, void* event_data, 
 SGNode* widget_text_input(const char* placeholder, SkiaFont font) {
     SGNode* node = sg_node_create(SG_NODE_TEXT);
     node->flags |= SG_INTERACTIVE;
+    node->a11y_role = SG_A11Y_ROLE_EDIT_TEXT;
 
     /* Text input styling */
     node->style.background = SG_COLOR_SURFACE;
@@ -720,6 +777,10 @@ SGNode* widget_text_input(const char* placeholder, SkiaFont font) {
     state->text = (char*)calloc(state->text_capacity, 1);
     state->selection_start = -1;
     state->selection_end = -1;
+    state->enabled = 1;
+    state->has_error = 0;
+    state->normal_background = node->style.background;
+    state->normal_border_color = node->style.border_color;
     if (placeholder) {
         state->placeholder = (char*)malloc(strlen(placeholder) + 1);
         strcpy(state->placeholder, placeholder);
@@ -770,6 +831,133 @@ void widget_text_input_on_change(SGNode* node, TextChangeCallback callback, void
     if (!state || state->type != WIDGET_TEXT_INPUT) return;
     state->on_change = callback;
     state->callback_data = user_data;
+}
+
+/* Re-apply the border/background/text colors for the input's current
+ * (enabled, has_error) combination. Disabled styling wins over error styling;
+ * an enabled+error input gets the error border, an enabled+ok input gets the
+ * captured normal colors. */
+static void text_input_apply_state_style(SGNode* node, TextInputWidgetState* state) {
+    if (!state->enabled) {
+        node->style.background = SG_COLOR_DISABLED_SURFACE;
+        node->style.border_color = SG_COLOR_DISABLED;
+        node->data.text.color = SG_COLOR_TEXT_SECONDARY;
+    } else if (state->has_error) {
+        node->style.background = sg_color_with_alpha(SG_COLOR_ERROR, 12);
+        node->style.border_color = SG_COLOR_ERROR;
+        node->data.text.color = SG_COLOR_TEXT;
+        /* keep the focus-ring restore target consistent with the visible border */
+        state->saved_border_color = SG_COLOR_ERROR;
+    } else {
+        node->style.background = state->normal_background;
+        node->style.border_color = state->normal_border_color;
+        node->data.text.color = SG_COLOR_TEXT;
+        state->saved_border_color = state->normal_border_color;
+    }
+    sg_node_mark_dirty(node, SG_DIRTY_PAINT);
+}
+
+void widget_text_input_set_enabled(SGNode* node, int enabled) {
+    TextInputWidgetState* state = (TextInputWidgetState*)node->user_data;
+    if (!state || state->type != WIDGET_TEXT_INPUT) return;
+    enabled = enabled ? 1 : 0;
+    if (state->enabled == enabled) return;
+    state->enabled = enabled;
+    if (!enabled) {
+        /* Drop focus + selection, stop receiving events, report disabled to
+         * the accessibility bridge (SG_STATE_DISABLED + no SG_INTERACTIVE). */
+        state->focused = 0;
+        text_input_clear_selection(state);
+        node->flags &= ~SG_INTERACTIVE;
+        node->state_flags |= SG_STATE_DISABLED;
+    } else {
+        node->flags |= SG_INTERACTIVE;
+        node->state_flags &= ~SG_STATE_DISABLED;
+    }
+    text_input_apply_state_style(node, state);
+}
+
+int widget_text_input_is_enabled(SGNode* node) {
+    TextInputWidgetState* state = (TextInputWidgetState*)node->user_data;
+    if (!state || state->type != WIDGET_TEXT_INPUT) return 0;
+    return state->enabled;
+}
+
+void widget_text_input_set_error(SGNode* node, int has_error) {
+    TextInputWidgetState* state = (TextInputWidgetState*)node->user_data;
+    if (!state || state->type != WIDGET_TEXT_INPUT) return;
+    has_error = has_error ? 1 : 0;
+    if (state->has_error == has_error) return;
+    state->has_error = has_error;
+    /* Error styling never blocks input: enabled / SG_INTERACTIVE / focus
+     * are left untouched. */
+    text_input_apply_state_style(node, state);
+}
+
+int widget_text_input_has_error(SGNode* node) {
+    TextInputWidgetState* state = (TextInputWidgetState*)node->user_data;
+    if (!state || state->type != WIDGET_TEXT_INPUT) return 0;
+    return state->has_error;
+}
+
+/* Trimmed [start,end) of `s` skipping leading/trailing ' ' and '\t'. */
+static void widget_trim_span(const char* s, int* out_start, int* out_end) {
+    int n = s ? (int)strlen(s) : 0;
+    int a = 0, b = n;
+    while (a < b && (s[a] == ' ' || s[a] == '\t')) a++;
+    while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t')) b--;
+    *out_start = a;
+    *out_end = b;
+}
+
+int widget_text_validate(int rule, int param, const char* text) {
+    if (!text) text = "";
+    int a, b;
+    widget_trim_span(text, &a, &b);
+    int len = b - a;
+
+    switch (rule) {
+        case WIDGET_VALIDATE_NONE:
+            return 1;
+        case WIDGET_VALIDATE_REQUIRED:
+            return len > 0;
+        case WIDGET_VALIDATE_MIN_LEN:
+            return len >= param;
+        case WIDGET_VALIDATE_MAX_LEN:
+            return len <= param;
+        case WIDGET_VALIDATE_EMAIL: {
+            if (len < 3) return 0;
+            int at = -1;
+            for (int i = a; i < b; i++) {
+                if (text[i] == '@') {
+                    if (at != -1) return 0;   /* more than one '@' */
+                    at = i;
+                }
+            }
+            if (at <= a || at >= b - 1) return 0;     /* '@' not interior */
+            int dot = 0;
+            for (int i = at + 1; i < b; i++) {
+                if (text[i] == '@') return 0;
+                if (text[i] == '.') {
+                    if (i == at + 1 || i == b - 1) return 0; /* ".@" or trailing '.' */
+                    dot = 1;
+                }
+            }
+            return dot;
+        }
+        case WIDGET_VALIDATE_NUMERIC: {
+            if (len == 0) return 0;
+            int i = a;
+            if (text[i] == '-') i++;
+            if (i >= b) return 0;
+            for (; i < b; i++) {
+                if (text[i] < '0' || text[i] > '9') return 0;
+            }
+            return 1;
+        }
+        default:
+            return 1;
+    }
 }
 
 static SkiaPaint s_text_input_text_paint = NULL;

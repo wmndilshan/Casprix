@@ -113,8 +113,14 @@ extern func skia_image_get_height(img: i64) -> i64
 
 extern func sg_node_create(node_type: i64) -> i64
 extern func sg_node_destroy(node: i64) -> void
-extern func sg_node_add_child(parent: i64, child: i64) -> void
+// Returns 0 on success, -1 if the attach was rejected (cycle / null args).
+// Callers may ignore the return value.
+extern func sg_node_add_child(parent: i64, child: i64) -> i64
 extern func sg_node_remove_child(parent: i64, child: i64) -> void
+extern func sg_node_is_ancestor(maybe_ancestor: i64, node: i64) -> i64
+
+// Aborts the process with a labelled message. Backs ui_require_* below.
+extern func ui_fatal(message: string) -> void
 
 // ========================================================================
 // Scene Graph — Style Helpers
@@ -149,10 +155,22 @@ extern func sg_style_pill(node: i64) -> void
 
 extern func widget_text(text: string, font: i64, color: i64) -> i64
 extern func widget_text_set(node: i64, text: string) -> void
+extern func widget_text_set_wrap(node: i64, wrap: i64) -> void
+extern func widget_text_set_max_lines(node: i64, max_lines: i64) -> void
+
+// Accessibility (v1b): explicit label for icon-only controls; hide decorative
+// nodes from the a11y tree. Empty label string clears an explicit label.
+extern func widget_set_a11y_label(node: i64, label: string) -> void
+extern func widget_set_a11y_hidden(node: i64, hidden: i64) -> void
 extern func widget_button(label: string, font: i64, on_click: i64, ctx: i64) -> i64
 extern func widget_text_input(placeholder: string, font: i64) -> i64
 extern func widget_text_input_get_value(node: i64) -> string
 extern func widget_text_input_set_value(node: i64, text: string) -> void
+extern func widget_text_input_set_enabled(node: i64, enabled: i64) -> void
+extern func widget_text_input_is_enabled(node: i64) -> i64
+extern func widget_text_input_set_error(node: i64, has_error: i64) -> void
+extern func widget_text_input_has_error(node: i64) -> i64
+extern func widget_text_validate(rule: i64, param: i64, text: string) -> i64
 extern func widget_checkbox(label: string, font: i64, initial: i64) -> i64
 extern func widget_checkbox_is_checked(node: i64) -> i64
 extern func widget_checkbox_set_checked(node: i64, val: i64) -> void

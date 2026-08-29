@@ -129,6 +129,12 @@ int main(int argc, char** argv) {
         else if (strcmp(arg, "--release") == 0) {
             cfg.debug_build = 0;
         }
+        else if (strcmp(arg, "--a11y-shim") == 0) {
+            cfg.accessibility_shim = 1;    /* force on */
+        }
+        else if (strcmp(arg, "--no-a11y-shim") == 0) {
+            cfg.accessibility_shim = 0;    /* force off */
+        }
         else if (strcmp(arg, "--quiet") == 0) {
             cfg.verbose = 0;
         }

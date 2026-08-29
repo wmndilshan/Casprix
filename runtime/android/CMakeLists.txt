@@ -56,6 +56,7 @@ set(CASPRIX_SOURCES
     ${CMAKE_SOURCE_DIR}/android_egl.c
     ${CMAKE_SOURCE_DIR}/android_renderer.cpp
     ${CMAKE_SOURCE_DIR}/jni_bridge.c
+    ${CMAKE_SOURCE_DIR}/a11y_bridge.c
     ${CMAKE_SOURCE_DIR}/android_runtime.c
 
     ${PROJECT_ROOT}/runtime/skia/skia_c.cpp

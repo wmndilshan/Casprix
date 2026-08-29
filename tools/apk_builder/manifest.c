@@ -24,6 +24,31 @@ static int manifest_is_empty(const char* s) {
     return !s || !s[0];
 }
 
+/* Repo-relative location of the accessibility-shim Java sources. */
+#define CPX_A11Y_JAVA_DIR "runtime/android/java"
+
+int apk_accessibility_shim_enabled(const ApkBuildConfig* config,
+                                   char* java_src_dir, size_t java_src_dir_size) {
+    char probe[1024];
+    FILE* f;
+    int have_sources;
+
+    snprintf(probe, sizeof(probe),
+             "%s/com/casprix/app/CasprixNativeActivity.java", CPX_A11Y_JAVA_DIR);
+    f = fopen(probe, "rb");
+    have_sources = (f != NULL);
+    if (f) fclose(f);
+
+    if (java_src_dir && java_src_dir_size) {
+        snprintf(java_src_dir, java_src_dir_size, "%s", CPX_A11Y_JAVA_DIR);
+    }
+
+    if (!config) return have_sources;
+    if (config->accessibility_shim == 0) return 0;   /* forced off */
+    if (config->accessibility_shim > 0) return 1;    /* forced on  */
+    return have_sources;                             /* auto       */
+}
+
 void manifest_builder_init(ManifestBuilder* mb, const ApkBuildConfig* config) {
     if (!mb) return;
     memset(mb, 0, sizeof(*mb));
@@ -199,11 +224,12 @@ int manifest_write_builder(const ManifestBuilder* mb, const char* output_path) {
         "    <application\n"
         "        android:label=\"@string/app_name\"\n"
         "        android:icon=\"@drawable/ic_launcher\"\n"
-        "        android:hasCode=\"false\"\n"
+        "        android:hasCode=\"%s\"\n"
         "        android:debuggable=\"%s\"\n"
         "        android:allowBackup=\"true\"\n"
         "        android:hardwareAccelerated=\"true\">\n"
         "\n",
+        mb->has_code ? "true" : "false",
         mb->debuggable ? "true" : "false");
 
     for (int i = 0; i < mb->activity_count; i++) {
@@ -218,12 +244,27 @@ int manifest_write_builder(const ManifestBuilder* mb, const char* output_path) {
 int manifest_write(const ApkBuildConfig* config, const char* output_path) {
     ManifestBuilder mb;
     manifest_builder_init(&mb, config);
+
+    const char* lib_name = mb.main_activity[0] ? mb.main_activity : "MainActivity";
+
+    /* Accessibility v1a: when the shim is enabled, the entry point becomes the
+     * Java NativeActivity subclass com.casprix.app.CasprixNativeActivity. It
+     * is still MANIFEST_ACTIVITY_NATIVE (keeps the android.app.lib_name
+     * meta-data pointing at lib<name>.so, so the native entry path is
+     * completely unchanged), but the class name is Java and hasCode=true. */
+    int shim = config &&
+               apk_accessibility_shim_enabled(config, NULL, 0);
+    if (shim) {
+        mb.has_code = 1;
+    }
+
     if (mb.activity_count == 0) {
         manifest_add_activity(&mb,
-                              mb.main_activity[0] ? mb.main_activity : "MainActivity",
+                              shim ? "com.casprix.app.CasprixNativeActivity"
+                                   : lib_name,
                               MANIFEST_ACTIVITY_NATIVE,
                               mb.app_name,
-                              mb.main_activity);
+                              lib_name);
     }
     return manifest_write_builder(&mb, output_path);
 }

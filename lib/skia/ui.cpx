@@ -42,64 +42,67 @@ func ui_bool_to_i64(value: bool) -> i64 {
     return 0
 }
 
+// ui_require_* — precondition checks for the wrapper classes below.
+//
+// A failed precondition means the CALLER passed an argument the API forbids
+// (a destroyed/zero handle, an empty required string, a negative size, ...).
+// Previously these printed a message and let construction proceed with the
+// bad value, which just deferred the crash to a later null dereference in
+// unrelated code. They now abort immediately, at the exact bad call site,
+// via ui_fatal (runtime/skia/widgets.c). This is a hard-stop, matching the
+// rest of the runtime's contract-violation behaviour.
+
 func ui_require(condition: bool, message: string) -> void {
     if !condition {
-        print(message)
+        ui_fatal(message)
     }
 }
 
 func ui_require_state(condition: bool, message: string) -> void {
     if !condition {
-        print(message)
+        ui_fatal(message)
     }
 }
 
 func ui_require_handle(handle: i64, context: string) -> void {
     if handle == 0 {
-        print(context)
-        print(" is not initialized or has already been destroyed")
+        ui_fatal(context)
     }
 }
 
 func ui_require_non_empty(value: string, context: string) -> void {
     if value == "" {
-        print(context)
-        print(" must not be empty")
+        ui_fatal(context)
     }
 }
 
 func ui_require_non_negative(value: float, context: string) -> void {
     if value < 0.0 {
-        print(context)
-        print(" must be >= 0")
+        ui_fatal(context)
     }
 }
 
 func ui_require_positive_i64(value: i64, context: string) -> void {
     if value <= 0 {
-        print(context)
-        print(" must be > 0")
+        ui_fatal(context)
     }
 }
 
 func ui_require_non_negative_i64(value: i64, context: string) -> void {
     if value < 0 {
-        print(context)
-        print(" must be >= 0")
+        ui_fatal(context)
     }
 }
 
 func ui_require_range(min_val: float, max_val: float, context: string) -> void {
     if max_val < min_val {
-        print(context)
-        print(" max must be greater than or equal to min")
+        ui_fatal(context)
     }
 }
 
 func ui_require_value_in_range(value: float, min_val: float, max_val: float, context: string) -> void {
     if value < min_val || value > max_val {
-        print(context)
-        print(" must be between min and max")
+        ui_fatal(context)
     }
 }
 
@@ -549,6 +552,33 @@ class Text {
         widget_text_set(this.handle, content)
     }
 
+    // Enable word wrapping. The label wraps to the width it is laid out at;
+    // an explicit "\n" in the content always starts a new line regardless.
+    func set_wrap(wrap: bool) -> void {
+        ui_require_handle(this.handle, "Text")
+        widget_text_set_wrap(this.handle, ui_bool_to_i64(wrap))
+    }
+
+    // Cap the number of rendered lines. 0 = unlimited. No ellipsis (v1).
+    func set_max_lines(max_lines: i64) -> void {
+        ui_require_handle(this.handle, "Text")
+        ui_require_non_negative_i64(max_lines, "Text max_lines")
+        widget_text_set_max_lines(this.handle, max_lines)
+    }
+
+    // Accessibility (v1b): override the auto-derived label (useful when the
+    // rendered text isn't a good spoken label).
+    func set_a11y_label(label: string) -> void {
+        ui_require_handle(this.handle, "Text")
+        widget_set_a11y_label(this.handle, label)
+    }
+
+    // Hide this node from the accessibility tree (decorative text).
+    func set_a11y_hidden(hidden: bool) -> void {
+        ui_require_handle(this.handle, "Text")
+        widget_set_a11y_hidden(this.handle, ui_bool_to_i64(hidden))
+    }
+
     func destroy() -> void {
         if this.handle != 0 {
             sg_node_destroy(this.handle)
@@ -611,6 +641,13 @@ class Button {
         ui_require_non_negative(w, "Button minimum width")
         ui_require_non_negative(h, "Button minimum height")
         sg_node_set_min_size(this.handle, w, h)
+    }
+
+    // Accessibility (v1b): set an explicit spoken label — essential for
+    // icon-only buttons whose visible text is a glyph.
+    func set_a11y_label(label: string) -> void {
+        ui_require_handle(this.handle, "Button")
+        widget_set_a11y_label(this.handle, label)
     }
 
     func destroy() -> void {
@@ -680,6 +717,39 @@ class TextInput {
         ui_require_handle(this.handle, "TextInput")
         ui_require_non_negative(blur, "TextInput shadow blur")
         sg_style_set_shadow(this.handle, ox, oy, blur, color)
+    }
+
+    // Accessibility (v1b): a spoken label for the field (its own text is the
+    // editable value, not a label).
+    func set_a11y_label(label: string) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        widget_set_a11y_label(this.handle, label)
+    }
+
+    // Enable/disable. A disabled input is styled distinctly, stops receiving
+    // events, rejects focus/cursor/typing, and reports SG_STATE_DISABLED
+    // through the accessibility bridge (not-enabled / not-focusable).
+    func set_enabled(e: bool) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        widget_text_input_set_enabled(this.handle, ui_bool_to_i64(e))
+    }
+
+    func is_enabled() -> bool {
+        ui_require_handle(this.handle, "TextInput")
+        return widget_text_input_is_enabled(this.handle) != 0
+    }
+
+    // Mark/clear an error state — distinct border+background from
+    // normal/disabled/focused. Does NOT block input: an errored field stays
+    // editable so the user can fix it.
+    func set_error(has_error: bool) -> void {
+        ui_require_handle(this.handle, "TextInput")
+        widget_text_input_set_error(this.handle, ui_bool_to_i64(has_error))
+    }
+
+    func has_error() -> bool {
+        ui_require_handle(this.handle, "TextInput")
+        return widget_text_input_has_error(this.handle) != 0
     }
 
     func destroy() -> void {

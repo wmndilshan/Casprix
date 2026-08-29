@@ -54,6 +54,9 @@ typedef struct {
     int  version_code;
     char version_name[32];
     int  debuggable;
+    /* 1 => <application android:hasCode="true"> (a classes.dex is packaged,
+     * e.g. the accessibility shim). Default 0 keeps the pure-native app. */
+    int  has_code;
 
     const char* permissions[MANIFEST_MAX_PERMISSIONS];
     int         permission_count;

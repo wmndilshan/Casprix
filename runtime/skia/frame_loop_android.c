@@ -2,6 +2,11 @@
 #include "layout.h"
 #include <stdlib.h>
 
+/* Accessibility bridge (same shared library on Android). Keep the coupling to
+ * one call and don't pull the header — a11y_bridge.c is Android-only. */
+extern void cpx_a11y_set_root(SGNode* root);
+extern void cpx_a11y_install_scene_hook(void);
+
 SGApp* sg_app_create(const char* title, int width, int height) {
     (void)title;
 
@@ -61,6 +66,10 @@ void sg_app_set_root(SGApp* app, SGNode* root) {
     }
     app->needs_layout = 1;
     app->needs_repaint = 1;
+
+    /* Keep the accessibility bridge pointed at the live root. */
+    cpx_a11y_install_scene_hook();
+    cpx_a11y_set_root(root);
 }
 
 void sg_app_set_fps(SGApp* app, int fps) {

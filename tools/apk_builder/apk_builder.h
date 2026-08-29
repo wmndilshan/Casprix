@@ -110,6 +110,14 @@ typedef struct {
     int  debug_build;         /* 1 = debug signing + debuggable manifest */
     int  verbose;             /* Print detailed build steps */
     int  keep_intermediates;  /* Don't delete build/ temp directory */
+
+    /* Accessibility v1a shim: when the Java shim sources exist under
+     * runtime/android/java/, compile them to classes.dex and point the
+     * manifest at com.casprix.app.CasprixNativeActivity (a NativeActivity
+     * subclass) instead of android.app.NativeActivity. Set to -1 for "auto"
+     * (enabled iff the shim sources are present), 0 to force off, 1 to force
+     * on (and fail the build if the shim can't be compiled). */
+    int  accessibility_shim;
     ApkZipVerifyFn zip_verify; /* Optional ZIP verification hook */
     void* zip_verify_user_data;
 } ApkBuildConfig;
@@ -155,6 +163,20 @@ ApkBuildResult apk_build(const ApkBuildConfig* config);
 
 /* Individual pipeline stages (can be called separately for incremental builds) */
 ApkError apk_stage_compile (const ApkBuildConfig* config, const char* build_dir);
+
+/* Compile the accessibility-shim Java classes (runtime/android/java/) into
+ * <build_dir>/classes.dex. Returns APK_OK and does nothing if the shim is
+ * disabled or its sources are absent. Needs javac + d8 + android.jar on the
+ * resolved SDK; returns APK_ERR_SDK_NOT_FOUND if the shim is forced on but the
+ * toolchain is missing. Independent of apk_stage_compile — the two do not
+ * interact. */
+ApkError apk_stage_dex     (const ApkBuildConfig* config, const char* build_dir);
+
+/* True if the shim should be built for this config (auto-detects sources when
+ * accessibility_shim < 0). Also fills java_src_dir if non-NULL. */
+int      apk_accessibility_shim_enabled(const ApkBuildConfig* config,
+                                        char* java_src_dir, size_t java_src_dir_size);
+
 ApkError apk_stage_manifest(const ApkBuildConfig* config, const char* build_dir);
 ApkError apk_stage_resources(const ApkBuildConfig* config, const char* build_dir);
 ApkError apk_stage_package  (const ApkBuildConfig* config, const char* build_dir);

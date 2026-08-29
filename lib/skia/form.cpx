@@ -1,0 +1,262 @@
+// Skia UI — Field / Form validation layer
+//
+// A `Field` bundles a label, a `TextInput`, and a helper/error line, plus a
+// validation rule and a "touched" flag so errors only surface after the user
+// has interacted with the field (standard form UX). A `Form` aggregates a
+// small, fixed number of `Field`s, exposes `is_valid()` across all of them,
+// and `show_all_errors()` to force every field (even untouched ones) to
+// display its error — e.g. from a submit-button handler.
+//
+// --- Why a rule enum rather than a validator callback ---------------------
+// Casperix cannot yet pass a capturing closure, or a bare function name, as a
+// value (see the closure-limitation notes in the compiler test suite). A
+// `Field` therefore selects its validation behaviour with one of the
+// VALIDATE_* codes below plus an integer parameter, and the native
+// `widget_text_validate(rule, param, text)` helper (runtime/skia/widgets.c)
+// runs the check. This covers the common cases (required / length bounds /
+// email / numeric) without needing first-class function values.
+
+import "lib/skia/skia"
+import "lib/skia/ui"
+
+// Validation rules — mirror the WIDGET_VALIDATE_* enum in runtime/skia/widgets.h.
+let VALIDATE_NONE     = 0    // always valid
+let VALIDATE_REQUIRED = 1    // non-empty after trimming spaces
+let VALIDATE_MIN_LEN  = 2    // trimmed length >= param
+let VALIDATE_MAX_LEN  = 3    // trimmed length <= param
+let VALIDATE_EMAIL    = 4    // one interior '@' and a dotted domain
+let VALIDATE_NUMERIC  = 5    // digits only, optional leading '-'
+
+let FORM_ERROR_COLOR = 0xFFEF4444   // SG_COLOR_ERROR
+let FORM_HELPER_COLOR = 0xFF6B7280  // SG_COLOR_TEXT_SECONDARY
+
+// ========================================================================
+// Field
+// ========================================================================
+//
+// Visual stack (a Column):
+//     label      Text
+//     input      TextInput
+//     helper     Text   (helper message by default; error message when invalid
+//                        and the field is showing errors — wraps to multiple
+//                        lines for long messages)
+//
+class Field {
+    handle: i64;            // the Column node — add this to your layout
+    column: Column;
+    label: Text;
+    input: TextInput;
+    helper: Text;
+
+    mut rule: i64;
+    mut rule_param: i64;
+    mut helper_text: string;
+    mut error_text: string;
+    mut touched: bool;
+    mut force_errors: bool;
+
+    func new(label_text: string, placeholder: string, font: i64) -> void {
+        ui_require_handle(font, "Field font")
+
+        this.column = new Column(6.0)
+        this.handle = this.column.handle
+
+        this.label = new Text(label_text, font, 0xFF1F2937)
+        this.input = new TextInput(placeholder, font)
+        this.helper = new Text("", font, FORM_HELPER_COLOR)
+        // A validation message can be long — let it wrap rather than clip.
+        this.helper.set_wrap(true)
+        this.helper.set_max_lines(3)
+
+        this.column.add(this.label.handle)
+        this.column.add(this.input.handle)
+        this.column.add(this.helper.handle)
+
+        this.rule = VALIDATE_NONE
+        this.rule_param = 0
+        this.helper_text = ""
+        this.error_text = "Invalid value"
+        this.touched = false
+        this.force_errors = false
+
+        // The label names the input for assistive tech.
+        this.input.set_a11y_label(label_text)
+    }
+
+    // --- configuration ---------------------------------------------------
+
+    func set_rule(rule: i64, param: i64) -> void {
+        this.rule = rule
+        this.rule_param = param
+        this.refresh()
+    }
+
+    func set_helper_text(text: string) -> void {
+        this.helper_text = text
+        this.refresh()
+    }
+
+    func set_error_text(text: string) -> void {
+        this.error_text = text
+        this.refresh()
+    }
+
+    func set_enabled(e: bool) -> void {
+        this.input.set_enabled(e)
+    }
+
+    // --- values / interaction -----------------------------------------------
+
+    func get_value() -> string {
+        return this.input.get_value()
+    }
+
+    func set_value(text: string) -> void {
+        this.input.set_value(text)
+        this.refresh()
+    }
+
+    // Call when the field loses focus / the user has engaged with it. After
+    // this, a failing rule will surface as an error line + error styling.
+    func mark_touched() -> void {
+        this.touched = true
+        this.refresh()
+    }
+
+    // --- validation -------------------------------------------------------
+
+    // True when the current value satisfies the rule. Independent of whether
+    // the error is currently *shown*.
+    func is_valid() -> bool {
+        return widget_text_validate(this.rule, this.rule_param, this.input.get_value()) != 0
+    }
+
+    // Whether the error should currently be visible to the user.
+    func showing_errors() -> bool {
+        return this.touched || this.force_errors
+    }
+
+    // Force this field to display its error state regardless of touched.
+    func show_error() -> void {
+        this.force_errors = true
+        this.refresh()
+    }
+
+    // Re-apply input styling + helper/error text for the current state.
+    func refresh() -> void {
+        let valid = this.is_valid()
+        let show = this.showing_errors()
+        if valid {
+            this.input.set_error(false)
+            this.helper.set_text(this.helper_text)
+        } else {
+            if show {
+                this.input.set_error(true)
+                this.helper.set_text(this.error_text)
+            } else {
+                this.input.set_error(false)
+                this.helper.set_text(this.helper_text)
+            }
+        }
+    }
+
+    func destroy() -> void {
+        this.helper.destroy()
+        this.input.destroy()
+        this.label.destroy()
+        this.column.destroy()
+        this.handle = 0
+    }
+}
+
+// ========================================================================
+// Form
+// ========================================================================
+//
+// Aggregates up to FORM_MAX_FIELDS Fields (fixed slots — Casperix arrays do
+// not yet propagate an element class type through member access, so a dynamic
+// list of Field objects is not expressible; a fixed slot set is). `is_valid()`
+// ANDs every field; `show_all_errors()` marks every field touched so a submit
+// handler can reveal all outstanding errors at once.
+//
+let FORM_MAX_FIELDS = 8
+
+class Form {
+    handle: i64;
+    column: Column;
+
+    mut count: i64;
+    mut f0: Field;
+    mut f1: Field;
+    mut f2: Field;
+    mut f3: Field;
+    mut f4: Field;
+    mut f5: Field;
+    mut f6: Field;
+    mut f7: Field;
+
+    func new(spacing: float) -> void {
+        this.column = new Column(spacing)
+        this.handle = this.column.handle
+        this.count = 0
+    }
+
+    // Add a field. Its column is appended to the form's layout. Fields beyond
+    // FORM_MAX_FIELDS are rejected with a hard stop (matches ui_require_*).
+    func add(field: Field) -> void {
+        ui_require(this.count < FORM_MAX_FIELDS, "Form: too many fields (max 8)")
+        if this.count == 0 { this.f0 = field }
+        if this.count == 1 { this.f1 = field }
+        if this.count == 2 { this.f2 = field }
+        if this.count == 3 { this.f3 = field }
+        if this.count == 4 { this.f4 = field }
+        if this.count == 5 { this.f5 = field }
+        if this.count == 6 { this.f6 = field }
+        if this.count == 7 { this.f7 = field }
+        this.count = this.count + 1
+        this.column.add(field.handle)
+    }
+
+    // True only when every field currently satisfies its rule.
+    func is_valid() -> bool {
+        mut ok: bool = true
+        if this.count > 0 { if this.f0.is_valid() == false { ok = false } }
+        if this.count > 1 { if this.f1.is_valid() == false { ok = false } }
+        if this.count > 2 { if this.f2.is_valid() == false { ok = false } }
+        if this.count > 3 { if this.f3.is_valid() == false { ok = false } }
+        if this.count > 4 { if this.f4.is_valid() == false { ok = false } }
+        if this.count > 5 { if this.f5.is_valid() == false { ok = false } }
+        if this.count > 6 { if this.f6.is_valid() == false { ok = false } }
+        if this.count > 7 { if this.f7.is_valid() == false { ok = false } }
+        return ok
+    }
+
+    // Reveal every field's error, including untouched ones. Call from a
+    // submit-button handler.
+    func show_all_errors() -> void {
+        if this.count > 0 { this.f0.show_error() }
+        if this.count > 1 { this.f1.show_error() }
+        if this.count > 2 { this.f2.show_error() }
+        if this.count > 3 { this.f3.show_error() }
+        if this.count > 4 { this.f4.show_error() }
+        if this.count > 5 { this.f5.show_error() }
+        if this.count > 6 { this.f6.show_error() }
+        if this.count > 7 { this.f7.show_error() }
+    }
+
+    // Convenience: reveal all errors, then report whether the form may submit.
+    func submit() -> bool {
+        this.show_all_errors()
+        return this.is_valid()
+    }
+
+    func field_count() -> i64 {
+        return this.count
+    }
+
+    func destroy() -> void {
+        this.column.destroy()
+        this.handle = 0
+        this.count = 0
+    }
+}

@@ -7,6 +7,7 @@
 #include "scene_graph.h"
 #include "widgets.h"
 #include "style.h"
+#include "text.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -269,6 +270,11 @@ void sg_node_destroy_single(SGNode* node) {
         skia_shader_destroy(node->style.gradient);
     }
 
+    if (node->a11y_label) {
+        free(node->a11y_label);
+        node->a11y_label = NULL;
+    }
+
     if (!node->scene_owner) {
         free(node);
     }
@@ -315,8 +321,34 @@ static void sg_node_release(SGNode* node) {
  * Tree Operations
  * ======================================================================== */
 
-void sg_node_add_child(SGNode* parent, SGNode* child) {
-    if (!parent || !child) return;
+/* Upper bound on the depth we will walk when checking ancestry. A well-formed
+ * UI tree is nowhere near this deep; hitting it means the parent chain is
+ * already corrupt, so we conservatively treat that as "would cycle". */
+#define SG_MAX_TREE_DEPTH 4096
+
+int sg_node_is_ancestor(const SGNode* maybe_ancestor, const SGNode* node) {
+    if (!maybe_ancestor || !node) return 0;
+    const SGNode* p = node;
+    int guard = 0;
+    while (p) {
+        if (p == maybe_ancestor) return 1;
+        if (++guard > SG_MAX_TREE_DEPTH) return 1; /* corrupt chain — refuse */
+        p = p->parent;
+    }
+    return 0;
+}
+
+/* Reject an attach that would make 'child' an ancestor of itself (directly or
+ * transitively). Returns 1 if the attach is safe, 0 if it must be rejected. */
+static int sg_attach_is_safe(SGNode* parent, SGNode* child) {
+    if (!parent || !child) return 0;
+    if (parent == child) return 0;
+    if (sg_node_is_ancestor(child, parent)) return 0;
+    return 1;
+}
+
+int sg_node_add_child(SGNode* parent, SGNode* child) {
+    if (!sg_attach_is_safe(parent, child)) return -1;
     if (child->parent) sg_node_remove_from_parent(child);
 
     sg_node_retain(child);
@@ -334,13 +366,14 @@ void sg_node_add_child(SGNode* parent, SGNode* child) {
     parent->child_count++;
 
     sg_node_mark_layout_dirty(parent);
+    sg_a11y_notify_structural_change();
+    return 0;
 }
 
-void sg_node_insert_before(SGNode* parent, SGNode* child, SGNode* before) {
-    if (!parent || !child) return;
+int sg_node_insert_before(SGNode* parent, SGNode* child, SGNode* before) {
+    if (!sg_attach_is_safe(parent, child)) return -1;
     if (!before) {
-        sg_node_add_child(parent, child);
-        return;
+        return sg_node_add_child(parent, child);
     }
 
     if (child->parent) sg_node_remove_from_parent(child);
@@ -360,14 +393,15 @@ void sg_node_insert_before(SGNode* parent, SGNode* child, SGNode* before) {
     parent->child_count++;
 
     sg_node_mark_layout_dirty(parent);
+    sg_a11y_notify_structural_change();
+    return 0;
 }
 
-void sg_node_insert_after(SGNode* parent, SGNode* child, SGNode* after) {
-    if (!parent || !child) return;
+int sg_node_insert_after(SGNode* parent, SGNode* child, SGNode* after) {
+    if (!sg_attach_is_safe(parent, child)) return -1;
     if (!after) {
         /* Insert at beginning */
-        sg_node_insert_before(parent, child, parent->first_child);
-        return;
+        return sg_node_insert_before(parent, child, parent->first_child);
     }
 
     if (child->parent) sg_node_remove_from_parent(child);
@@ -387,6 +421,8 @@ void sg_node_insert_after(SGNode* parent, SGNode* child, SGNode* after) {
     parent->child_count++;
 
     sg_node_mark_layout_dirty(parent);
+    sg_a11y_notify_structural_change();
+    return 0;
 }
 
 void sg_node_remove_child(SGNode* parent, SGNode* child) {
@@ -412,6 +448,7 @@ void sg_node_remove_child(SGNode* parent, SGNode* child) {
     sg_node_release(child);
 
     sg_node_mark_layout_dirty(parent);
+    sg_a11y_notify_structural_change();
 }
 
 void sg_node_remove_from_parent(SGNode* node) {
@@ -796,30 +833,88 @@ static void sg_render_content(SkiaCanvas canvas, SGNode* node) {
             if (!node->data.text.text || !node->data.text.font) break;
             skia_paint_set_color(g_text_paint, node->data.text.color);
 
-            float text_w = skia_font_measure_text(node->data.text.font, node->data.text.text);
-            float font_h = skia_font_get_height(node->data.text.font);
-            float ascent = -skia_font_get_ascent(node->data.text.font);
+            int has_nl = (strchr(node->data.text.text, '\n') != NULL);
 
-            /* Calculate text position based on alignment */
-            float tx = b.x + node->style.padding[3];
-            float ty = b.y + node->style.padding[0] + ascent;
+            /* Fast path — single line, no wrap, no hard breaks. Byte-for-byte
+             * identical to the pre-wrap behaviour. */
+            if (!node->data.text.wrap && !has_nl) {
+                float text_w = skia_font_measure_text(node->data.text.font, node->data.text.text);
+                float font_h = skia_font_get_height(node->data.text.font);
+                float ascent = -skia_font_get_ascent(node->data.text.font);
 
-            float avail_w = b.w - node->style.padding[1] - node->style.padding[3];
-            switch (node->data.text.align) {
-                case SG_TEXT_ALIGN_CENTER:
-                    tx = b.x + (b.w - text_w) * 0.5f;
-                    break;
-                case SG_TEXT_ALIGN_RIGHT:
-                    tx = b.x + b.w - text_w - node->style.padding[1];
-                    break;
-                default:
-                    break;
+                float tx = b.x + node->style.padding[3];
+                float ty = b.y + node->style.padding[0] + ascent;
+
+                float avail_w = b.w - node->style.padding[1] - node->style.padding[3];
+                switch (node->data.text.align) {
+                    case SG_TEXT_ALIGN_CENTER:
+                        tx = b.x + (b.w - text_w) * 0.5f;
+                        break;
+                    case SG_TEXT_ALIGN_RIGHT:
+                        tx = b.x + b.w - text_w - node->style.padding[1];
+                        break;
+                    default:
+                        break;
+                }
+                (void)avail_w;
+                (void)font_h;
+
+                skia_canvas_draw_text(canvas, node->data.text.text,
+                                       tx, ty, node->data.text.font, g_text_paint);
+                break;
             }
-            (void)avail_w;
-            (void)font_h;
 
-            skia_canvas_draw_text(canvas, node->data.text.text,
-                                   tx, ty, node->data.text.font, g_text_paint);
+            /* Multi-line path — hard '\n' always splits; word-wrap only when
+             * wrap is enabled and there is a bounded width to wrap against. */
+            {
+                float pad_l = node->style.padding[3];
+                float pad_r = node->style.padding[1];
+                float pad_t = node->style.padding[0];
+                float wrap_w = 0.0f;
+                if (node->data.text.wrap) {
+                    wrap_w = b.w - pad_l - pad_r;
+                    if (wrap_w < 1.0f) wrap_w = 1.0f;
+                }
+
+                TextLayout layout;
+                text_layout_compute(&layout, node->data.text.text,
+                                    node->data.text.font, wrap_w);
+
+                int max_lines = layout.line_count;
+                if (node->data.text.max_lines > 0 &&
+                    max_lines > node->data.text.max_lines) {
+                    max_lines = node->data.text.max_lines;
+                }
+
+                float ascent = -skia_font_get_ascent(node->data.text.font);
+                float cy = b.y + pad_t + ascent;
+                char line_buf[4096];
+
+                for (int i = 0; i < max_lines; i++) {
+                    int start = layout.line_starts[i];
+                    int len = layout.line_lengths[i];
+                    if (len > 0) {
+                        if (len >= (int)sizeof(line_buf)) len = (int)sizeof(line_buf) - 1;
+                        memcpy(line_buf, node->data.text.text + start, (size_t)len);
+                        line_buf[len] = '\0';
+
+                        float tx = b.x + pad_l;
+                        switch (node->data.text.align) {
+                            case SG_TEXT_ALIGN_CENTER:
+                                tx = b.x + (b.w - layout.line_widths[i]) * 0.5f;
+                                break;
+                            case SG_TEXT_ALIGN_RIGHT:
+                                tx = b.x + b.w - layout.line_widths[i] - pad_r;
+                                break;
+                            default:
+                                break;
+                        }
+                        skia_canvas_draw_text(canvas, line_buf, tx, cy,
+                                              node->data.text.font, g_text_paint);
+                    }
+                    cy += layout.line_height;
+                }
+            }
             break;
         }
 
@@ -1170,13 +1265,119 @@ void sg_node_off(SGNode* node, int event_type) {
     }
 }
 
+/* Bound on nested event dispatch. A handler is free to emit further events
+ * (e.g. a button click that opens a dialog); it is NOT allowed to recurse
+ * unboundedly. Past this depth we stop dispatching rather than blow the
+ * C stack. */
+#define SG_MAX_EMIT_DEPTH 64
+static int g_sg_emit_depth = 0;
+
 void sg_node_emit(SGNode* node, int event_type, void* event_data) {
     if (!node) return;
+
+    if (g_sg_emit_depth >= SG_MAX_EMIT_DEPTH) {
+        fprintf(stderr,
+                "[scene_graph] event dispatch depth limit (%d) reached; "
+                "dropping event %d on node %u (runaway re-entrant handler?)\n",
+                SG_MAX_EMIT_DEPTH, event_type, node->id);
+        return;
+    }
+
     for (int i = 0; i < node->handler_count; i++) {
-        if (node->handlers[i].event_type == event_type) {
-            node->handlers[i].handler(node, event_type, event_data,
-                                       node->handlers[i].user_data);
+        if (node->handlers[i].event_type != event_type) continue;
+
+        SGEventHandler fn = node->handlers[i].handler;
+        void* ud = node->handlers[i].user_data;
+
+        /* Error boundary (what C can actually check):
+         *   - a NULL / cleared handler slot is skipped, not called;
+         *   - re-entrant dispatch is depth-bounded above.
+         * What C CANNOT catch here without signal handlers: a genuine trap
+         * (bad-pointer deref, unhandled Casprix `throw`) inside compiled
+         * callback code. That still terminates the process by design — a
+         * SIGSEGV boundary would mask real bugs, and this codebase has no
+         * such infrastructure (ARC/ownership violations also abort()). */
+        if (!fn) {
+            fprintf(stderr,
+                    "[scene_graph] null handler for event %d on node %u; "
+                    "ignoring\n", event_type, node->id);
             return;
         }
+
+        g_sg_emit_depth++;
+        fn(node, event_type, event_data, ud);
+        g_sg_emit_depth--;
+        return;
     }
+}
+
+/* ========================================================================
+ * Accessibility (v1b)
+ * ======================================================================== */
+
+static SGA11yStructuralChangeFn g_a11y_change_cb = NULL;
+static void*                    g_a11y_change_ud = NULL;
+
+/* Coalesce: only the FIRST notification since the last time the consumer was
+ * called actually invokes the callback. The Java side already debounces
+ * content-changed events, and the a11y bridge re-reads the whole tree on the
+ * next query, so one edge per burst is enough and avoids event spam. */
+static int g_a11y_change_pending = 0;
+
+void sg_a11y_set_structural_change_cb(SGA11yStructuralChangeFn cb, void* user_data) {
+    g_a11y_change_cb = cb;
+    g_a11y_change_ud = user_data;
+    g_a11y_change_pending = 0;
+}
+
+void sg_a11y_notify_structural_change(void) {
+    if (!g_a11y_change_cb) return;
+    if (g_a11y_change_pending) return;   /* already signalled this burst */
+    g_a11y_change_pending = 1;
+    g_a11y_change_cb(g_a11y_change_ud);
+    /* The callback (JNI up-call) has consumed the edge; re-arm for the next. */
+    g_a11y_change_pending = 0;
+}
+
+void sg_node_set_a11y_label(SGNode* node, const char* label) {
+    if (!node) return;
+    if (node->a11y_label) {
+        free(node->a11y_label);
+        node->a11y_label = NULL;
+    }
+    if (label) {
+        size_t n = strlen(label) + 1;
+        node->a11y_label = (char*)malloc(n);
+        if (node->a11y_label) memcpy(node->a11y_label, label, n);
+    }
+    sg_a11y_notify_structural_change();
+}
+
+const char* sg_node_get_a11y_label(const SGNode* node) {
+    return node ? node->a11y_label : NULL;
+}
+
+void sg_node_set_a11y_role(SGNode* node, SGA11yRole role) {
+    if (!node) return;
+    if (node->a11y_role != role) {
+        node->a11y_role = role;
+        sg_a11y_notify_structural_change();
+    }
+}
+
+SGA11yRole sg_node_get_a11y_role(const SGNode* node) {
+    return node ? node->a11y_role : SG_A11Y_ROLE_NONE;
+}
+
+void sg_node_set_a11y_hidden(SGNode* node, int hidden) {
+    if (!node) return;
+    hidden = hidden ? 1 : 0;
+    if (node->a11y_hidden != hidden) {
+        node->a11y_hidden = hidden;
+        sg_a11y_notify_structural_change();
+    }
+}
+
+int sg_node_get_a11y_hidden(const SGNode* node) {
+    return node ? node->a11y_hidden : 0;
 }

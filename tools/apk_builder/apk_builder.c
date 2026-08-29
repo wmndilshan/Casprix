@@ -486,9 +486,99 @@ static int resolve_android_jar(const ApkBuildConfig* cfg, char* output, size_t o
         return file_exists(output) ? 0 : -1;
     }
 #else
-    (void)output;
-    (void)output_size;
+    {
+        /* POSIX: scan the SDK "platforms" dir for android-NN entries and take
+         * the android.jar with the highest API level. */
+        char platforms_base[1024];
+        DIR* d;
+        struct dirent* ent;
+        int best_api = -1;
+        char best_path[1024];
+
+        best_path[0] = '\0';
+        snprintf(platforms_base, sizeof(platforms_base), "%s/platforms",
+                 cfg->android_sdk);
+        d = opendir(platforms_base);
+        if (!d) return -1;
+        while ((ent = readdir(d)) != NULL) {
+            int api = 0;
+            char candidate[1152];
+            if (strncmp(ent->d_name, "android-", 8) != 0) continue;
+            api = atoi(ent->d_name + 8);
+            if (api <= best_api) continue;
+            snprintf(candidate, sizeof(candidate), "%s/%s/android.jar",
+                     platforms_base, ent->d_name);
+            if (file_exists(candidate)) {
+                best_api = api;
+                snprintf(best_path, sizeof(best_path), "%s", candidate);
+            }
+        }
+        closedir(d);
+        if (best_path[0]) {
+            snprintf(output, output_size, "%s", best_path);
+            return 0;
+        }
+        return -1;
+    }
+#endif
+}
+
+#ifndef _WIN32
+/* POSIX: locate a build-tools binary (no ".exe"/".bat" suffix), preferring the
+ * highest build-tools version. tool_name is passed as given by callers, which
+ * on Windows carries a suffix — strip it here. */
+static int resolve_posix_build_tool(const ApkBuildConfig* cfg,
+                                    const char* tool_name_maybe_suffixed,
+                                    char* output, size_t output_size) {
+    char bt_base[1024];
+    char tool[128];
+    const char* dot;
+    DIR* d;
+    struct dirent* ent;
+    int best_major = -1;
+    char best[1024];
+
+    if (!cfg->android_sdk[0] || !tool_name_maybe_suffixed) return -1;
+
+    snprintf(tool, sizeof(tool), "%s", tool_name_maybe_suffixed);
+    dot = strrchr(tool, '.');
+    if (dot && (strcmp(dot, ".exe") == 0 || strcmp(dot, ".bat") == 0)) {
+        tool[dot - tool] = '\0';
+    }
+
+    best[0] = '\0';
+    snprintf(bt_base, sizeof(bt_base), "%s/build-tools", cfg->android_sdk);
+    d = opendir(bt_base);
+    if (!d) return -1;
+    while ((ent = readdir(d)) != NULL) {
+        int major;
+        char candidate[1152];
+        if (ent->d_name[0] == '.') continue;
+        major = atoi(ent->d_name);            /* "36.0.0" -> 36 */
+        if (major < best_major) continue;
+        snprintf(candidate, sizeof(candidate), "%s/%s/%s",
+                 bt_base, ent->d_name, tool);
+        if (file_exists(candidate)) {
+            best_major = major;
+            snprintf(best, sizeof(best), "%s", candidate);
+        }
+    }
+    closedir(d);
+    if (best[0]) {
+        snprintf(output, output_size, "%s", best);
+        return 0;
+    }
     return -1;
+}
+#endif
+
+/* Cross-platform build-tool resolution used by the dex stage. */
+static int resolve_build_tool(const ApkBuildConfig* cfg, const char* tool_name,
+                              char* output, size_t output_size) {
+#ifdef _WIN32
+    return resolve_latest_sdk_build_tool(cfg, tool_name, output, output_size);
+#else
+    return resolve_posix_build_tool(cfg, tool_name, output, output_size);
 #endif
 }
 
@@ -623,6 +713,7 @@ void apk_config_init(ApkBuildConfig* cfg) {
     cfg->abi_count    = 1;
     cfg->debug_build  = 1;
     cfg->verbose      = 1;
+    cfg->accessibility_shim = -1;   /* auto: on iff shim sources present */
     cfg->zip_verify   = apk_default_zip_verify;
     cfg->zip_verify_user_data = NULL;
 }
@@ -791,6 +882,80 @@ ApkError apk_stage_compile(const ApkBuildConfig* cfg, const char* build_dir) {
 }
 
 /* ========================================================================
+ * Stage 1.5: Accessibility v1a shim -> classes.dex
+ *
+ * Compiles runtime/android/java/**.java (the AccessibilityNodeProvider shim)
+ * with javac against android.jar, then d8 -> classes.dex. Self-contained:
+ * needs only javac + d8 + android.jar. Does NOT touch apk_stage_compile or the
+ * native .so; if the shim is disabled or absent, this is a no-op.
+ * ======================================================================== */
+
+ApkError apk_stage_dex(const ApkBuildConfig* cfg, const char* build_dir) {
+    char java_dir[1024];
+    char android_jar[1024];
+    char d8_path[1024];
+    char classes_out[1024];
+    char dex_out[1024];
+    char cmd[8192];
+    int forced_on;
+
+    if (!cfg || !build_dir) return APK_ERR_INVALID_CONFIG;
+
+    forced_on = (cfg->accessibility_shim > 0);
+
+    if (!apk_accessibility_shim_enabled(cfg, java_dir, sizeof(java_dir))) {
+        return APK_OK; /* shim disabled or no sources — nothing to do */
+    }
+
+    if (resolve_android_jar(cfg, android_jar, sizeof(android_jar)) != 0) {
+        fprintf(stderr, "[apk-builder] accessibility shim: android.jar not found "
+                        "(set --sdk / ANDROID_HOME)\n");
+        return forced_on ? APK_ERR_SDK_NOT_FOUND : APK_OK;
+    }
+    if (resolve_build_tool(cfg, "d8", d8_path, sizeof(d8_path)) != 0) {
+        fprintf(stderr, "[apk-builder] accessibility shim: d8 not found in "
+                        "SDK build-tools\n");
+        return forced_on ? APK_ERR_SDK_NOT_FOUND : APK_OK;
+    }
+
+    snprintf(classes_out, sizeof(classes_out), "%s/a11y-classes", build_dir);
+    snprintf(dex_out, sizeof(dex_out), "%s/classes.dex", build_dir);
+    mkdir_p(classes_out);
+
+    /* javac: compile every .java under the shim dir. */
+    snprintf(cmd, sizeof(cmd),
+             "javac -source 8 -target 8 -nowarn -cp \"%s\" -d \"%s\" "
+             "\"%s\"/com/casprix/app/*.java > \"%s/javac.log\" 2>&1",
+             android_jar, classes_out, java_dir, build_dir);
+    if (run_cmd(cfg, cmd) != 0) {
+        fprintf(stderr, "[apk-builder] accessibility shim: javac failed "
+                        "(see %s/javac.log)\n", build_dir);
+        return APK_ERR_COMPILE_FAILED;
+    }
+
+    /* d8: .class -> classes.dex, targeting the app's min SDK. */
+    snprintf(cmd, sizeof(cmd),
+             "\"%s\" --min-api %d --lib \"%s\" --output \"%s\" "
+             "\"%s\"/com/casprix/app/*.class > \"%s/d8.log\" 2>&1",
+             d8_path, cfg->min_sdk ? cfg->min_sdk : 24, android_jar,
+             build_dir, classes_out, build_dir);
+    if (run_cmd(cfg, cmd) != 0) {
+        fprintf(stderr, "[apk-builder] accessibility shim: d8 failed "
+                        "(see %s/d8.log)\n", build_dir);
+        return APK_ERR_COMPILE_FAILED;
+    }
+
+    if (!file_exists(dex_out)) {
+        fprintf(stderr, "[apk-builder] accessibility shim: classes.dex missing "
+                        "after d8\n");
+        return APK_ERR_COMPILE_FAILED;
+    }
+
+    printf("[apk-builder]   Accessibility shim -> %s\n", dex_out);
+    return APK_OK;
+}
+
+/* ========================================================================
  * Stage 2: Generate AndroidManifest.xml
  * ======================================================================== */
 
@@ -912,6 +1077,18 @@ ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
             if (run_cmd(cfg, cmd) == 0) {
                 const char* act = cfg->main_activity[0] ? cfg->main_activity : "MainActivity";
                 int abi_count = cfg->abi_count > 0 ? cfg->abi_count : 1;
+                {
+                    char dex_probe[1024];
+                    FILE* dex_test;
+                    snprintf(dex_probe, sizeof(dex_probe), "%s/classes.dex", build_dir);
+                    dex_test = fopen(dex_probe, "rb");
+                    if (dex_test) {
+                        fclose(dex_test);
+                        if (jar_update_path(cfg, unsigned_apk, build_dir, "classes.dex") != 0) {
+                            return APK_ERR_ZIP_FAILED;
+                        }
+                    }
+                }
                 for (int i = 0; i < abi_count; i++) {
                     int abi_idx = (int)cfg->abis[i];
                     char so_rel_path[1024];
@@ -944,6 +1121,19 @@ ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
                  "\"%s\" package -f -M \"%s\" -S \"%s\" -I \"%s\" -F \"%s\"",
                  aapt_path, manifest_path, res_dir, android_jar, unsigned_apk);
         if (run_cmd(cfg, cmd) != 0) return APK_ERR_ZIP_FAILED;
+
+        {
+            char dex_probe[1024];
+            FILE* dex_test;
+            snprintf(dex_probe, sizeof(dex_probe), "%s/classes.dex", build_dir);
+            dex_test = fopen(dex_probe, "rb");
+            if (dex_test) {
+                fclose(dex_test);
+                if (jar_update_path(cfg, unsigned_apk, build_dir, "classes.dex") != 0) {
+                    return APK_ERR_ZIP_FAILED;
+                }
+            }
+        }
 
         {
             const char* act = cfg->main_activity[0] ? cfg->main_activity : "MainActivity";
@@ -980,6 +1170,22 @@ ApkError apk_stage_package(const ApkBuildConfig* cfg, const char* build_dir) {
         if (zip_writer_add_file(zw, "AndroidManifest.xml", manifest_path, 1) != 0) {
             zip_writer_close(zw);
             return APK_ERR_ZIP_FAILED;
+        }
+
+        /* Accessibility v1a shim: package classes.dex if apk_stage_dex built
+         * one. Stored (method 0) at the archive root, as Android expects. */
+        {
+            char dex_path[1024];
+            FILE* dex_test;
+            snprintf(dex_path, sizeof(dex_path), "%s/classes.dex", build_dir);
+            dex_test = fopen(dex_path, "rb");
+            if (dex_test) {
+                fclose(dex_test);
+                if (zip_writer_add_file(zw, "classes.dex", dex_path, 0) != 0) {
+                    zip_writer_close(zw);
+                    return APK_ERR_ZIP_FAILED;
+                }
+            }
         }
 
         {
@@ -1219,6 +1425,12 @@ ApkBuildResult apk_build(const ApkBuildConfig* config) {
     apk_result_begin_stage(&result, APK_STAGE_COMPILE, build_dir);
     log_step(&cfg, "Stage 1/6 ??? Compile .cpx ??? native .so");
     err = apk_stage_compile(&cfg, build_dir);
+    if (err != APK_OK) goto fail;
+
+    /* Stage 1.5: Accessibility v1a shim -> classes.dex (no-op if disabled). */
+    apk_result_begin_stage(&result, APK_STAGE_COMPILE, build_dir);
+    log_step(&cfg, "Stage 1.5 ??? Accessibility shim -> classes.dex");
+    err = apk_stage_dex(&cfg, build_dir);
     if (err != APK_OK) goto fail;
 
     /* Stage 2: Manifest */

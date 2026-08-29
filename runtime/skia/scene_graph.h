@@ -36,6 +36,21 @@ typedef enum {
 } SGNodeType;
 
 /* ========================================================================
+ * Accessibility role — drives the Android class name / TalkBack behaviour
+ * reported by the a11y bridge (runtime/android/a11y_bridge.c). Set on a node
+ * with sg_node_set_a11y_role(); widget constructors set it automatically.
+ * ======================================================================== */
+typedef enum {
+    SG_A11Y_ROLE_NONE = 0,  /* not surfaced as an actionable/readable node */
+    SG_A11Y_ROLE_TEXT,      /* android.widget.TextView */
+    SG_A11Y_ROLE_HEADER,    /* android.widget.TextView + heading flag */
+    SG_A11Y_ROLE_BUTTON,    /* android.widget.Button */
+    SG_A11Y_ROLE_EDIT_TEXT, /* android.widget.EditText */
+    SG_A11Y_ROLE_IMAGE,     /* android.widget.ImageView */
+    SG_A11Y_ROLE_CHECKBOX,  /* android.widget.CheckBox */
+} SGA11yRole;
+
+/* ========================================================================
  * Geometry Types
  * ======================================================================== */
 
@@ -230,6 +245,8 @@ struct SGNode {
             SkiaFont font;
             uint32_t color;
             int align;            /* SG_TEXT_ALIGN_* */
+            int wrap;             /* 0 = single line (default), 1 = word-wrap to bounded width */
+            int max_lines;        /* 0 = unlimited (default); >0 truncates to N lines (no ellipsis in v1) */
         } text;
 
         struct {
@@ -278,6 +295,14 @@ struct SGNode {
     void* user_data;
     SGNodeCleanupFn cleanup;
 
+    /* Accessibility (v1b). All additive; zero-initialised, so a node with no
+     * a11y intent behaves exactly as before. */
+    char*      a11y_label;    /* explicit content-description; NULL -> derive
+                                from a child SG_NODE_TEXT */
+    SGA11yRole a11y_role;     /* SG_A11Y_ROLE_* (default NONE) */
+    int        a11y_hidden;   /* 1 -> node (but not its children) is excluded
+                                from the a11y tree; decorative-only nodes */
+
     /* Optional modern lifecycle hooks (kept additive for compatibility). */
     const SGWidgetVTable* lifecycle;
     uint32_t              state_flags;
@@ -309,11 +334,22 @@ void    sg_node_set_cleanup(SGNode* node, SGNodeCleanupFn cleanup);
  * Tree Operations
  * ======================================================================== */
 
-void    sg_node_add_child(SGNode* parent, SGNode* child);
-void    sg_node_insert_before(SGNode* parent, SGNode* child, SGNode* before);
-void    sg_node_insert_after(SGNode* parent, SGNode* child, SGNode* after);
+/* Attach 'child' as the last child of 'parent'.
+ * Returns 0 on success, -1 if the attachment was rejected because it would
+ * create a cycle (child is 'parent' itself or an ancestor of 'parent') or the
+ * arguments are NULL. Existing callers that ignore the return value are
+ * unaffected. */
+int     sg_node_add_child(SGNode* parent, SGNode* child);
+
+/* Same rejection contract as sg_node_add_child (return 0 / -1). */
+int     sg_node_insert_before(SGNode* parent, SGNode* child, SGNode* before);
+int     sg_node_insert_after(SGNode* parent, SGNode* child, SGNode* after);
 void    sg_node_remove_child(SGNode* parent, SGNode* child);
 void    sg_node_remove_from_parent(SGNode* node);
+
+/* True if 'maybe_ancestor' is 'node' or lies on 'node's parent chain. Used by
+ * the tree-op cycle guard; also useful for callers doing their own checks. */
+int     sg_node_is_ancestor(const SGNode* maybe_ancestor, const SGNode* node);
 
 /* Child iteration */
 SGNode* sg_node_first_child(SGNode* node);
@@ -413,6 +449,33 @@ int sg_point_in_node(SGNode* node, float x, float y);
 void sg_node_on(SGNode* node, int event_type, SGEventHandler handler, void* user_data);
 void sg_node_off(SGNode* node, int event_type);
 void sg_node_emit(SGNode* node, int event_type, void* event_data);
+
+/* ========================================================================
+ * Accessibility (v1b) — node annotations + structural-change notification
+ * ======================================================================== */
+
+/* Explicit accessibility label. Copied; pass NULL to clear (falls back to a
+ * child text node). Fires a structural-change notification. */
+void       sg_node_set_a11y_label(SGNode* node, const char* label);
+const char* sg_node_get_a11y_label(const SGNode* node);
+
+void       sg_node_set_a11y_role(SGNode* node, SGA11yRole role);
+SGA11yRole sg_node_get_a11y_role(const SGNode* node);
+
+/* Hide just this node (children still surface). Fires a structural-change
+ * notification. */
+void       sg_node_set_a11y_hidden(SGNode* node, int hidden);
+int        sg_node_get_a11y_hidden(const SGNode* node);
+
+/* Structural-change hook. The a11y bridge registers a callback here; it is
+ * invoked (at most once per coalescing window — see the .c) when the tree
+ * shape or a label changes, NOT on paint/layout dirty. Passing NULL clears. */
+typedef void (*SGA11yStructuralChangeFn)(void* user_data);
+void sg_a11y_set_structural_change_cb(SGA11yStructuralChangeFn cb, void* user_data);
+
+/* Manually signal a structural change (e.g. after a batch of edits). Safe to
+ * call with no callback registered. */
+void sg_a11y_notify_structural_change(void);
 
 /* ========================================================================
  * Layout Constraints (used by layout.h)

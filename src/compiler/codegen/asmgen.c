@@ -2931,6 +2931,7 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     emit_asm(gen, "extern obj_alloc\n");
     emit_asm(gen, "extern strcat\n");
     emit_asm(gen, "extern strlen\n");
+    emit_asm(gen, "extern nuwan_string_concat\n");
     emit_asm(gen, "; ARC memory management\n");
     emit_asm(gen, "extern arc_alloc_full\n");
     emit_asm(gen, "extern arc_retain\n");

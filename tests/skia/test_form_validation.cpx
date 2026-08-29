@@ -1,0 +1,94 @@
+// Field / Form validation layer — compile + logic smoke test.
+//
+// Builds a 3-field sign-up form (name required, email must be an address,
+// age numeric & >= 2 chars), then exercises touched-tracking, per-field
+// is_valid(), Form.is_valid() aggregation, and show-all-errors-on-submit.
+//
+// Verified with `casprix --check-only`. The assertions below also run under a
+// native execution path if one is available.
+
+import "lib/skia/skia"
+import "lib/skia/ui"
+import "lib/skia/form"
+
+func expect(cond: bool, label: string) -> void {
+    if cond {
+        print("  PASS  " + label)
+    } else {
+        print("  FAIL  " + label)
+    }
+}
+
+func main() -> i64 {
+    let app = new App("Form test", 480, 640)
+    let font = app.get_font()
+
+    let name = new Field("Name", "Your name", font)
+    name.set_rule(VALIDATE_REQUIRED, 0)
+    name.set_helper_text("As it should appear on your badge")
+    name.set_error_text("Name is required")
+
+    let email = new Field("Email", "you@example.com", font)
+    email.set_rule(VALIDATE_EMAIL, 0)
+    email.set_error_text("Enter a valid email address, e.g. you@example.com")
+
+    let age = new Field("Age", "", font)
+    age.set_rule(VALIDATE_MIN_LEN, 2)
+    age.set_error_text("Please enter your age")
+
+    let form = new Form(16.0)
+    form.add(name)
+    form.add(email)
+    form.add(age)
+
+    app.set_root(form.handle)
+
+    print("== field count ==")
+    expect(form.field_count() == 3, "form aggregates 3 fields")
+
+    print("== empty form: invalid, but no errors shown yet ==")
+    expect(form.is_valid() == false, "empty form is not valid")
+    expect(name.is_valid() == false, "empty required name is invalid")
+    expect(name.showing_errors() == false, "untouched name is not showing its error")
+
+    print("== touch a field -> its error surfaces, others stay quiet ==")
+    name.mark_touched()
+    expect(name.showing_errors() == true, "touched name is now showing its error")
+    expect(email.showing_errors() == false, "untouched email still quiet")
+
+    print("== fill fields -> they validate ==")
+    name.set_value("Ada Lovelace")
+    expect(name.is_valid() == true, "non-empty name passes REQUIRED")
+    expect(name.showing_errors() == true, "name stays touched after being filled")
+
+    email.set_value("ada@example.com")
+    expect(email.is_valid() == true, "well-formed address passes EMAIL")
+    email.set_value("not-an-email")
+    expect(email.is_valid() == false, "string without '@' fails EMAIL")
+    email.set_value("ada@example.com")
+
+    age.set_value("7")
+    expect(age.is_valid() == false, "1-char age fails MIN_LEN 2")
+    age.set_value("41")
+    expect(age.is_valid() == true, "2-char age passes MIN_LEN 2")
+
+    print("== all valid -> form is valid ==")
+    expect(form.is_valid() == true, "form with all fields valid reports valid")
+
+    print("== submit reveals errors for untouched-but-invalid fields ==")
+    let form2 = new Form(16.0)
+    let a = new Field("A", "", font)
+    a.set_rule(VALIDATE_REQUIRED, 0)
+    let b = new Field("B", "", font)
+    b.set_rule(VALIDATE_REQUIRED, 0)
+    form2.add(a)
+    form2.add(b)
+    expect(a.showing_errors() == false, "field A error hidden before submit")
+    let can_submit = form2.submit()
+    expect(can_submit == false, "submit() on an invalid form returns false")
+    expect(a.showing_errors() == true, "submit() forced field A to show its error")
+    expect(b.showing_errors() == true, "submit() forced field B to show its error")
+
+    print("ALL DONE")
+    return 0
+}

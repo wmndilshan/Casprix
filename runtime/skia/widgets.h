@@ -109,6 +109,25 @@ SGNode* widget_text(const char* text, SkiaFont font, uint32_t color);
 /* Update text content */
 void widget_text_set(SGNode* node, const char* text);
 
+/* Word-wrap control. wrap != 0 wraps the label to its laid-out width; a hard
+ * '\n' always starts a new line regardless. Default: off (single line). */
+void widget_text_set_wrap(SGNode* node, int wrap);
+
+/* Limit rendered lines. 0 = unlimited (default). No ellipsis in v1. */
+void widget_text_set_max_lines(SGNode* node, int max_lines);
+
+/* ========================================================================
+ * Accessibility (v1b) — convenience wrappers over sg_node_set_a11y_*
+ * ======================================================================== */
+
+/* Explicit accessibility label for any node (e.g. an icon-only button).
+ * NULL clears it (label then derives from a child text node). */
+void widget_set_a11y_label(SGNode* node, const char* label);
+
+/* Hide a decorative-only node from the accessibility tree. Its children are
+ * unaffected and still surface (re-parented to the nearest visible ancestor). */
+void widget_set_a11y_hidden(SGNode* node, int hidden);
+
 /* ========================================================================
  * Text Input Widget
  * ======================================================================== */
@@ -137,6 +156,13 @@ typedef struct {
     uint32_t saved_shadow_color;
     TextChangeCallback on_change;
     void* callback_data;
+
+    /* Enabled / error visual + behavioural state (mirrors widget_button's
+     * disabled pattern). */
+    int enabled;                  /* 1 = normal (default), 0 = disabled */
+    int has_error;               /* 1 = show error styling (still editable) */
+    uint32_t normal_background;   /* captured at construction for restore */
+    uint32_t normal_border_color;
 } TextInputWidgetState;
 
 /* Create a text input field */
@@ -148,6 +174,35 @@ void        widget_text_input_set_value(SGNode* node, const char* text);
 
 /* Set change callback */
 void widget_text_input_on_change(SGNode* node, TextChangeCallback callback, void* user_data);
+
+/* Enable/disable the input. A disabled input takes distinct disabled styling
+ * (matching widget_button), stops receiving events (clears SG_INTERACTIVE),
+ * rejects focus/cursor/typing, and reports SG_STATE_DISABLED on state_flags so
+ * the accessibility bridge sees it as not-enabled / not-focusable. */
+void widget_text_input_set_enabled(SGNode* node, int enabled);
+int  widget_text_input_is_enabled(SGNode* node);
+
+/* Mark/clear an error state. Distinct border+background styling from
+ * normal/disabled/focused. Does NOT block input — an errored field stays
+ * editable so the user can fix it. */
+void widget_text_input_set_error(SGNode* node, int has_error);
+int  widget_text_input_has_error(SGNode* node);
+
+/* ---- Field/Form validation-rule enum -----------------------------------
+ * Casperix cannot yet pass a capturing closure (or a bare function name) as a
+ * value, so the .cpx Field/Form layer selects validation behaviour with one of
+ * these rule codes plus an integer parameter, rather than a validator callback.
+ * widget_text_validate() returns 1 when `text` satisfies (rule, param). */
+enum {
+    WIDGET_VALIDATE_NONE      = 0,  /* always valid */
+    WIDGET_VALIDATE_REQUIRED  = 1,  /* non-empty after trimming spaces */
+    WIDGET_VALIDATE_MIN_LEN   = 2,  /* trimmed length >= param */
+    WIDGET_VALIDATE_MAX_LEN   = 3,  /* trimmed length <= param */
+    WIDGET_VALIDATE_EMAIL     = 4,  /* one '@' with non-empty local + a dotted domain */
+    WIDGET_VALIDATE_NUMERIC   = 5   /* non-empty, ASCII digits only (optional leading '-') */
+};
+
+int widget_text_validate(int rule, int param, const char* text);
 
 /* ========================================================================
  * Checkbox Widget
@@ -359,6 +414,10 @@ void widget_cleanup(SGNode* node);
 /* Optional per-widget custom rendering hook.
  * Returns non-zero if the widget fully rendered its own content. */
 int widget_render_override(SkiaCanvas canvas, SGNode* node);
+
+/* Report an unrecoverable UI-precondition violation and abort. Backs the
+ * ui_require_* helpers in lib/skia/ui.cpx. */
+void ui_fatal(const char* message);
 
 /* Tick widget-local animation/state such as caret blinking.
  * Returns non-zero when a repaint is needed. */

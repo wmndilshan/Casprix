@@ -61,6 +61,55 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/test_manifest_gen.c")
     add_test(NAME android_test_manifest_gen COMMAND android_test_manifest_gen)
 endif()
 
+# Accessibility bridge (v1b) — real SGNode traversal. Links the a11y bridge
+# against the scene-graph runtime + a tiny skia stub; no Android/JNI needed.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/test_a11y_bridge.c" AND
+   EXISTS "${CMAKE_SOURCE_DIR}/runtime/android/a11y_bridge.c")
+    add_executable(android_test_a11y_bridge
+        android/test_a11y_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/android/a11y_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/scene_graph.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/widgets.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/layout.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/events.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/style.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/animation.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/text.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/android/a11y_skia_stub.c
+    )
+    target_include_directories(android_test_a11y_bridge PRIVATE
+        ${CMAKE_SOURCE_DIR}/runtime/skia
+        ${CMAKE_SOURCE_DIR}/runtime/android
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(android_test_a11y_bridge PRIVATE m)
+    add_test(NAME android_test_a11y_bridge COMMAND android_test_a11y_bridge)
+endif()
+
+# Text-input disabled / error states + their accessibility-bridge reporting.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/test_text_input_states.c" AND
+   EXISTS "${CMAKE_SOURCE_DIR}/runtime/android/a11y_bridge.c")
+    add_executable(android_test_text_input_states
+        android/test_text_input_states.c
+        ${CMAKE_SOURCE_DIR}/runtime/android/a11y_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/scene_graph.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/widgets.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/layout.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/events.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/style.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/animation.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/text.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/android/a11y_skia_stub.c
+    )
+    target_include_directories(android_test_text_input_states PRIVATE
+        ${CMAKE_SOURCE_DIR}/runtime/skia
+        ${CMAKE_SOURCE_DIR}/runtime/android
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(android_test_text_input_states PRIVATE m)
+    add_test(NAME android_test_text_input_states COMMAND android_test_text_input_states)
+endif()
+
 foreach(_android_zip_test test_apk_pack test_zip_writer)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/${_android_zip_test}.c")
         add_executable(android_${_android_zip_test}
@@ -345,13 +394,29 @@ endif()
 # tests clobbering each other's .asm/.o in a shared directory.
 if(BUILD_COMPILER AND TARGET casprix)
     file(GLOB CPX_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_*.cpx")
+
+    # Semantic-only fixtures: these import a lib/ module that binds to an
+    # external C runtime not shipped in this repo (e.g. lib/nn/nn.cpx -> the
+    # NUWAN LLM runtime). A full compile passes semantic analysis but cannot
+    # link, so verify them with --check-only, matching the compiler_suite
+    # runner (runner.c) which already uses --check-only for every fixture.
+    set(CPX_CHECK_ONLY_TESTS test_nn_syntax)
+
     foreach(cpx_test ${CPX_TESTS})
         get_filename_component(test_name ${cpx_test} NAME_WE)
-        add_test(
-            NAME compiler_${test_name}
-            COMMAND $<TARGET_FILE:casprix> ${cpx_test} -o ${CMAKE_BINARY_DIR}/ctest/${test_name}
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        )
+        if(test_name IN_LIST CPX_CHECK_ONLY_TESTS)
+            add_test(
+                NAME compiler_${test_name}
+                COMMAND $<TARGET_FILE:casprix> --check-only ${cpx_test}
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            )
+        else()
+            add_test(
+                NAME compiler_${test_name}
+                COMMAND $<TARGET_FILE:casprix> ${cpx_test} -o ${CMAKE_BINARY_DIR}/ctest/${test_name}
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            )
+        endif()
         if(BUILD_RUNTIME AND TARGET casprix_runtime)
             set_tests_properties(compiler_${test_name} PROPERTIES
                 ENVIRONMENT "CASPRIX_RUNTIME_LIB=$<TARGET_FILE:casprix_runtime>;CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR}")

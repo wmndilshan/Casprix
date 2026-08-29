@@ -9,9 +9,58 @@
 #include "layout.h"
 #include "widgets.h"
 #include "skia_c.h"
+#include "text.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
+/* Largest value SG_CONSTRAINTS_NONE uses for max_width/height (1e6f). Any
+ * constraint at or above this is treated as "unbounded" — text wrapping needs
+ * a real, finite width to wrap against. */
+#define SG_UNBOUNDED_THRESHOLD 900000.0f
+
+/* Best available bounded content width for wrapping this text node, or <= 0 if
+ * none is known (caller falls back to single-line intrinsic size). Priority:
+ * an explicit max_width, then an explicit flex_basis, then a real (non-1e6)
+ * incoming constraint. */
+static float text_wrap_width(const SGNode* node, SGConstraints constraints) {
+    float w = 0.0f;
+    if (node->max_width > 0.0f && node->max_width < SG_UNBOUNDED_THRESHOLD) {
+        w = node->max_width;
+    } else if (node->flex_basis > 0.0f && node->flex_basis < SG_UNBOUNDED_THRESHOLD) {
+        w = node->flex_basis;
+    } else if (constraints.max_width > 0.0f &&
+               constraints.max_width < SG_UNBOUNDED_THRESHOLD) {
+        w = constraints.max_width;
+    }
+    if (w > 0.0f) {
+        w -= (node->style.padding[1] + node->style.padding[3]);
+        if (w < 1.0f) w = 1.0f;
+    }
+    return w;
+}
+
+/* True if the string contains a hard line break. */
+static int text_has_newline(const char* s) {
+    return s && strchr(s, '\n') != NULL;
+}
+
+/* Wrapped size for a text node: honours \n always, and word-wraps to
+ * wrap_width when wrap_width > 0. max_lines (>0) caps the reported height. */
+static SGSize text_wrapped_size(const SGNode* node, float wrap_width) {
+    SGSize size = { 0.0f, 0.0f };
+    TextLayout layout;
+    text_layout_compute(&layout, node->data.text.text, node->data.text.font,
+                        wrap_width > 0.0f ? wrap_width : 0.0f);
+    int lines = layout.line_count;
+    if (node->data.text.max_lines > 0 && lines > node->data.text.max_lines) {
+        lines = node->data.text.max_lines;
+    }
+    if (lines < 1) lines = 1;
+    size.w = layout.max_width;
+    size.h = lines * layout.line_height;
+    return size;
+}
 
 /* ========================================================================
  * Utilities
@@ -124,6 +173,25 @@ SGSize sg_layout_measure(SGNode* node, SGConstraints constraints) {
 
     /* Leaf nodes: use intrinsic size */
     if (!node->first_child) {
+        /* Multi-line text: honour hard '\n' always, and word-wrap when the
+         * node opted in AND a bounded width is available. Otherwise this falls
+         * through to the unchanged single-line intrinsic path below. */
+        if (node->type == SG_NODE_TEXT && node->data.text.text &&
+            node->data.text.font &&
+            (node->data.text.wrap || text_has_newline(node->data.text.text))) {
+            float wrap_w = node->data.text.wrap
+                ? text_wrap_width(node, constraints)
+                : 0.0f;
+            if (node->data.text.wrap ? (wrap_w > 0.0f)
+                                     : text_has_newline(node->data.text.text)) {
+                size = text_wrapped_size(node, wrap_w);
+                size.w += pad_h(node);
+                size.h += pad_v(node);
+                size = apply_size_constraints(node, size);
+                return size;
+            }
+        }
+
         size = sg_layout_intrinsic_size(node);
         size.w += pad_h(node);
         size.h += pad_v(node);
