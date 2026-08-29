@@ -4,7 +4,7 @@
 print("Test 1: Simple closure")
 
 func make_counter() -> lambda() -> int
-    let count: int = 0
+    mut count: int = 0
     return |:| => count = count + 1
 }
 

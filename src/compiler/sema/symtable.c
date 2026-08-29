@@ -99,6 +99,7 @@ bool add_symbol(SymbolTable* table, const char* name, SymbolKind kind,
     symbol->closure_capture_count = 0;
     symbol->closure_capture_types = NULL;
     symbol->closure_lambda_id = -1;
+    symbol->is_heap_allocated = false;
     symbol->ownership_data = NULL;
 
     table->symbols[table->count++] = symbol;

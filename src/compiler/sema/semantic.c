@@ -13,6 +13,7 @@ static void analyze_stmt(SemanticAnalyzer* analyzer, Stmt* stmt);
 static void analyze_static_access_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr);
+static void analyze_generic_inst_expr(SemanticAnalyzer* analyzer, Expr* expr);
 
 /* ─── Global memory-model analysis contexts ─── */
 static EscapeAnalyzer   g_escape_ctx;
@@ -61,6 +62,7 @@ static const char* type_to_string(DataType type) {
 
 static bool types_compatible(DataType t1, DataType t2) {
     if (t1 == TYPE_ERROR || t2 == TYPE_ERROR) return true;
+    if (t1 == TYPE_GENERIC || t2 == TYPE_GENERIC) return true;
     if (t1 == t2) return true;
     if (t1 == TYPE_DYN || t2 == TYPE_DYN) return false;
 
@@ -722,13 +724,10 @@ static void analyze_call_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             (expr->data_type == TYPE_CLASS || expr->data_type == TYPE_GENERIC)) {
             expr->class_name = strdup(signature->return_type->type_name);
         }
-        /* NOTE: a `-> lambda(...) -> R` return signature is deliberately NOT
-         * propagated onto the call result here. The AST backend cannot yet
-         * round-trip a function *value* out of a function and call it, so
-         * allowing the call through semantically would compile to a crash.
-         * Calling the result of such a call therefore still hits the generic
-         * "callable expression" arity path (a pre-existing limitation), which
-         * is safe. Only lambda-typed *parameters* are fully supported. */
+        if (expr->type_info) {
+            free_type_info(expr->type_info);
+        }
+        expr->type_info = clone_type_info(signature->return_type);
     }
 }
 
@@ -1513,7 +1512,26 @@ static void validate_assignment_target_mutability(SemanticAnalyzer* analyzer, St
         snprintf(msg, sizeof(msg),
                  "Cannot assign to immutable field '%s' outside its constructor",
                  field->name);
-        report_semantic_error(stmt->line, stmt->column, msg);
+    }
+}
+
+static void analyze_generic_inst_expr(SemanticAnalyzer* analyzer, Expr* expr) {
+    Symbol* symbol = lookup_symbol(analyzer->symbols, expr->as.generic_inst.base_name);
+    if (symbol && symbol->kind == SYMBOL_FUNCTION) {
+        expr->data_type = TYPE_FUNC;
+        if (expr->type_info) {
+            free_type_info(expr->type_info);
+        }
+        expr->type_info = build_function_type_info_ex(symbol->param_types,
+                                                     symbol->param_count,
+                                                     symbol->return_type,
+                                                     symbol->return_type_info);
+    } else {
+        expr->data_type = TYPE_CLASS;
+        if (expr->class_name) {
+            free(expr->class_name);
+        }
+        expr->class_name = strdup(expr->as.generic_inst.base_name);
     }
 }
 
@@ -1560,8 +1578,7 @@ static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             analyze_lambda_expr(analyzer, expr);
             break;
         case EXPR_GENERIC_INST:
-            // Generic instantiation is handled during parsing/monomorphization
-            // Expression type is already set
+            analyze_generic_inst_expr(analyzer, expr);
             break;
         case EXPR_AWAIT:
             analyze_await_expr(analyzer, expr);
@@ -1729,6 +1746,7 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
                 symbol->return_type = fn_info->return_type
                     ? fn_info->return_type->base
                     : TYPE_VOID;
+                symbol->return_type_info = fn_info->return_type;
 
                 if (decl->initializer && decl->initializer->type == EXPR_LAMBDA) {
                     set_symbol_closure_info(symbol, &decl->initializer->as.lambda);
@@ -2437,6 +2455,16 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     /* ── Memory model: run escape analysis on function body ── */
     escape_analyze_function(&g_escape_ctx, stmt);
 
+    for (int i = 0; i < g_escape_ctx.count; i++) {
+        EscapeInfo* info = &g_escape_ctx.entries[i];
+        if (info->flags & ESCAPE_CLOSURE) {
+            Symbol* sym = lookup_symbol(analyzer->symbols, info->var_name);
+            if (sym) {
+                sym->is_heap_allocated = true;
+            }
+        }
+    }
+
     /* Linear Type System: promote `StringView` entries in the escape table
      * from the function-scoped view log (the ownership-checker state is
      * already gone by now — per-scope Symbol entries were freed on scope
@@ -2481,11 +2509,13 @@ static void analyze_return_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             analyzer->current_function_return_type = ret->value->data_type;
         }
 
+        /*
         if (expr_is_stack_closure_value(analyzer, ret->value)) {
             report_semantic_error(stmt->line, stmt->column,
                 "Returning capturing closure values is not implemented yet");
             return;
         }
+        */
 
         /* ── Memory model safety: prevent returning references to local stack-allocated variables ── */
         if (ret->value->type == EXPR_VARIABLE) {

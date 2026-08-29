@@ -488,10 +488,19 @@ static MirValueId lower_captured_addr(MirLowerCtx* ctx, const char* name, DataTy
     return alloca_id;
 }
 
+static MirValueId allocate_var_storage(MirLowerCtx* ctx, const char* name, MirType* var_type) {
+    Symbol* symbol = NULL;
+    if (ctx->symtable && name) {
+        symbol = lookup_symbol(ctx->symtable, name);
+    }
+    if (symbol && symbol->is_heap_allocated) {
+        return mir_build_obj_alloc(&ctx->builder, "$var", 8);
+    }
+    return mir_build_alloca(&ctx->builder, var_type);
+}
+
 static MirValueId build_lambda_closure_handle(MirLowerCtx* ctx, LambdaExpr* lam,
                                               const char* lambda_name) {
-    MirType* closure_handle_type;
-    MirType* record_type;
     MirValueId closure_record;
     MirValueId fn_ptr;
 
@@ -500,12 +509,7 @@ static MirValueId build_lambda_closure_handle(MirLowerCtx* ctx, LambdaExpr* lam,
                                     mir_type_ptr(ctx->module, mir_type_i8(ctx->module)));
     }
 
-    closure_handle_type = lower_lambda_closure_handle_type(ctx, lam);
-    record_type = (closure_handle_type && closure_handle_type->kind == MIR_TYPE_PTR)
-        ? closure_handle_type->as.ptr.pointee
-        : NULL;
-    closure_record = mir_build_alloca(&ctx->builder,
-                                      record_type ? record_type : mir_type_i64(ctx->module));
+    closure_record = mir_build_obj_alloc(&ctx->builder, "$closure", (1 + lam->capture_count) * 8);
     fn_ptr = mir_build_const_func(&ctx->builder, lambda_name, lower_lambda_invoke_type(ctx, lam));
 
     {
@@ -858,14 +862,9 @@ static MirValueId lower_lambda(MirLowerCtx* ctx, Expr* expr) {
         if (i < lam->capture_count) {
             DataType capture_type = lam->captured_types ? lam->captured_types[i] : TYPE_I64;
             MirType* capture_value_type = lower_type(ctx, capture_type);
-            MirValueId capture_alloca = mir_build_alloca(&ctx->builder, capture_value_type);
-            MirValueId capture_loaded = mir_build_load(&ctx->builder,
-                                                       lambda_func->params[i].value_id,
-                                                       capture_value_type);
-            mir_build_store(&ctx->builder, capture_alloca, capture_loaded);
-            var_map_set(ctx, lambda_func->params[i].name, capture_alloca, capture_value_type);
+            var_map_set(ctx, lambda_func->params[i].name, lambda_func->params[i].value_id, capture_value_type);
         } else {
-            MirValueId param_alloca = mir_build_alloca(&ctx->builder, lambda_func->params[i].type);
+            MirValueId param_alloca = allocate_var_storage(ctx, lambda_func->params[i].name, lambda_func->params[i].type);
             mir_build_store(&ctx->builder, param_alloca, lambda_func->params[i].value_id);
             var_map_set(ctx, lambda_func->params[i].name, param_alloca, lambda_func->params[i].type);
         }
@@ -981,7 +980,7 @@ static void lower_declaration(MirLowerCtx* ctx, Stmt* stmt) {
         return;
     }
 
-    MirValueId alloca_id = mir_build_alloca(&ctx->builder, var_type);
+    MirValueId alloca_id = allocate_var_storage(ctx, decl->name, var_type);
     var_map_set(ctx, decl->name, alloca_id, var_type);
 
     if (decl->initializer) {
@@ -1315,7 +1314,7 @@ MirFunction* mir_lower_function(MirLowerCtx* ctx, Stmt* func_stmt) {
 
     /* Bind parameters to alloca slots */
     for (int i = 0; i < mir_func->param_count; i++) {
-        MirValueId param_alloca = mir_build_alloca(&ctx->builder, mir_func->params[i].type);
+        MirValueId param_alloca = allocate_var_storage(ctx, mir_func->params[i].name, mir_func->params[i].type);
         mir_build_store(&ctx->builder, param_alloca, mir_func->params[i].value_id);
         var_map_set(ctx, mir_func->params[i].name, param_alloca, mir_func->params[i].type);
     }

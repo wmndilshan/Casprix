@@ -100,6 +100,7 @@ typedef struct {
     int closure_capture_count;
     DataType* closure_capture_types;
     int closure_lambda_id;
+    bool is_heap_allocated;
 
     // For classes
     ClassSymbol* class_info;

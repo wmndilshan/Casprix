@@ -23,6 +23,17 @@ int main() {
     int total = 0;
     clock_t start = clock();
 
+    const char* compiler_bin = getenv("CASPRIX_EXE");
+    if (!compiler_bin) {
+        compiler_bin = COMPILER_BIN;
+    }
+
+#ifdef _WIN32
+    const char* null_dev = "nul";
+#else
+    const char* null_dev = "/dev/null";
+#endif
+
     printf("========================================\n");
     printf("Casprix Compiler Test Suite (C Runner)\n");
     printf("========================================\n\n");
@@ -34,7 +45,7 @@ int main() {
                 char cmd[512];
                 char path[512];
                 snprintf(path, sizeof(path), "%s%s%s", TEST_DIR, PATH_SEP, ent->d_name);
-                snprintf(cmd, sizeof(cmd), "%s --check-only %s > nul 2>&1", COMPILER_BIN, path);
+                snprintf(cmd, sizeof(cmd), "%s --check-only %s > %s 2>&1", compiler_bin, path, null_dev);
 
                 printf("[%2d] Testing %-40s... ", total, ent->d_name);
                 fflush(stdout);
