@@ -3,7 +3,7 @@
 #include "compiler/frontend/ast.h"
 
 // Expression creators
-Expr* create_binary_expr(Expr* left, TokenType op, Expr* right, int line, int col) {
+Expr* create_binary_expr(Expr* left, CpxTokenType op, Expr* right, int line, int col) {
     Expr* expr = ALLOCATE(Expr, 1);
     expr->type = EXPR_BINARY;
     expr->data_type = TYPE_ERROR;
@@ -17,7 +17,7 @@ Expr* create_binary_expr(Expr* left, TokenType op, Expr* right, int line, int co
     return expr;
 }
 
-Expr* create_unary_expr(TokenType op, Expr* operand, int line, int col) {
+Expr* create_unary_expr(CpxTokenType op, Expr* operand, int line, int col) {
     Expr* expr = ALLOCATE(Expr, 1);
     expr->type = EXPR_UNARY;
     expr->data_type = TYPE_ERROR;

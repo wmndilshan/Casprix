@@ -168,10 +168,10 @@ typedef enum {
     // Special
     TOKEN_ERROR,
     TOKEN_EOF
-} TokenType;
+} CpxTokenType;
 
 typedef struct {
-    TokenType type;
+    CpxTokenType type;
     const char* start;   // Points to start of lexeme in source
     int length;
     int line;

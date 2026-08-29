@@ -3,9 +3,9 @@
 #include <limits.h>
 
 static void advance(Parser* parser);
-static bool check(Parser* parser, TokenType type);
-static bool match(Parser* parser, TokenType type);
-static void consume(Parser* parser, TokenType type, const char* message);
+static bool check(Parser* parser, CpxTokenType type);
+static bool match(Parser* parser, CpxTokenType type);
+static void consume(Parser* parser, CpxTokenType type, const char* message);
 static void synchronize(Parser* parser);
 static void synchronize_block(Parser* parser);
 static char* copy_identifier(Token* token);
@@ -60,17 +60,17 @@ static void advance(Parser* parser) {
     }
 }
 
-static bool check(Parser* parser, TokenType type) {
+static bool check(Parser* parser, CpxTokenType type) {
     return parser->current.type == type;
 }
 
-static bool match(Parser* parser, TokenType type) {
+static bool match(Parser* parser, CpxTokenType type) {
     if (!check(parser, type)) return false;
     advance(parser);
     return true;
 }
 
-static void consume(Parser* parser, TokenType type, const char* message) {
+static void consume(Parser* parser, CpxTokenType type, const char* message) {
     if (parser->current.type == type) {
         advance(parser);
         return;
@@ -215,7 +215,7 @@ static void report_unsupported_surface(Parser* parser, Token token, const char* 
 }
 
 // Check if current token is a type keyword (simple primitive)
-static bool is_simple_type_token(TokenType type) {
+static bool is_simple_type_token(CpxTokenType type) {
     switch (type) {
         case TOKEN_INT_TYPE:     case TOKEN_FLOAT_TYPE:
         case TOKEN_STRING_TYPE:  case TOKEN_BOOL_TYPE:
@@ -235,7 +235,7 @@ static bool is_simple_type_token(TokenType type) {
 }
 
 // Map token to DataType for simple types
-static DataType token_to_datatype(TokenType type) {
+static DataType token_to_datatype(CpxTokenType type) {
     switch (type) {
         case TOKEN_INT_TYPE:     return TYPE_I32;
         case TOKEN_FLOAT_TYPE:   return TYPE_F64;
@@ -264,7 +264,7 @@ static DataType token_to_datatype(TokenType type) {
 }
 
 // Check if current token starts a parameterized type (array<T>, ptr<T>, etc.)
-static bool is_parameterized_type_token(TokenType type) {
+static bool is_parameterized_type_token(CpxTokenType type) {
     switch (type) {
         case TOKEN_ARRAY_TYPE:   case TOKEN_SLICE_TYPE:
         case TOKEN_PTR_TYPE:     case TOKEN_REF_TYPE:
@@ -424,7 +424,7 @@ static DataType parse_type(Parser* parser) {
 
     // Parameterized types: array<T>, slice<T>, ptr<T>, ref<T>, tensor<T>
     if (is_parameterized_type_token(parser->current.type)) {
-        TokenType param_token = parser->current.type;
+        CpxTokenType param_token = parser->current.type;
         advance(parser);
 
         // Parse inner type parameter
@@ -580,7 +580,7 @@ static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
 
     // Parameterized types: array<T>, slice<T>, ptr<T>, ref<T>, tensor<T>
     if (is_parameterized_type_token(parser->current.type)) {
-        TokenType param_token = parser->current.type;
+        CpxTokenType param_token = parser->current.type;
         advance(parser);
 
         if (check(parser, TOKEN_LESS)) {
@@ -1828,7 +1828,7 @@ static Stmt* expression_statement(Parser* parser) {
     Expr* expr = expression(parser);
 
     // Check for simple or compound assignment
-    TokenType assign_op = parser->current.type;
+    CpxTokenType assign_op = parser->current.type;
     if (assign_op == TOKEN_ASSIGN ||
         assign_op == TOKEN_PLUS_ASSIGN  || assign_op == TOKEN_MINUS_ASSIGN ||
         assign_op == TOKEN_STAR_ASSIGN  || assign_op == TOKEN_SLASH_ASSIGN ||
@@ -1847,7 +1847,7 @@ static Stmt* expression_statement(Parser* parser) {
 
         // Desugar compound assignment: x += y  =>  x = x + y
         if (assign_op != TOKEN_ASSIGN) {
-            TokenType bin_op;
+            CpxTokenType bin_op;
             switch (assign_op) {
                 case TOKEN_PLUS_ASSIGN:    bin_op = TOKEN_PLUS;    break;
                 case TOKEN_MINUS_ASSIGN:   bin_op = TOKEN_MINUS;   break;
@@ -2553,7 +2553,7 @@ static Stmt* declaration(Parser* parser) {
         expr = postfix_with_expr(parser, expr);
 
         // Check if this is an assignment (simple or compound)
-        TokenType assign_op = parser->current.type;
+        CpxTokenType assign_op = parser->current.type;
         if (assign_op == TOKEN_ASSIGN ||
             assign_op == TOKEN_PLUS_ASSIGN  || assign_op == TOKEN_MINUS_ASSIGN ||
             assign_op == TOKEN_STAR_ASSIGN  || assign_op == TOKEN_SLASH_ASSIGN ||
@@ -2572,7 +2572,7 @@ static Stmt* declaration(Parser* parser) {
 
             // Desugar compound assignment: x += y  =>  x = x + y
             if (assign_op != TOKEN_ASSIGN) {
-                TokenType bin_op;
+                CpxTokenType bin_op;
                 switch (assign_op) {
                     case TOKEN_PLUS_ASSIGN:    bin_op = TOKEN_PLUS;    break;
                     case TOKEN_MINUS_ASSIGN:   bin_op = TOKEN_MINUS;   break;

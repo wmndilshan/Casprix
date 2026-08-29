@@ -43,7 +43,7 @@ static bool match(Lexer* lexer, char expected) {
     return true;
 }
 
-static Token make_token(Lexer* lexer, TokenType type) {
+static Token make_token(Lexer* lexer, CpxTokenType type) {
     Token token;
     token.type = type;
     token.start = lexer->start;
@@ -273,8 +273,8 @@ static bool is_alpha(char c) {
            c == '_';
 }
 
-static TokenType check_keyword(const char* start, int length,
-                               const char* rest, TokenType type) {
+static CpxTokenType check_keyword(const char* start, int length,
+                               const char* rest, CpxTokenType type) {
     int rest_len = strlen(rest);
     if (length == rest_len && memcmp(start, rest, rest_len) == 0) {
         return type;
@@ -282,7 +282,7 @@ static TokenType check_keyword(const char* start, int length,
     return TOKEN_IDENTIFIER;
 }
 
-static TokenType identifier_type(Lexer* lexer) {
+static CpxTokenType identifier_type(Lexer* lexer) {
     // Keyword recognition - all lowercase modern syntax
     // Includes full numeric type system (i8-i128, u8-u128, f16-f64, bf16)
     // and compound type keywords (struct, enum, union, array, slice, tensor, ptr, ref, etc.)
@@ -445,7 +445,7 @@ static Token identifier(Lexer* lexer) {
         advance(lexer);
     }
     
-    TokenType type = identifier_type(lexer);
+    CpxTokenType type = identifier_type(lexer);
     Token token = make_token(lexer, type);
     
     // Store boolean values

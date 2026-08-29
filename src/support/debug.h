@@ -54,7 +54,7 @@ void debug_print_token(Token* token);
 void debug_dump_tokens(const char* source);
 
 /* Get token type name as string */
-const char* debug_token_type_name(TokenType type);
+const char* debug_token_type_name(CpxTokenType type);
 
 /* ----------------------------------------------------------------------------
  * AST Visualization

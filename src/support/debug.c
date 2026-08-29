@@ -205,7 +205,7 @@ void debug_header(const char* title) {
  * Token Visualization
  * --------------------------------------------------------------------------*/
 
-const char* debug_token_type_name(TokenType type) {
+const char* debug_token_type_name(CpxTokenType type) {
     if (type >= 0 && type < (int)(sizeof(token_names) / sizeof(token_names[0]))) {
         return token_names[type] ? token_names[type] : "UNKNOWN";
     }
@@ -326,7 +326,7 @@ static const char* stmt_type_name(StmtType type) {
     }
 }
 
-static const char* operator_name(TokenType op) {
+static const char* operator_name(CpxTokenType op) {
     switch (op) {
         case TOKEN_PLUS: return "+";
         case TOKEN_MINUS: return "-";

@@ -22,7 +22,6 @@
  *   sum_squares(n) = n*(n+1)*(2n+1)/6  (ADD, MUL, DIV + RET)
  */
 
-/* MIR headers first to avoid TokenType/windows.h conflicts */
 #include "../src/compiler/ir/mir.h"
 #include "../runtime/vm/cvm_engine.h"
 #include "../runtime/vm/jit_bridge.h"
@@ -37,9 +36,7 @@
 #if defined(_WIN32) || defined(_WIN64)
 #  define WIN32_LEAN_AND_MEAN
 #  define NOMINMAX
-#  define TokenType _W32_TokenType
 #  include <windows.h>
-#  undef TokenType
 #else
 #  include <time.h>
 #endif

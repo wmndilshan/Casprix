@@ -42,8 +42,6 @@
  * interpreter threads only compile a function once.
  */
 
-/* Include MIR headers first (defines TokenType via lexer.h) so that our
- * symbol wins when windows.h's winnt.h also tries to define it. */
 #include "../../src/compiler/ir/mir.h"
 #include "jit_bridge.h"
 #include "../io/direct_io.h"
@@ -54,10 +52,7 @@
 #  define NOMINMAX
 #  define NOSERVICE
 #  define NOCRYPT
-/* Suppress winnt.h TOKEN_TYPE enum — we include it after our TokenType is defined */
-#  define TokenType _W32_TokenType
 #  include <windows.h>
-#  undef TokenType
 #endif
 
 #include <stdlib.h>

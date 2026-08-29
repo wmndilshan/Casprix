@@ -206,12 +206,12 @@ typedef struct {
 
 typedef struct {
     Expr* left;
-    TokenType operator;
+    CpxTokenType operator;
     Expr* right;
 } BinaryExpr;
 
 typedef struct {
-    TokenType operator;
+    CpxTokenType operator;
     Expr* operand;
 } UnaryExpr;
 
@@ -688,8 +688,8 @@ struct Stmt {
 };
 
 // AST creation functions
-Expr* create_binary_expr(Expr* left, TokenType op, Expr* right, int line, int col);
-Expr* create_unary_expr(TokenType op, Expr* operand, int line, int col);
+Expr* create_binary_expr(Expr* left, CpxTokenType op, Expr* right, int line, int col);
+Expr* create_unary_expr(CpxTokenType op, Expr* operand, int line, int col);
 Expr* create_literal_expr(LiteralExpr literal, int line, int col);
 Expr* create_variable_expr(char* name, int line, int col);
 Expr* create_call_expr(Expr* callee, Expr** args, int arg_count, int line, int col);
