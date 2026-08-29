@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdatomic.h>
 
 #ifdef _WIN32
     #include <windows.h>
@@ -61,8 +62,8 @@ struct WorkerPool {
     volatile bool is_running;
     
     // Statistics
-    uint64_t total_submitted;
-    uint64_t total_completed;
+    _Atomic uint64_t total_submitted;
+    _Atomic uint64_t total_completed;
     
     // Random seed for victim selection
     uint32_t rand_state;
@@ -198,7 +199,7 @@ static void* worker_thread_main(void* arg) {
             // Execute task
             task_execute(task);
             worker->tasks_executed++;
-            worker->pool->total_completed++;
+            atomic_fetch_add(&worker->pool->total_completed, 1);
             
             // Cleanup
             task_destroy(task);
@@ -323,17 +324,26 @@ void pool_destroy(WorkerPool* pool) {
     // Signal all workers to exit
     pool_shutdown(pool);
     
-    // Wait for all workers to finish
+    // Wait for all worker threads to finish first
     for (size_t i = 0; i < pool->num_workers; i++) {
         Worker* worker = &pool->workers[i];
-        
         #ifdef _WIN32
-            WaitForSingleObject(worker->thread, INFINITE);
-            CloseHandle(worker->thread);
+            if (worker->thread) {
+                WaitForSingleObject(worker->thread, INFINITE);
+                CloseHandle(worker->thread);
+                worker->thread = NULL;
+            }
         #else
-            pthread_join(worker->thread, NULL);
+            if (worker->thread) {
+                pthread_join(worker->thread, NULL);
+                worker->thread = 0;
+            }
         #endif
-        
+    }
+    
+    // Once all threads have exited, destroy their queues safely
+    for (size_t i = 0; i < pool->num_workers; i++) {
+        Worker* worker = &pool->workers[i];
         deque_destroy(worker->local_queue);
     }
     
@@ -359,14 +369,14 @@ bool pool_submit(WorkerPool* pool, TaskFunction func, void* arg) {
     Worker* current = tls_current_worker;
     if (current && current->pool == pool) {
         if (deque_push(current->local_queue, task)) {
-            pool->total_submitted++;
+            atomic_fetch_add(&pool->total_submitted, 1);
             return true;
         }
     }
     
     // Otherwise, push to global queue
     if (deque_push(pool->global_queue, task)) {
-        pool->total_submitted++;
+        atomic_fetch_add(&pool->total_submitted, 1);
         return true;
     }
     
@@ -403,8 +413,8 @@ PoolStats pool_get_stats(const WorkerPool* pool) {
     if (!pool) return stats;
     
     stats.num_workers = pool->num_workers;
-    stats.tasks_submitted = pool->total_submitted;
-    stats.tasks_completed = pool->total_completed;
+    stats.tasks_submitted = atomic_load((_Atomic uint64_t*)&pool->total_submitted);
+    stats.tasks_completed = atomic_load((_Atomic uint64_t*)&pool->total_completed);
     
     for (size_t i = 0; i < pool->num_workers; i++) {
         stats.tasks_stolen += pool->workers[i].tasks_stolen;
