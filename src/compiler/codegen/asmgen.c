@@ -33,6 +33,30 @@ static void format_global_var_symbol(const char* name, char* buf, size_t buf_siz
     static const int ABI_SHADOW_SPACE = 0; // Linux doesn't use shadow space
 #endif
 
+/* Count constructor overloads on this class (declaration-order). */
+static int class_constructor_count(ClassSymbol* class_sym) {
+    if (!class_sym) return 0;
+    int n = 0;
+    for (int i = 0; i < class_sym->method_count; i++) {
+        if (class_sym->methods[i].is_constructor) n++;
+    }
+    return n;
+}
+
+/* Emit the asm label for a constructor into `buf`.
+ *   ctor_ord < 0  OR  the class has a single constructor  -> legacy "Class_new"
+ *   otherwise                                             -> "Class_new__c<ord>"
+ * Both the definition site (class codegen) and the call site (EXPR_NEW) call
+ * this with the same inputs so the labels always agree. */
+static void constructor_label(char* buf, size_t buflen,
+                              const char* class_name, int ctor_count, int ctor_ord) {
+    if (ctor_ord >= 0 && ctor_count > 1) {
+        snprintf(buf, buflen, "%s_new__c%d", class_name, ctor_ord);
+    } else {
+        snprintf(buf, buflen, "%s_new", class_name);
+    }
+}
+
 static MethodSymbol* find_constructor_symbol(ClassSymbol* class_sym) {
     if (!class_sym) return NULL;
 
@@ -49,6 +73,19 @@ static MethodSymbol* find_constructor_symbol(ClassSymbol* class_sym) {
         }
     }
 
+    return NULL;
+}
+
+/* Return the N-th constructor overload (declaration order) of a class. */
+static MethodSymbol* nth_constructor_symbol(ClassSymbol* class_sym, int ord) {
+    if (!class_sym || ord < 0) return NULL;
+    int n = 0;
+    for (int i = 0; i < class_sym->method_count; i++) {
+        if (class_sym->methods[i].is_constructor) {
+            if (n == ord) return &class_sym->methods[i];
+            n++;
+        }
+    }
     return NULL;
 }
 
@@ -1594,7 +1631,16 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 break;
             }
 
-            ctor = find_constructor_symbol(class_sym);
+            /* Overload set: semantic analysis stashed the selected overload's
+               ordinal in new_expr->ctor_index (-1 for single-constructor
+               classes). Use the matching symbol so float-arg shuffling and
+               the call label both track the resolved constructor. */
+            int ctor_count = class_constructor_count(class_sym);
+            if (new_expr->ctor_index >= 0 && ctor_count > 1) {
+                ctor = nth_constructor_symbol(class_sym, new_expr->ctor_index);
+            } else {
+                ctor = find_constructor_symbol(class_sym);
+            }
 
             emit_asm(gen, "    ; Allocate ARC-managed object: New %s\n", new_expr->class_name);
 
@@ -1657,7 +1703,11 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
 
             // Call constructor
             if (ctor) {
-                emit_asm(gen, "    call %s_%s\n", new_expr->class_name, ctor->name);
+                char ctor_lbl[288];
+                constructor_label(ctor_lbl, sizeof(ctor_lbl), new_expr->class_name,
+                                  ctor_count,
+                                  (ctor_count > 1) ? new_expr->ctor_index : -1);
+                emit_asm(gen, "    call %s\n", ctor_lbl);
             }
 
             emit_asm(gen, "    add rsp, %d  ; Clean up stack\n", c_stack_size);
@@ -2240,6 +2290,14 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
                 class_sym->fields[i].offset);
     }
 
+    /* Total constructor overloads on this class — drives whether constructor
+       labels get the overload suffix. Matches class_constructor_count(). */
+    int total_ctors = 0;
+    for (int i = 0; i < class_stmt->method_count; i++) {
+        if (class_stmt->methods[i].is_constructor) total_ctors++;
+    }
+    int ctor_ord_seen = 0;  /* declaration-order ordinal of the next constructor */
+
     // Generate methods
     for (int i = 0; i < class_stmt->method_count; i++) {
         MethodDecl* method = &class_stmt->methods[i];
@@ -2248,6 +2306,12 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
         char mangled_name[256];
         if (method->is_static) {
             snprintf(mangled_name, sizeof(mangled_name), "__static_%s_%s", class_stmt->name, method->name);
+        } else if (method->is_constructor) {
+            /* Overloaded constructors get a per-ordinal suffix so their asm
+               labels don't collide; a lone constructor keeps "Class_new". */
+            constructor_label(mangled_name, sizeof(mangled_name), class_stmt->name,
+                              total_ctors, ctor_ord_seen);
+            ctor_ord_seen++;
         } else {
             snprintf(mangled_name, sizeof(mangled_name), "%s_%s", class_stmt->name, method->name);
         }

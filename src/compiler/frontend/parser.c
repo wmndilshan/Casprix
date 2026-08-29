@@ -75,7 +75,43 @@ static void consume(Parser* parser, TokenType type, const char* message) {
         advance(parser);
         return;
     }
-    
+
+    error_at_current(parser, message);
+}
+
+/* Close a generic type-argument or type-parameter list.
+ *
+ * The lexer greedily tokenizes ">>" as a single TOKEN_RSHIFT (the right-shift
+ * operator), but in a nested generic such as `Array<MapEntry<K, V>>` the ">>"
+ * is really two separate closing angle brackets. When a generic-close site
+ * expects a single '>' and instead finds an RSHIFT, split it in place: consume
+ * the logical first '>' and rewrite parser->current into a TOKEN_GREATER that
+ * covers the remaining '>' so the enclosing generic level can close normally.
+ * ">>>" (RSHIFT followed by GREATER) chains through this the same way.
+ *
+ * This is scoped to type-list parsing only; the real ">>" operator is handled
+ * separately in shift() and never routes through here. */
+static void consume_generic_close(Parser* parser, const char* message) {
+    if (parser->current.type == TOKEN_GREATER) {
+        advance(parser);
+        return;
+    }
+
+    if (parser->current.type == TOKEN_RSHIFT) {
+        /* Rewrite the pending ">>" token into a single ">" starting one column
+         * later, without pulling a fresh token from the lexer. previous is set
+         * so callers that inspect it after the close still see a '>'. */
+        parser->previous = parser->current;
+        parser->previous.type = TOKEN_GREATER;
+        parser->previous.length = 1;
+
+        parser->current.type = TOKEN_GREATER;
+        parser->current.start += 1;
+        parser->current.length = 1;
+        parser->current.column += 1;
+        return;
+    }
+
     error_at_current(parser, message);
 }
 
@@ -361,7 +397,7 @@ static TypeInfo* parse_lambda_type_info(Parser* parser) {
 static DataType parse_inner_type_param(Parser* parser, char** out_class_name) {
     consume(parser, TOKEN_LESS, "Expected '<' for type parameter");
     DataType inner = parse_type_with_class(parser, out_class_name);
-    consume(parser, TOKEN_GREATER, "Expected '>' after type parameter");
+    consume_generic_close(parser, "Expected '>' after type parameter");
     return inner;
 }
 
@@ -472,7 +508,7 @@ static DataType parse_type(Parser* parser) {
                     parse_type_with_class(parser, &tuple_arg_class);
                     free(tuple_arg_class);
                 } while (match(parser, TOKEN_COMMA));
-                consume(parser, TOKEN_GREATER, "Expected '>' after tuple type arguments");
+                consume_generic_close(parser, "Expected '>' after tuple type arguments");
             }
             return TYPE_ERROR;
         }
@@ -510,7 +546,7 @@ static DataType parse_type(Parser* parser) {
                 parse_type_with_class(parser, &generic_arg_class);
                 free(generic_arg_class);
             } while (match(parser, TOKEN_COMMA));
-            consume(parser, TOKEN_GREATER, "Expected '>' after generic type arguments");
+            consume_generic_close(parser, "Expected '>' after generic type arguments");
         }
         return TYPE_CLASS;
     }
@@ -625,7 +661,7 @@ static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
                     parse_type_with_class(parser, &tuple_arg_class);
                     free(tuple_arg_class);
                 } while (match(parser, TOKEN_COMMA));
-                consume(parser, TOKEN_GREATER, "Expected '>' after tuple type arguments");
+                consume_generic_close(parser, "Expected '>' after tuple type arguments");
             }
             return TYPE_ERROR;
         }
@@ -664,7 +700,7 @@ static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
                 parse_type_with_class(parser, &generic_arg_class);
                 free(generic_arg_class);
             } while (match(parser, TOKEN_COMMA));
-            consume(parser, TOKEN_GREATER, "Expected '>' after generic type arguments");
+            consume_generic_close(parser, "Expected '>' after generic type arguments");
         }
         return TYPE_CLASS;
     }
@@ -718,7 +754,7 @@ static TypeParam* parse_type_params(Parser* parser, int* out_count) {
         count++;
     } while (match(parser, TOKEN_COMMA));
 
-    consume(parser, TOKEN_GREATER, "Expected '>' after type parameters");
+    consume_generic_close(parser, "Expected '>' after type parameters");
 
     *out_count = count;
     return params;
@@ -1003,7 +1039,7 @@ static Expr* primary(Parser* parser) {
                 parse_type_with_class(parser, &generic_arg_class);
                 free(generic_arg_class);
             } while (match(parser, TOKEN_COMMA));
-            consume(parser, TOKEN_GREATER, "Expected '>' after generic type arguments");
+            consume_generic_close(parser, "Expected '>' after generic type arguments");
         }
 
         consume(parser, TOKEN_LPAREN, "Expected '(' after class name");
@@ -1096,7 +1132,7 @@ static Expr* primary(Parser* parser) {
                 type_arg_count++;
             } while (match(parser, TOKEN_COMMA));
 
-            consume(parser, TOKEN_GREATER, "Expected '>' after generic type arguments");
+            consume_generic_close(parser, "Expected '>' after generic type arguments");
 
             // Create generic instantiation expression
             Expr* expr = ALLOCATE(Expr, 1);
@@ -1225,6 +1261,8 @@ static Expr* postfix(Parser* parser) {
             member_name = copy_identifier(&parser->previous);
         } else if (match(parser, TOKEN_PRINT)) {
             member_name = strdup("print");
+        } else if (match(parser, TOKEN_UNION_KW)) {
+            member_name = strdup("union");
         } else {
             error_at_current(parser, "Expected property or method name after '.'");
             member_name = strdup("");
@@ -1297,6 +1335,8 @@ static Expr* postfix_with_expr(Parser* parser, Expr* expr) {
             member_name = copy_identifier(&parser->previous);
         } else if (match(parser, TOKEN_PRINT)) {
             member_name = strdup("print");
+        } else if (match(parser, TOKEN_UNION_KW)) {
+            member_name = strdup("union");
         } else {
             error_at_current(parser, "Expected property or method name after '.'");
             member_name = strdup("");
@@ -2101,12 +2141,15 @@ static Stmt* class_declaration(Parser* parser) {
 
             // Method declaration
             // Allow TOKEN_IDENTIFIER or TOKEN_NEW for method names. TOKEN_PRINT
-            // is also accepted contextually: `print` is a statement keyword but
-            // is unambiguous as a method name here, and postfix member-access
-            // parsing already treats `.print()` as an ordinary call.
+            // and TOKEN_UNION_KW are also accepted contextually: `print` is a
+            // statement keyword and `union` is a top-level declaration keyword,
+            // but both are unambiguous as a method name here (a class body after
+            // `func` expects a name), and postfix member-access parsing already
+            // treats `.print()` / `.union()` as ordinary calls.
             if (!match(parser, TOKEN_IDENTIFIER) &&
                 !match(parser, TOKEN_NEW) &&
-                !match(parser, TOKEN_PRINT)) {
+                !match(parser, TOKEN_PRINT) &&
+                !match(parser, TOKEN_UNION_KW)) {
                 error_at_current(parser, "Expected method name");
                 continue;
             }
@@ -2122,6 +2165,8 @@ static Stmt* class_declaration(Parser* parser) {
             if (method_name_token.type == TOKEN_NEW) {
                 methods[method_count].name = strdup("new");
             } else {
+                // copy_identifier lifts the lexeme text verbatim, so contextual
+                // keywords (print, union) yield their own spelling as the name.
                 methods[method_count].name = copy_identifier(&method_name_token);
             }
 

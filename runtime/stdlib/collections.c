@@ -23,29 +23,50 @@ void nuwan_array_sort_net4(int64_t* a) {
 #undef SWAP4
 }
 
+/* Runtime AVX2 detection. The file may be compiled with -mavx2 (so __AVX2__ is
+ * defined and the intrinsics are available), but the CPU that actually runs it
+ * may lack AVX2 — executing vpaddq then traps with SIGILL. Gate the AVX2 block
+ * on a runtime check. SSE2 needs no such guard: it is baseline for x86-64.
+ * On x86 GCC/Clang __builtin_cpu_supports is available (and cheap after the
+ * first call); elsewhere we conservatively report "no AVX2". */
+static int cpu_has_avx2(void) {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+    return __builtin_cpu_supports("avx2");
+#else
+    return 0;
+#endif
+}
+
 int64_t nuwan_array_sum_i64(const int64_t* arr, size_t n) {
     if (!arr || n == 0) return 0;
     size_t i = 0;
     int64_t s = 0;
 
 #if defined(__AVX2__)
-    __m256i sum_v = _mm256_setzero_si256();
-    for (; i + 4 <= n; i += 4) {
-        __m256i v = _mm256_loadu_si256((const __m256i*)&arr[i]);
-        sum_v = _mm256_add_epi64(sum_v, v);
+    if (cpu_has_avx2()) {
+        __m256i sum_v = _mm256_setzero_si256();
+        for (; i + 4 <= n; i += 4) {
+            __m256i v = _mm256_loadu_si256((const __m256i*)&arr[i]);
+            sum_v = _mm256_add_epi64(sum_v, v);
+        }
+        int64_t temp[4];
+        _mm256_storeu_si256((__m256i*)temp, sum_v);
+        s = temp[0] + temp[1] + temp[2] + temp[3];
     }
-    int64_t temp[4];
-    _mm256_storeu_si256((__m256i*)temp, sum_v);
-    s = temp[0] + temp[1] + temp[2] + temp[3];
-#elif defined(__SSE2__)
-    __m128i sum_v = _mm_setzero_si128();
-    for (; i + 2 <= n; i += 2) {
-        __m128i v = _mm_loadu_si128((const __m128i*)&arr[i]);
-        sum_v = _mm_add_epi64(sum_v, v);
+#endif
+#if defined(__SSE2__) || defined(__x86_64__)
+    /* SSE2 is guaranteed on x86-64; picks up wherever the AVX2 block left off
+     * (or from i == 0 when AVX2 was unavailable / not compiled in). */
+    {
+        __m128i sum_v = _mm_setzero_si128();
+        for (; i + 2 <= n; i += 2) {
+            __m128i v = _mm_loadu_si128((const __m128i*)&arr[i]);
+            sum_v = _mm_add_epi64(sum_v, v);
+        }
+        int64_t temp[2];
+        _mm_storeu_si128((__m128i*)temp, sum_v);
+        s += temp[0] + temp[1];
     }
-    int64_t temp[2];
-    _mm_storeu_si128((__m128i*)temp, sum_v);
-    s = temp[0] + temp[1];
 #endif
 
     for (; i < n; i++) s += arr[i];
@@ -293,7 +314,9 @@ bool nuwan_map_remove(NuwanMap* m, const char* key) {
     size_t idx = h % m->cap;
     while (m->slots[idx].hash != MAP_EMPTY) {
         if (m->slots[idx].hash == h && strcmp(m->slots[idx].key, key) == 0) {
-            free(m->slots[idx].key);
+            /* Key was arena_strdup'd by nuwan_map_put — it is owned by the
+             * arena, not malloc. Do NOT free() it here (matches the comment in
+             * nuwan_map_clear). Just mark the slot empty. */
             m->slots[idx].hash = MAP_EMPTY;
             m->slots[idx].key  = NULL;
             m->size--;

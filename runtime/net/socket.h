@@ -56,6 +56,15 @@ typedef struct Socket {
     bool non_blocking;
 } Socket;
 
+/*
+ * Default blocking-I/O timeout applied to server-accepted connection sockets.
+ * Guards against Slowloris-style clients that open a connection and then stall
+ * mid-request (or mid-body) forever. 30s is generous for a well-behaved client
+ * on a slow link but bounds a malicious one. recv()/send() on a socket with
+ * this set fail with EAGAIN/EWOULDBLOCK (last_error) once the timeout elapses.
+ */
+#define SOCKET_DEFAULT_IO_TIMEOUT_MS 30000
+
 // Initialize socket system (call once at startup)
 bool socket_system_init(void);
 
@@ -73,6 +82,10 @@ bool socket_set_nonblocking(Socket* sock, bool enabled);
 
 // Set socket options
 bool socket_set_option(Socket* sock, int level, int option, const void* value, int value_len);
+
+// Set blocking recv()/send() timeout (SO_RCVTIMEO / SO_SNDTIMEO).
+// milliseconds <= 0 clears the timeout (blocking indefinitely again).
+bool socket_set_timeout(Socket* sock, int milliseconds);
 
 // Bind socket to address
 bool socket_bind(Socket* sock, const char* ip, uint16_t port);

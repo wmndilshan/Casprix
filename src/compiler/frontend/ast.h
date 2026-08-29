@@ -272,6 +272,10 @@ typedef struct {
     char* class_name;          // Class to instantiate
     Expr** arguments;          // Constructor arguments
     int arg_count;
+    int ctor_index;            // Which constructor overload was selected by
+                               // semantic analysis (0-based position among the
+                               // class's constructors). -1 = unresolved or the
+                               // class has a single constructor (legacy label).
 } NewExpr;
 
 typedef struct {

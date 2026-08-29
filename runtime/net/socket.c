@@ -99,6 +99,35 @@ bool socket_set_option(Socket* sock, int level, int option, const void* value, i
     return true;
 }
 
+bool socket_set_timeout(Socket* sock, int milliseconds) {
+    if (!sock) return false;
+
+#ifdef _WIN32
+    DWORD tv = (milliseconds > 0) ? (DWORD)milliseconds : 0;
+    bool ok = setsockopt(sock->handle, SOL_SOCKET, SO_RCVTIMEO,
+                         (const char*)&tv, sizeof(tv)) == 0
+           && setsockopt(sock->handle, SOL_SOCKET, SO_SNDTIMEO,
+                         (const char*)&tv, sizeof(tv)) == 0;
+    if (!ok) sock->last_error = WSAGetLastError();
+    return ok;
+#else
+    struct timeval tv;
+    if (milliseconds > 0) {
+        tv.tv_sec  = milliseconds / 1000;
+        tv.tv_usec = (milliseconds % 1000) * 1000;
+    } else {
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
+    }
+    bool ok = setsockopt(sock->handle, SOL_SOCKET, SO_RCVTIMEO,
+                         &tv, sizeof(tv)) == 0
+           && setsockopt(sock->handle, SOL_SOCKET, SO_SNDTIMEO,
+                         &tv, sizeof(tv)) == 0;
+    if (!ok) sock->last_error = errno;
+    return ok;
+#endif
+}
+
 bool socket_bind(Socket* sock, const char* ip, uint16_t port) {
     if (!sock) return false;
     

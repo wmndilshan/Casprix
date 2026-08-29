@@ -138,6 +138,7 @@ Expr* create_new_expr(char* class_name, Expr** arguments, int arg_count, int lin
     expr->as.new_expr.class_name = class_name;
     expr->as.new_expr.arguments = arguments;
     expr->as.new_expr.arg_count = arg_count;
+    expr->as.new_expr.ctor_index = -1;  // resolved during semantic analysis
     return expr;
 }
 

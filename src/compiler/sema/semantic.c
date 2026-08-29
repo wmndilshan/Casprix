@@ -842,9 +842,29 @@ static void analyze_super_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
 }
 
+/* Score one candidate constructor against an already-analyzed argument list.
+ *   -1  : not a match (wrong arity, or an incompatible argument type)
+ *    0  : matches only via numeric/implicit conversions
+ *  >0  : number of arguments whose type is an exact match (higher == better)
+ * The exact-match count is the tiebreak between same-arity overloads; because
+ * types_compatible() treats every numeric type as interchangeable, that is the
+ * only signal available to disambiguate e.g. new Foo(1) between func Foo(x:int)
+ * and func Foo(x:f64). */
+static int score_constructor(MethodSymbol* ctor, Expr** args, int arg_count) {
+    if (ctor->param_count != arg_count) return -1;
+    int exact = 0;
+    for (int i = 0; i < arg_count; i++) {
+        DataType at = args[i]->data_type;
+        DataType pt = ctor->param_types[i];
+        if (at == TYPE_ERROR) { exact++; continue; }  /* don't let a bad arg veto */
+        if (!types_compatible(at, pt)) return -1;
+        if (at == pt) exact++;
+    }
+    return exact;
+}
+
 static void analyze_new_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     NewExpr* new_expr = &expr->as.new_expr;
-    MethodSymbol* constructor = NULL;
 
     // Look up the class
     ClassSymbol* class_sym = lookup_class(analyzer->symbols, new_expr->class_name);
@@ -855,7 +875,7 @@ static void analyze_new_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         expr->data_type = TYPE_ERROR;
         return;
     }
-    
+
     // Check if class is abstract
     if (class_sym->is_abstract) {
         char msg[256];
@@ -865,64 +885,109 @@ static void analyze_new_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         return;
     }
 
-    /* Prefer a constructor spelled with the class name, but keep legacy
-     * func new(...) support for compatibility. Constructors are matched only
-     * on the instantiated class itself, not inherited from parents. */
-    for (int i = 0; i < class_sym->method_count; i++) {
-        if (class_sym->methods[i].is_constructor &&
-            strcmp(class_sym->methods[i].name, class_sym->name) == 0) {
-            constructor = &class_sym->methods[i];
-            break;
-        }
+    /* Analyze arguments first — overload resolution needs their types. */
+    for (int i = 0; i < new_expr->arg_count; i++) {
+        analyze_expr(analyzer, new_expr->arguments[i]);
     }
-    if (!constructor) {
-        for (int i = 0; i < class_sym->method_count; i++) {
-            if (class_sym->methods[i].is_constructor) {
-                constructor = &class_sym->methods[i];
-                break;
-            }
+
+    /* Collect this class's constructor overloads, in declaration order.
+     * Constructors are matched only on the instantiated class itself, not
+     * inherited from parents. Both spellings — the class-name form and the
+     * legacy `func new` form — count as constructors. */
+    int ctor_positions[16];
+    int ctor_n = 0;
+    for (int i = 0; i < class_sym->method_count && ctor_n < 16; i++) {
+        if (class_sym->methods[i].is_constructor) {
+            ctor_positions[ctor_n++] = i;
         }
     }
 
-    if (!constructor) {
+    if (ctor_n == 0) {
         if (new_expr->arg_count == 0) {
+            new_expr->ctor_index = -1;
             expr->data_type = TYPE_CLASS;
+            if (expr->class_name) free(expr->class_name);
             expr->class_name = strdup(class_sym->name);
             return;
         }
-
-        {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "Class '%s' has no constructor", new_expr->class_name);
-            report_semantic_error(expr->line, expr->column, msg);
-            expr->data_type = TYPE_ERROR;
-            return;
-        }
-    }
-
-    // Validate argument count
-    if (new_expr->arg_count != constructor->param_count) {
         char msg[256];
-        snprintf(msg, sizeof(msg),
-                "Constructor expects %d argument(s), got %d",
-                constructor->param_count, new_expr->arg_count);
+        snprintf(msg, sizeof(msg), "Class '%s' has no constructor", new_expr->class_name);
         report_semantic_error(expr->line, expr->column, msg);
         expr->data_type = TYPE_ERROR;
         return;
     }
 
-    // Analyze and type-check arguments
-    for (int i = 0; i < new_expr->arg_count; i++) {
-        analyze_expr(analyzer, new_expr->arguments[i]);
+    /* Score every candidate; keep the best, and track ties at the best score. */
+    int best_score = -1;
+    int best_pos = -1;      /* method_count index */
+    int best_ctor_ord = -1; /* ordinal among constructors (0-based) */
+    int best_ties = 0;
+    for (int c = 0; c < ctor_n; c++) {
+        MethodSymbol* cand = &class_sym->methods[ctor_positions[c]];
+        int s = score_constructor(cand, new_expr->arguments, new_expr->arg_count);
+        if (s < 0) continue;
+        if (s > best_score) {
+            best_score = s;
+            best_pos = ctor_positions[c];
+            best_ctor_ord = c;
+            best_ties = 1;
+        } else if (s == best_score) {
+            best_ties++;
+        }
+    }
 
-        if (new_expr->arguments[i]->data_type != TYPE_ERROR &&
-            !types_compatible(new_expr->arguments[i]->data_type, constructor->param_types[i])) {
+    if (best_pos < 0) {
+        /* No overload has a compatible signature. */
+        char msg[320];
+        if (ctor_n == 1) {
+            MethodSymbol* only = &class_sym->methods[ctor_positions[0]];
+            if (only->param_count != new_expr->arg_count) {
+                snprintf(msg, sizeof(msg),
+                        "Constructor expects %d argument(s), got %d",
+                        only->param_count, new_expr->arg_count);
+            } else {
+                snprintf(msg, sizeof(msg),
+                        "No matching constructor for '%s': argument types do not match",
+                        new_expr->class_name);
+            }
+        } else {
+            snprintf(msg, sizeof(msg),
+                    "No matching constructor for '%s' with %d argument(s)",
+                    new_expr->class_name, new_expr->arg_count);
+        }
+        report_semantic_error(expr->line, expr->column, msg);
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    if (best_ties > 1) {
+        char msg[320];
+        snprintf(msg, sizeof(msg),
+                "Ambiguous constructor call for '%s' with %d argument(s): "
+                "%d overloads match equally well",
+                new_expr->class_name, new_expr->arg_count, best_ties);
+        report_semantic_error(expr->line, expr->column, msg);
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    MethodSymbol* constructor = &class_sym->methods[best_pos];
+
+    /* Record the selected overload for codegen. -1 when the class has a single
+     * constructor so codegen keeps emitting the legacy `Class_new` label. */
+    new_expr->ctor_index = (ctor_n > 1) ? best_ctor_ord : -1;
+
+    /* Narrowing / lossy-conversion diagnostics on the chosen signature. */
+    for (int i = 0; i < new_expr->arg_count; i++) {
+        DataType at = new_expr->arguments[i]->data_type;
+        if (at != TYPE_ERROR &&
+            !types_compatible(at, constructor->param_types[i])) {
             char msg[256];
             snprintf(msg, sizeof(msg),
                     "Type mismatch in argument %d (expected %s, got %s)",
                     i + 1,
                     type_to_string(constructor->param_types[i]),
-                    type_to_string(new_expr->arguments[i]->data_type));
+                    type_to_string(at));
             report_type_error(expr->line, expr->column, msg);
         }
     }
@@ -2550,8 +2615,22 @@ static void analyze_class_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
         ClassSymbol* prev_class = analyzer->current_class;
         analyzer->current_class = class_sym;
 
-        // Set current method for static validation
-        MethodSymbol* method_sym = find_method(class_sym, method->name);
+        // Set current method for static validation. find_method() returns the
+        // first symbol by name, which is wrong for an overloaded constructor
+        // set — pick the MethodSymbol whose arity/param types match this AST
+        // declaration so `current_method` reflects the body being analyzed.
+        MethodSymbol* method_sym = NULL;
+        for (int mi = 0; mi < class_sym->method_count; mi++) {
+            MethodSymbol* cand = &class_sym->methods[mi];
+            if (strcmp(cand->name, method->name) != 0) continue;
+            if (cand->param_count != method->param_count) continue;
+            bool same = true;
+            for (int pj = 0; pj < cand->param_count; pj++) {
+                if (cand->param_types[pj] != method->parameters[pj].type) { same = false; break; }
+            }
+            if (same) { method_sym = cand; break; }
+        }
+        if (!method_sym) method_sym = find_method(class_sym, method->name);
         MethodSymbol* prev_method = analyzer->current_method;
         analyzer->current_method = method_sym;
 

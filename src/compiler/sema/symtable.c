@@ -288,9 +288,17 @@ bool add_field_to_class(ClassSymbol* class_sym, const char* name, DataType type,
 
 bool add_method_to_class(ClassSymbol* class_sym, const char* name, DataType return_type,
                          DataType* param_types, int param_count, bool is_constructor, bool is_static, AccessModifier access) {
-    // Check for duplicate method in this class
+    // Check for duplicate method in this class. Constructors are exempt:
+    // multiple same-named constructors form an overload set resolved by
+    // argument count/type at each `new` call site (see resolve_constructor
+    // in semantic.c). Non-constructor overloading is still rejected — a
+    // duplicate spelling of a real named constructor (class-name form) and
+    // a matching-arity legacy `new` is caught in semantic.c instead.
     for (int i = 0; i < class_sym->method_count; i++) {
         if (strcmp(class_sym->methods[i].name, name) == 0) {
+            if (is_constructor && class_sym->methods[i].is_constructor) {
+                continue; // permit constructor overload
+            }
             return false; // Duplicate method
         }
     }

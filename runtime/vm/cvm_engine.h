@@ -145,6 +145,14 @@ typedef struct {
     /* Optional JIT bridge (NULL → no JIT) */
     CvmJitBridge*   jit;
 
+    /* Heap objects from MIR_OBJ_ALLOC. Unlike MIR_ALLOCA (frame-scoped), an
+     * object can outlive the frame that created it (returned, stored in a
+     * field, captured). The CVM has no GC/ARC, so these are simply held for
+     * the lifetime of the VM and released in cvm_state_destroy. */
+    void**          heap_objs;
+    int             heap_obj_count;
+    int             heap_obj_cap;
+
     /* Diagnostics */
     FILE*           diag;          /* NULL → stderr */
     int             trap_code;     /* non-zero on fatal trap */

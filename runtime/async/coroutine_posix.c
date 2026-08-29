@@ -39,11 +39,18 @@ Coroutine* coro_create(CoroutineEntry entry, void* context, size_t stack_size) {
     
     // x86-64 stacks grow downwards
     void* stack_top = (char*)coro->stack_base + stack_size;
-    
-    // Prepare the initial context on the new stack
-    // We'll push the wrapper and callee-saved registers
+
+    // Prepare the initial context on the new stack.
+    // coro_context_switch pops 6 callee-saved slots (48 bytes) then `ret`s (8),
+    // consuming 56 bytes total before coro_wrapper's first instruction runs.
+    // The SysV x86-64 ABI requires rsp ≡ 8 (mod 16) at a function's entry (the
+    // state right after a `call`). malloc()'d stack_base and stack_size are
+    // both 16-aligned, so we reserve one extra 8-byte gap here: 56 + 8 = 64,
+    // leaving entry rsp = stack_top - 8 ≡ 8 (mod 16). Without this, the compiler's
+    // aligned SSE/AVX stores (vmovdqa) in the entry function fault.
     void** sp = (void**)stack_top;
-    
+    --sp; // 16-byte alignment gap (see above)
+
     *(--sp) = (void*)coro_wrapper; // Return address for the first switch-in
     
     // Push callee-saved registers (dummy values for rbp, rbx, r12, r13, r14, r15)

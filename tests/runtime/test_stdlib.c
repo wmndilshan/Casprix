@@ -13,6 +13,7 @@
 
 #include "casprix/string_ops.h"
 #include "casprix/collections.h"
+#include "../../src/support/arena.h"  /* collections are arena-backed: nuwan_*_new(Arena*) */
 
 /* ---- Test helpers ---- */
 static int g_pass = 0, g_fail = 0;
@@ -112,10 +113,10 @@ static void test_strings(void) {
 /* ============================================================
  *  Section 2: NuwanList (cache-aligned, introsort, sum)
  * ========================================================== */
-static void test_list(void) {
+static void test_list(Arena* a) {
     printf("\n--- NuwanList ---\n");
 
-    NuwanList* l = nuwan_list_new();
+    NuwanList* l = nuwan_list_new(a);
     CHECK(l != NULL, "list_new");
     CHECK(nuwan_list_empty(l), "list_empty init");
 
@@ -135,7 +136,7 @@ static void test_list(void) {
     CHECK(got_sum == expected_sum, "list_sum SSE2");
 
     /* Sort */
-    NuwanList* sl = nuwan_list_new();
+    NuwanList* sl = nuwan_list_new(a);
     int64_t vals[] = {5, 3, 8, 1, 7, 2, 6, 4, 0, 9};
     for (int i = 0; i < 10; i++) nuwan_list_push(sl, vals[i]);
     nuwan_list_sort(sl);
@@ -163,10 +164,10 @@ static void test_list(void) {
 /* ============================================================
  *  Section 3: NuwanMap (Robin Hood hashmap)
  * ========================================================== */
-static void test_map(void) {
+static void test_map(Arena* a) {
     printf("\n--- NuwanMap (Robin Hood) ---\n");
 
-    NuwanMap* m = nuwan_map_new();
+    NuwanMap* m = nuwan_map_new(a);
     CHECK(m != NULL, "map_new");
     CHECK(nuwan_map_empty(m), "map_empty init");
 
@@ -210,9 +211,9 @@ static void test_map(void) {
 /* ============================================================
  *  Section 4: Stack, Queue, PriorityQueue
  * ========================================================== */
-static void test_stack(void) {
+static void test_stack(Arena* a) {
     printf("\n--- NuwanStack ---\n");
-    NuwanStack* s = nuwan_stack_new();
+    NuwanStack* s = nuwan_stack_new(a);
     nuwan_stack_push(s, 10);
     nuwan_stack_push(s, 20);
     nuwan_stack_push(s, 30);
@@ -224,9 +225,9 @@ static void test_stack(void) {
     nuwan_stack_free(s);
 }
 
-static void test_queue(void) {
+static void test_queue(Arena* a) {
     printf("\n--- NuwanQueue (ring-buffer) ---\n");
-    NuwanQueue* q = nuwan_queue_new();
+    NuwanQueue* q = nuwan_queue_new(a);
     for (int i = 0; i < 100; i++) nuwan_queue_enqueue(q, i);
     CHECK(nuwan_queue_size(q) == 100, "queue size 100");
     CHECK(nuwan_queue_peek(q) == 0,   "queue peek front");
@@ -240,9 +241,9 @@ static void test_queue(void) {
     nuwan_queue_free(q);
 }
 
-static void test_pq(void) {
+static void test_pq(Arena* a) {
     printf("\n--- NuwanPQ (binary min-heap) ---\n");
-    NuwanPQ* pq = nuwan_pq_new();
+    NuwanPQ* pq = nuwan_pq_new(a);
     nuwan_pq_push(pq, 5,  50);
     nuwan_pq_push(pq, 1,  10);
     nuwan_pq_push(pq, 3,  30);
@@ -258,7 +259,7 @@ static void test_pq(void) {
 /* ============================================================
  *  Performance micro-benchmark
  * ========================================================== */
-static void bench(void) {
+static void bench(Arena* a) {
     printf("\n--- Micro-benchmarks ---\n");
 
     /* String concat 1M times */
@@ -271,7 +272,7 @@ static void bench(void) {
     printf("  concat x1M:      %.1f ms\n", ms);
 
     /* List push+pop 1M */
-    NuwanList* l = nuwan_list_new();
+    NuwanList* l = nuwan_list_new(a);
     t0 = clock();
     for (int i = 0; i < 1000000; i++) nuwan_list_push(l, i);
     ms = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC;
@@ -289,7 +290,7 @@ static void bench(void) {
     nuwan_list_free(l);
 
     /* Map 100K inserts */
-    NuwanMap* m = nuwan_map_new();
+    NuwanMap* m = nuwan_map_new(a);
     char key[32];
     t0 = clock();
     for (int i = 0; i < 100000; i++) {
@@ -311,13 +312,21 @@ int main(void) {
     printf("  High-Performance Runtime Verification\n");
     printf("==============================================\n");
 
+    Arena* a = arena_create();
+    if (!a) {
+        printf("  [FATAL] arena_create() failed\n");
+        return 1;
+    }
+
     test_strings();
-    test_list();
-    test_map();
-    test_stack();
-    test_queue();
-    test_pq();
-    bench();
+    test_list(a);
+    test_map(a);
+    test_stack(a);
+    test_queue(a);
+    test_pq(a);
+    bench(a);
+
+    arena_destroy(a);
 
     printf("\n==============================================\n");
     int total = g_pass + g_fail;

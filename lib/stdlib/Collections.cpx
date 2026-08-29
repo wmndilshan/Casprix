@@ -95,7 +95,7 @@ class List {
 
     // Check if empty
     func isEmpty() -> bool {
-        return this.size;  // == 0
+        return this.size == 0;
     }
 
     // Clear all elements
@@ -105,7 +105,7 @@ class List {
 
     // Check if contains element
     func contains(item: int) -> bool {
-        return this.indexOf(item);  // >= 0
+        return this.indexOf(item) >= 0;
     }
 
     // Find index of element
@@ -205,7 +205,7 @@ class Map {
 
     // Check if empty
     func isEmpty() -> bool {
-        return this.size;  // == 0
+        return this.size == 0;
     }
 
     // Clear all entries
@@ -498,7 +498,7 @@ class LinkedList {
 
     // Check if empty
     func isEmpty() -> bool {
-        return this.size;  // == 0
+        return this.size == 0;
     }
 }
 

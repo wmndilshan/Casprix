@@ -6,6 +6,7 @@ set(RUNTIME_TEST_SRCS
     runtime/test_stdlib.c
     runtime/test_scheduler.c
     runtime/test_networking.c
+    runtime/test_net_hardening.c
     runtime/test_arc_gc.c
     runtime/benchmark.c
 )

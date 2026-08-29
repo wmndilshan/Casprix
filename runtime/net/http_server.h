@@ -59,6 +59,11 @@ bool http_server_listen(HttpServer* server);
 // Stop server
 void http_server_stop(HttpServer* server);
 
+// Handle a single already-accepted connection to completion (read request,
+// route, send response, close). Synchronous; normally called by the listen
+// loop's worker threads, but exposed for tests that drive a loopback socket.
+void http_server_handle_connection(HttpServer* server, Socket* client);
+
 // Helper functions for route handlers
 HttpResponse* http_response_ok(const char* body);
 HttpResponse* http_response_json(const char* json);

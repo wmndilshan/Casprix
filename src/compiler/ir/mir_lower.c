@@ -759,7 +759,20 @@ static const char* find_constructor_method_name(MirLowerCtx* ctx, const char* cl
 
 static MirValueId lower_new(MirLowerCtx* ctx, Expr* expr) {
     NewExpr* ne = &expr->as.new_expr;
-    MirValueId obj = mir_build_obj_alloc(&ctx->builder, ne->class_name, 64);
+
+    /* Use the real instance size from the class layout (8-byte object header
+     * + 8 bytes per field, per add_class/add_field_to_class). Falling back to
+     * a fixed 64 bytes silently corrupted memory for classes with 8+ fields;
+     * keep 64 only as a floor when the class symbol is unavailable. */
+    int obj_size = 64;
+    if (ctx->symtable) {
+        ClassSymbol* cs = lookup_class(ctx->symtable, ne->class_name);
+        if (cs && cs->instance_size > 0) {
+            obj_size = cs->instance_size < 16 ? 16 : cs->instance_size;
+        }
+    }
+
+    MirValueId obj = mir_build_obj_alloc(&ctx->builder, ne->class_name, obj_size);
     const char* ctor_method_name = find_constructor_method_name(ctx, ne->class_name);
 
     /* Call constructor if args present */

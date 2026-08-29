@@ -183,6 +183,9 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
                                 const char* func_name,
                                 MirValueId* arg_ids, int n_args);
 
+/* Forward-declare VM-lifetime heap object allocator (MIR_OBJ_ALLOC) */
+static void* cvm_heap_object_alloc(CvmState* vm, size_t size);
+
 static inline CvmReg cvm_reg_get(CvmState* vm, CvmFrame* frame, MirValueId id) {
     if (id == MIR_VALUE_NONE) return 0;
     if (CVM_UNLIKELY((int)id >= frame->reg_count)) {
@@ -377,7 +380,7 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
         /* [MIR_COPY]         */ &&op_copy,
         /* [MIR_ARC_RETAIN]   */ &&op_arc_retain,
         /* [MIR_ARC_RELEASE]  */ &&op_arc_release,
-        /* [MIR_OBJ_ALLOC]    */ &&op_nop,
+        /* [MIR_OBJ_ALLOC]    */ &&op_obj_alloc,
         /* [MIR_BORROW]       */ &&op_borrow,
         /* [MIR_BORROW_MUT]   */ &&op_borrow,
         /* [MIR_MOVE]         */ &&op_move,
@@ -574,6 +577,19 @@ op_store: {
         uint64_t val = REG(inst->as.mem.value);
         memcpy(ptr, &val, sizeof(val));
     }
+    NEXT_INST();
+}
+
+op_obj_alloc: {
+    /* Heap-allocate a zero-initialised object (vtable slot + fields all 0).
+     * VM-lifetime, not frame-scoped — see cvm_heap_object_alloc. */
+    int sz = inst->as.obj_alloc.size > 0 ? inst->as.obj_alloc.size : 64;
+    void* mem = cvm_heap_object_alloc(vm, (size_t)sz);
+    if (CVM_UNLIKELY(!mem)) {
+        vm->trap_code = 1;
+        goto done;
+    }
+    SET(inst->result, (CvmReg)(uintptr_t)mem);
     NEXT_INST();
 }
 
@@ -799,6 +815,13 @@ done:
                         vm->trap_code = 1;
                         goto done_sw;
                     }
+                    SET(inst->result, (CvmReg)(uintptr_t)mem);
+                    break;
+                }
+                case MIR_OBJ_ALLOC: {
+                    int sz = inst->as.obj_alloc.size > 0 ? inst->as.obj_alloc.size : 64;
+                    void* mem = cvm_heap_object_alloc(vm, (size_t)sz);
+                    if (!mem) { vm->trap_code = 1; goto done_sw; }
                     SET(inst->result, (CvmReg)(uintptr_t)mem);
                     break;
                 }
@@ -1072,8 +1095,28 @@ CvmState* cvm_state_create(MirModule* module, CvmJitBridge* jit) {
     return vm;
 }
 
+/* Allocate a zero-initialised heap object and keep it alive for the VM's
+ * lifetime (see the heap_objs comment in CvmState). Returns NULL on OOM. */
+static void* cvm_heap_object_alloc(CvmState* vm, size_t size) {
+    if (size < 16) size = 16;   /* object header + at least one slot */
+    void* mem = calloc(1, size);
+    if (!mem) return NULL;
+    if (vm->heap_obj_count >= vm->heap_obj_cap) {
+        int new_cap = vm->heap_obj_cap ? vm->heap_obj_cap * 2 : 16;
+        void** grown = (void**)realloc(vm->heap_objs,
+                                      (size_t)new_cap * sizeof(void*));
+        if (!grown) { free(mem); return NULL; }
+        vm->heap_objs = grown;
+        vm->heap_obj_cap = new_cap;
+    }
+    vm->heap_objs[vm->heap_obj_count++] = mem;
+    return mem;
+}
+
 void cvm_state_destroy(CvmState* vm) {
     if (!vm) return;
+    for (int i = 0; i < vm->heap_obj_count; i++) free(vm->heap_objs[i]);
+    free(vm->heap_objs);
     free(vm->profiles);
     free(vm);
 }

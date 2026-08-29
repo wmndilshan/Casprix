@@ -16,6 +16,22 @@
 #define CAST_ZU(x) (x)
 #endif
 
+/*
+ * send(2) may write fewer bytes than requested. The old `socket_send(...) < 0`
+ * check let a short write through as success, truncating the request on the
+ * wire. Loop until the whole buffer is sent or the connection fails.
+ */
+static bool http_send_all(Socket* sock, const void* buf, size_t len) {
+    const char* p = (const char*)buf;
+    size_t sent = 0;
+    while (sent < len) {
+        int n = socket_send(sock, p + sent, len - sent);
+        if (n <= 0) return false;
+        sent += (size_t)n;
+    }
+    return true;
+}
+
 static const char* method_to_string(HttpMethod method) {
     switch (method) {
         case HTTP_GET: return "GET";
@@ -94,13 +110,13 @@ bool http_client_send_request(HttpClient* client, const HttpRequest* request) {
     offset += snprintf(buffer + offset, sizeof(buffer) - offset, "\r\n");
     
     // Send headers
-    if (socket_send(client->socket, buffer, offset) < 0) {
+    if (!http_send_all(client->socket, buffer, (size_t)offset)) {
         return false;
     }
-    
+
     // Send body if exists
     if (request->body && request->body_length > 0) {
-        if (socket_send(client->socket, request->body, request->body_length) < 0) {
+        if (!http_send_all(client->socket, request->body, request->body_length)) {
             return false;
         }
     }
