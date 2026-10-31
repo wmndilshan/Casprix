@@ -1,0 +1,11 @@
+func classify(value: int) -> int {
+    match value {
+        0..5 => { return 10; }
+        5..=9 => { return 20; }
+        _ => { return 30; }
+    }
+}
+
+func main() -> int {
+    return classify(7) - 20;
+}

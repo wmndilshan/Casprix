@@ -1,0 +1,25 @@
+class Flag {
+    public mut value: i32
+
+    public func Flag(value: i32) -> void {
+        this.value = value
+    }
+
+    public func Flag(left: i32, right: i32) -> void {
+        this.value = left + right
+    }
+
+    public func enabled() -> bool {
+        return this.value > 0
+    }
+}
+
+func verify() -> int {
+    let one = new Flag(1)
+    let two = new Flag(1, 1)
+    if one.enabled() && two.enabled() { return 0 }
+    if !one.enabled() || !two.enabled() { return 1 }
+    return 2
+}
+
+let result = verify()

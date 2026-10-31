@@ -15,7 +15,7 @@
  */
 
 #include "attention.h"
-#include "ops.h"
+#include "../kernels/cpu_ops.h"
 
 #include <assert.h>
 #include <math.h>    /* expf, fmaxf */

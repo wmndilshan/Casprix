@@ -3,7 +3,7 @@
  */
 
 #include "training.h"
-#include "ops.h"
+#include "../kernels/cpu_ops.h"
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
@@ -11,81 +11,23 @@
 // ===== ADAM OPTIMIZER =====
 
 AdamOptimizer* adam_create(i32 num_params, f32 lr, f32 beta1, f32 beta2) {
-    AdamOptimizer* opt = (AdamOptimizer*)malloc(sizeof(AdamOptimizer));
-    
-    opt->learning_rate = lr;
-    opt->beta1 = beta1;
-    opt->beta2 = beta2;
-    opt->epsilon = 1e-8f;
-    opt->weight_decay = 0.01f;
-    opt->t = 0;
-    opt->num_params = num_params;
-    
-    // Allocate moment arrays
-    opt->m = (Tensor**)calloc(num_params, sizeof(Tensor*));
-    opt->v = (Tensor**)calloc(num_params, sizeof(Tensor*));
-    
-    return opt;
+    AiOptimizerConfig config = ai_optimizer_default_config(AI_OPTIMIZER_ADAM, lr);
+    config.beta1 = beta1;
+    config.beta2 = beta2;
+    config.weight_decay = 0.01f;
+    return ai_optimizer_create(AI_OPTIMIZER_ADAM, num_params, config);
 }
 
 void adam_init_param(AdamOptimizer* opt, i32 param_idx, const i32* shape, i32 ndim) {
-    opt->m[param_idx] = tensor_create(ndim, shape);
-    opt->v[param_idx] = tensor_create(ndim, shape);
-    
-    tensor_zeros(opt->m[param_idx]);
-    tensor_zeros(opt->v[param_idx]);
+    (void)ai_optimizer_init_state(opt, param_idx, ndim, shape);
 }
 
 void adam_step(AdamOptimizer* opt, Tensor** params, Tensor** grads) {
-    opt->t++;
-    
-    // Bias correction terms
-    f32 bias_correction1 = 1.0f - powf(opt->beta1, (f32)opt->t);
-    f32 bias_correction2 = 1.0f - powf(opt->beta2, (f32)opt->t);
-    
-    for (i32 i = 0; i < opt->num_params; i++) {
-        if (!params[i] || !grads[i]) continue;
-        
-        Tensor* param = params[i];
-        Tensor* grad = grads[i];
-        Tensor* m = opt->m[i];
-        Tensor* v = opt->v[i];
-        
-        // Update biased first moment: m = beta1 * m + (1 - beta1) * grad
-        for (size_t j = 0; j < param->size; j++) {
-            m->data[j] = opt->beta1 * m->data[j] + (1.0f - opt->beta1) * grad->data[j];
-        }
-        
-        // Update biased second moment: v = beta2 * v + (1 - beta2) * grad^2
-        for (size_t j = 0; j < param->size; j++) {
-            v->data[j] = opt->beta2 * v->data[j] + (1.0f - opt->beta2) * grad->data[j] * grad->data[j];
-        }
-        
-        // Update parameters
-        for (size_t j = 0; j < param->size; j++) {
-            f32 m_hat = m->data[j] / bias_correction1;
-            f32 v_hat = v->data[j] / bias_correction2;
-            
-            // Weight decay (L2 regularization)
-            f32 update = m_hat / (sqrtf(v_hat) + opt->epsilon);
-            update += opt->weight_decay * param->data[j];
-            
-            param->data[j] -= opt->learning_rate * update;
-        }
-    }
+    (void)ai_optimizer_step(opt, params, grads);
 }
 
 void adam_destroy(AdamOptimizer* opt) {
-    if (!opt) return;
-    
-    for (i32 i = 0; i < opt->num_params; i++) {
-        tensor_destroy(opt->m[i]);
-        tensor_destroy(opt->v[i]);
-    }
-    
-    free(opt->m);
-    free(opt->v);
-    free(opt);
+    ai_optimizer_destroy(opt);
 }
 
 // ===== LEARNING RATE SCHEDULE =====
@@ -109,7 +51,9 @@ f32 lr_schedule_warmup_cosine(i32 step, i32 warmup_steps, i32 max_steps,
 // ===== DATA LOADING =====
 
 DataLoader* dataloader_create(Dataset* ds, i32 batch_size, bool shuffle) {
+    if (!ds || !ds->data || batch_size <= 0) return NULL;
     DataLoader* loader = (DataLoader*)malloc(sizeof(DataLoader));
+    if (!loader) return NULL;
     
     loader->dataset = ds;
     loader->batch_size = batch_size;
@@ -125,6 +69,9 @@ DataLoader* dataloader_create(Dataset* ds, i32 batch_size, bool shuffle) {
 }
 
 bool dataloader_next_batch(DataLoader* loader, i32** batch_out, i32** targets_out) {
+    if (!loader || !batch_out || !targets_out) return false;
+    *batch_out = NULL;
+    *targets_out = NULL;
     Dataset* ds = loader->dataset;
     i32 batch_size = loader->batch_size;
     i32 seq_len = loader->seq_length;
@@ -137,10 +84,20 @@ bool dataloader_next_batch(DataLoader* loader, i32** batch_out, i32** targets_ou
     // Allocate batch arrays
     *batch_out = (i32*)malloc(batch_size * seq_len * sizeof(i32));
     *targets_out = (i32*)malloc(batch_size * seq_len * sizeof(i32));
+    if (!*batch_out || !*targets_out) {
+        free(*batch_out); free(*targets_out);
+        *batch_out = NULL; *targets_out = NULL;
+        return false;
+    }
     
     // Fill batch
     for (i32 b = 0; b < batch_size; b++) {
         const i32* sequence = dataset_get_sequence(ds, loader->current_idx + b);
+        if (!sequence) {
+            free(*batch_out); free(*targets_out);
+            *batch_out = NULL; *targets_out = NULL;
+            return false;
+        }
         
         // Copy input (tokens 0 to seq_len-1)
         memcpy((*batch_out) + b * seq_len, sequence, seq_len * sizeof(i32));
@@ -158,6 +115,7 @@ bool dataloader_next_batch(DataLoader* loader, i32** batch_out, i32** targets_ou
 }
 
 void dataloader_reset(DataLoader* loader) {
+    if (!loader) return;
     loader->current_idx = 0;
     
     if (loader->shuffle) {

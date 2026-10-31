@@ -1,5 +1,5 @@
 /*
- * main.c — Command-line interface for the Casperix APK Builder
+ * main.c — Command-line interface for the Casprix APK Builder
  *
  * Usage:
  *   apk-builder [options] --input <file.cpx>

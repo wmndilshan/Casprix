@@ -1,5 +1,5 @@
 /*
- * Scene Graph — Retained-mode rendering tree for Casperix UI
+ * Scene Graph — Retained-mode rendering tree for Casprix UI
  *
  * Hierarchical node tree with:
  *   - Transform propagation (translate, scale, rotate)

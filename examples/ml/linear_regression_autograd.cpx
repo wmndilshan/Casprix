@@ -1,0 +1,43 @@
+// Real-world-style regression using the high-level dynamic graph API.
+import "lib/std/ai/tensor.cpx"
+extern func exit(code: i32) -> void
+
+func main() -> int {
+    let ai: AIContext = new AIContext()
+    let features: Tensor = ai.createTensor(5, 1)
+    let targets: Tensor = ai.createTensor(5, 1)
+    let weight: Tensor = ai.parameter(1, 1, 0.0f32)
+    let bias: Tensor = ai.parameter(1, 1, 0.0f32)
+
+    features.set(0, -2.0f32)
+    features.set(1, -1.0f32)
+    features.set(2, 0.0f32)
+    features.set(3, 1.0f32)
+    features.set(4, 2.0f32)
+    targets.set(0, -4.0f32)
+    targets.set(1, -1.0f32)
+    targets.set(2, 2.0f32)
+    targets.set(3, 5.0f32)
+    targets.set(4, 8.0f32)
+
+    // y = xw + b. Backward follows the dependency graph automatically.
+    mut finalLoss: f32 = 0.0f32
+    for epoch in 0..160 {
+        ai.nextStep()
+        let linear: Tensor = features.matmul(&weight)
+        let prediction: Tensor = linear.add(&bias)
+        let loss: Tensor = prediction.mse(&targets)
+        if !loss.backward() { return 1 }
+        finalLoss = loss.get(0)
+        ai.step(&weight, 0.08f32)
+        ai.step(&bias, 0.08f32)
+    }
+
+    print(finalLoss)
+    print(weight.get(0))
+    print(bias.get(0))
+    if !weight.isNear(0, 3.0f32, 0.02f32) { exit(2) }
+    if !bias.isNear(0, 2.0f32, 0.02f32) { exit(3) }
+    ai.destroy()
+    return 0
+}

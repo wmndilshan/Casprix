@@ -1,4 +1,4 @@
-// Casperix Runtime - Ownership & Borrow Checker Implementation
+// Casprix Runtime - Ownership & Borrow Checker Implementation
 // Debug-mode runtime borrow checking
 
 #include "ownership.h"

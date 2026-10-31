@@ -9,7 +9,7 @@
  *   gcc -O2 -I runtime/ai/llm \
  *       tests/runtime/test_grad_checkpoint.c \
  *       runtime/ai/llm/training.c runtime/ai/llm/transformer.c \
- *       runtime/ai/llm/tensor.c runtime/ai/llm/ops.c runtime/ai/llm/tokenizer.c \
+ *       runtime/ai/core/tensor.c runtime/ai/kernels/cpu_ops.c runtime/ai/llm/tokenizer.c \
  *       -lm -o test_grad_checkpoint
  */
 

@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Event Loop
+ * Casprix Runtime - Event Loop
  * Platform-agnostic event loop for async I/O
  */
 
@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 
 // Event types
@@ -20,13 +21,14 @@ typedef enum {
 // Forward declarations
 typedef struct EventLoop EventLoop;
 typedef struct EventWatcher EventWatcher;
+typedef intptr_t EventHandle;
 
 // Event callback
 typedef void (*EventCallback)(EventWatcher* watcher, int events, void* user_data);
 
 // Event watcher (for file descriptors/sockets)
 struct EventWatcher {
-    int fd;
+    EventHandle handle;
     int events;           // Events to watch (EVENT_READ | EVENT_WRITE)
     EventCallback callback;
     void* user_data;
@@ -35,15 +37,6 @@ struct EventWatcher {
 
 // Timer callback
 typedef void (*TimerCallback)(void* user_data);
-
-// Event loop structure
-struct EventLoop {
-    void* backend_data;   // Platform-specific data
-    bool running;
-    int watcher_count;
-    EventWatcher** watchers;
-    int watcher_capacity;
-};
 
 // Create event loop
 EventLoop* event_loop_create(void);
@@ -58,13 +51,13 @@ void event_loop_run(EventLoop* loop);
 void event_loop_stop(EventLoop* loop);
 
 // Add watcher for file descriptor
-bool event_loop_add_watcher(EventLoop* loop, int fd, int events, EventCallback callback, void* user_data);
+bool event_loop_add_watcher(EventLoop* loop, EventHandle handle, int events, EventCallback callback, void* user_data);
 
 // Remove watcher
-bool event_loop_remove_watcher(EventLoop* loop, int fd);
+bool event_loop_remove_watcher(EventLoop* loop, EventHandle handle);
 
 // Modify watcher events
-bool event_loop_modify_watcher(EventLoop* loop, int fd, int events);
+bool event_loop_modify_watcher(EventLoop* loop, EventHandle handle, int events);
 
 // Add timer (returns timer ID)
 uint64_t event_loop_add_timer(EventLoop* loop, uint64_t delay_ms, TimerCallback callback, void* user_data, bool repeating);

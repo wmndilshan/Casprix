@@ -1,5 +1,5 @@
 /**
- * DataLoader
+ * NnDataLoader
  * 
  * Efficient batching and shuffling for training
  */
@@ -8,7 +8,7 @@
 #define NN_DATALOADER_H
 
 #include "dataset.h"
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 typedef struct {
-    Dataset* dataset;
+    NnDataset* dataset;
     int batch_size;
     bool shuffle;
     bool drop_last;      /* Drop last incomplete batch */
@@ -25,16 +25,16 @@ typedef struct {
     int* indices;        /* Shuffled indices */
     int current_idx;     /* Current position */
     int num_batches;
-} DataLoader;
+} NnDataLoader;
 
 /**
  * Create dataloader
- * @param dataset Dataset to load from
+ * @param dataset NnDataset to load from
  * @param batch_size Batch size
  * @param shuffle Whether to shuffle data
  * @param drop_last Drop incomplete last batch
  */
-DataLoader* dataloader_create(Dataset* dataset, int batch_size, 
+NnDataLoader* nn_dataloader_create(NnDataset* dataset, int batch_size,
                               bool shuffle, bool drop_last);
 
 /**
@@ -43,22 +43,22 @@ DataLoader* dataloader_create(Dataset* dataset, int batch_size,
  * @param batch_y Output target batch [batch_size, ...]
  * @return true if batch retrieved, false if epoch ended
  */
-bool dataloader_next(DataLoader* loader, Tensor** batch_x, Tensor** batch_y);
+bool nn_dataloader_next(NnDataLoader* loader, Tensor** batch_x, Tensor** batch_y);
 
 /**
  * Reset dataloader (shuffle if enabled)
  */
-void dataloader_reset(DataLoader* loader);
+void nn_dataloader_reset(NnDataLoader* loader);
 
 /**
  * Get number of batches
  */
-int dataloader_num_batches(DataLoader* loader);
+int nn_dataloader_num_batches(NnDataLoader* loader);
 
 /**
  * Free dataloader
  */
-void dataloader_free(DataLoader* loader);
+void nn_dataloader_free(NnDataLoader* loader);
 
 #ifdef __cplusplus
 }

@@ -57,6 +57,9 @@ struct ClassSymbol {
     int method_count;
     int instance_size;  // Total size in bytes (VTable pointer + all fields)
     char* return_class_name;  // For methods that return a class type
+    bool is_enum;
+    char** enum_variants;
+    int enum_variant_count;
 };
 
 // Trait method signature (required-method contract)
@@ -101,6 +104,9 @@ typedef struct {
     DataType* closure_capture_types;
     int closure_lambda_id;
     bool is_heap_allocated;
+    bool is_enum_variant;
+    int64_t const_int_value;
+    char* enum_name;
 
     // For classes
     ClassSymbol* class_info;
@@ -108,7 +114,7 @@ typedef struct {
     // For traits
     TraitSymbol* trait_info;
 
-    // Ownership tracking (Casperix)
+    // Ownership tracking (Casprix)
     void* ownership_data;  // Points to OwnershipInfo structure
 } Symbol;
 

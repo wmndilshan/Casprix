@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Future/Promise Implementation
+ * Casprix Runtime - Future/Promise Implementation
  * Represents the eventual result of an async operation
  */
 
@@ -56,6 +56,10 @@ void* future_wait(Future* future);
 
 // Check if future is ready
 bool future_is_ready(const Future* future);
+
+// Read terminal state/error under the future's synchronization lock.
+FutureState future_get_state(const Future* future);
+void* future_get_error(const Future* future);
 
 // Destroy a future
 void future_destroy(Future* future);

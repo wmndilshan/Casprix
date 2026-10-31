@@ -3,11 +3,11 @@
  */
 
 #include "attention.h"
-#include "../../llm/ops.h"
+#include "../../kernels/cpu_ops.h"
 #include <stdlib.h>
 #include <math.h>
 
-MultiHeadAttention* attention_create(int embed_dim, int num_heads, float dropout_rate) {
+MultiHeadAttention* nn_attention_create(int embed_dim, int num_heads, float dropout_rate) {
     MultiHeadAttention* attn = (MultiHeadAttention*)calloc(1, sizeof(MultiHeadAttention));
     
     attn->embed_dim = embed_dim;
@@ -30,7 +30,7 @@ MultiHeadAttention* attention_create(int embed_dim, int num_heads, float dropout
     return attn;
 }
 
-void attention_forward(MultiHeadAttention* attn,
+void nn_attention_forward(MultiHeadAttention* attn,
                       const Tensor* query, const Tensor* key, const Tensor* value,
                       const Tensor* mask, Tensor* output) {
     /* query, key, value: [batch, seq_len, embed_dim] */
@@ -162,7 +162,7 @@ void attention_forward(MultiHeadAttention* attn,
     tensor_destroy(context);
 }
 
-void attention_free(MultiHeadAttention* attn) {
+void nn_attention_free(MultiHeadAttention* attn) {
     if (!attn) return;
     
     dense_free(attn->query_proj);

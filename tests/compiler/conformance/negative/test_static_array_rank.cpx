@@ -1,0 +1,4 @@
+func main() -> int {
+    let values: [int; 3] = [1, 2];
+    return 0;
+}

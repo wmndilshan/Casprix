@@ -1,0 +1,33 @@
+import "lib/std/ai/tensor.cpx"
+import "lib/std/ai/internal/data_native.cpx"
+
+class TokenBatch {
+    private mut handle: rawptr
+
+    public func TokenBatch(nativeHandle: rawptr) -> void { this.handle = nativeHandle }
+    public func inputs(context: &AIContext) -> Tensor {
+        return new Tensor(cpx_ai_token_batch_inputs(this.handle, context.handle))
+    }
+    public func targets(context: &AIContext) -> Tensor {
+        return new Tensor(cpx_ai_token_batch_targets(this.handle, context.handle))
+    }
+    public func destroy() -> void { cpx_ai_token_batch_destroy(this.handle) }
+}
+
+class TokenStream {
+    private mut handle: rawptr
+
+    public func TokenStream(path: &string, batchSize: i32) -> void {
+        this.handle = cpx_ai_token_stream_open(path, batchSize)
+    }
+    public func next() -> TokenBatch {
+        return new TokenBatch(cpx_ai_token_stream_next(this.handle))
+    }
+    public func sequenceLength() -> i32 {
+        return cpx_ai_token_stream_sequence_length(this.handle)
+    }
+    public func vocabularySize() -> i32 {
+        return cpx_ai_token_stream_vocabulary_size(this.handle)
+    }
+    public func destroy() -> void { cpx_ai_token_stream_close(this.handle) }
+}

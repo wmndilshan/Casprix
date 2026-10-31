@@ -70,6 +70,7 @@ typedef struct {
 } CompileCtx;
 
 static bool g_link_needs_skia = false;
+static bool g_link_needs_ai_core = false;
 
 static void compile_ctx_init(CompileCtx* ctx) {
     memset(ctx, 0, sizeof(*ctx));
@@ -116,6 +117,13 @@ static bool module_requires_skia_runtime(const char* module_name) {
     return str_starts_with(module_name, "lib/skia/");
 }
 
+static bool module_requires_ai_core(const char* module_name) {
+    if (!module_name || !*module_name) return false;
+    return strcmp(module_name, "lib/std/ai/tensor.cpx") == 0 ||
+           strcmp(module_name, "lib/std/ai/tensor") == 0 ||
+           strcmp(module_name, "std/ai/tensor") == 0;
+}
+
 static MirBackendConfig make_mir_backend_config(const char* output_path) {
     MirBackendConfig cfg = {
         .target        = MIR_TARGET_X86_64,
@@ -125,6 +133,7 @@ static MirBackendConfig make_mir_backend_config(const char* output_path) {
         .pic           = false,
         .size_opt      = g_config.size_opt,
         .output_path   = output_path,
+        .entry_symbol  = g_config.c_entry_symbol,
     };
     switch (g_config.output_kind) {
         case OUTPUT_VM:
@@ -165,6 +174,7 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     compile_ctx_init(&ctx);
     int result = 0;
     g_link_needs_skia = false;
+    g_link_needs_ai_core = false;
 
     ctx.source = driver_read_file(source_path);
     source_map_add_file(&g_diag.source_map, source_path,
@@ -251,6 +261,8 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
                     CPX_INFO("Found include/import: %s", incl->module_name);
                     if (module_requires_skia_runtime(incl->module_name))
                         g_link_needs_skia = true;
+                    if (module_requires_ai_core(incl->module_name))
+                        g_link_needs_ai_core = true;
                     Module* mod = load_module(&ctx.module_registry, incl->module_name, (void*)source_path);
                     if (mod) {
                         modules_loaded++;
@@ -266,8 +278,9 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         for (int i = 0; i < ctx.module_registry.count; i++) {
             if (module_requires_skia_runtime(ctx.module_registry.modules[i].name)) {
                 g_link_needs_skia = true;
-                break;
             }
+            if (module_requires_ai_core(ctx.module_registry.modules[i].name))
+                g_link_needs_ai_core = true;
         }
 
         int total_stmts = ctx.stmt_count;
@@ -283,8 +296,12 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
                 mod->statements[j] = NULL;
             }
         }
+        /* Keep import nodes in the merged AST.  The semantic and lowering
+         * passes intentionally ignore STMT_INCLUDE, but retaining the nodes
+         * preserves import metadata (including aliases) for AST/debug users
+         * after module resolution. */
         for (int i = 0; i < ctx.stmt_count; i++)
-            if (ctx.statements[i] && ctx.statements[i]->type != STMT_INCLUDE)
+            if (ctx.statements[i])
                 all_statements[idx++] = ctx.statements[i];
         free(ctx.statements);
         ctx.statements = all_statements;
@@ -697,8 +714,11 @@ static bool find_prebuilt_lib_path(const char* name, char* out, size_t outsz) {
 
     static const char* dirs[] = {
         "build",
+        "build-gcc",
         "../build",
+        "../build-gcc",
         "../../build",
+        "../../build-gcc",
         "../../build/Release",
         "../../build/Debug",
         "build/Release",
@@ -745,6 +765,7 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
                        find_lib_next_to_path(exe_path, "libskia_c.a", skia_c_path, sizeof(skia_c_path)) ||
                        find_prebuilt_lib_path("libskia_c.a", skia_c_path, sizeof(skia_c_path));
     bool need_skia = g_link_needs_skia;
+    bool need_ai_core = g_link_needs_ai_core;
     bool have_skia = have_skia_gui && have_skia_c;
 
     char runtime_flags[1536] = "";
@@ -775,14 +796,26 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
         /* No prebuilt runtime: compile a minimal subset next to the repo root. */
         char root[1024];
         if (find_source_root_for_runtime(root, sizeof(root))) {
-            snprintf(inline_sources, sizeof(inline_sources),
-                     "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
-                     "\"%s/runtime/memory/ownership.c\" \"%s/runtime/object.c\"",
-                     root, root, root, root);
+            if (need_ai_core) {
+                snprintf(inline_sources, sizeof(inline_sources),
+                         "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
+                         "\"%s/runtime/memory/ownership.c\" \"%s/runtime/object.c\" "
+                         "\"%s/runtime/ai/core/tensor.c\" \"%s/runtime/ai/core/autograd.c\" "
+                         "\"%s/runtime/ai/core/bindings.c\"",
+                         root, root, root, root, root, root, root);
+            } else {
+                snprintf(inline_sources, sizeof(inline_sources),
+                         "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
+                         "\"%s/runtime/memory/ownership.c\" \"%s/runtime/object.c\"",
+                         root, root, root, root);
+            }
         } else {
             snprintf(inline_sources, sizeof(inline_sources),
                      "runtime/memory/arc.c runtime/memory/cycle_gc.c "
-                     "runtime/memory/ownership.c runtime/object.c");
+                     "runtime/memory/ownership.c runtime/object.c%s",
+                     need_ai_core
+                         ? " runtime/ai/core/tensor.c runtime/ai/core/autograd.c runtime/ai/core/bindings.c"
+                         : "");
         }
 
         if (need_skia) {
@@ -796,6 +829,9 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
                      skia_gui_path, skia_c_path);
 #endif
         }
+        if (need_ai_core)
+            snprintf(runtime_flags + strlen(runtime_flags),
+                     sizeof(runtime_flags) - strlen(runtime_flags), " -lm");
     }
 
     char stdlib_flags[256] = "";

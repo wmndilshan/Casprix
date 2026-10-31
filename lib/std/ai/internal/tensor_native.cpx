@@ -1,0 +1,32 @@
+// Private ABI for the general tensor/autograd backend.
+extern func cpx_ai_graph_create() -> rawptr
+extern func cpx_ai_graph_destroy(graph: rawptr) -> void
+extern func cpx_ai_tensor(graph: rawptr, rows: i32, cols: i32, requires_grad: i32) -> rawptr
+extern func cpx_ai_parameter(graph: rawptr, rows: i32, cols: i32, initial: f32) -> rawptr
+extern func cpx_ai_parameter_normal(graph: rawptr, rows: i32, cols: i32, deviation: f32, seed: i32) -> rawptr
+extern func cpx_ai_set(value: rawptr, index: i32, number: f32) -> void
+extern func cpx_ai_get(value: rawptr, index: i32) -> f32
+extern func cpx_ai_grad(value: rawptr, index: i32) -> f32
+extern func cpx_ai_is_near(value: rawptr, index: i32, expected: f32, tolerance: f32) -> i32
+extern func cpx_ai_add(a: rawptr, b: rawptr) -> rawptr
+extern func cpx_ai_sub(a: rawptr, b: rawptr) -> rawptr
+extern func cpx_ai_mul(a: rawptr, b: rawptr) -> rawptr
+extern func cpx_ai_matmul(a: rawptr, b: rawptr) -> rawptr
+extern func cpx_ai_relu(value: rawptr) -> rawptr
+extern func cpx_ai_sigmoid(value: rawptr) -> rawptr
+extern func cpx_ai_mean(value: rawptr) -> rawptr
+extern func cpx_ai_mse(prediction: rawptr, target: rawptr) -> rawptr
+extern func cpx_ai_embedding(tokenIds: rawptr, table: rawptr) -> rawptr
+extern func cpx_ai_layer_norm(value: rawptr, gamma: rawptr, beta: rawptr, epsilon: f32) -> rawptr
+extern func cpx_ai_causal_attention(query: rawptr, key: rawptr, value: rawptr, heads: i32, sequence: i32) -> rawptr
+extern func cpx_ai_cross_entropy(logits: rawptr, targetIds: rawptr) -> rawptr
+extern func cpx_ai_backward(loss: rawptr) -> i32
+extern func cpx_ai_sgd(parameter: rawptr, learningRate: f32) -> void
+extern func cpx_ai_zero_grad(graph: rawptr) -> void
+extern func cpx_ai_next_step(graph: rawptr) -> void
+
+extern func cpx_ai_adamw_create(count: i32, learningRate: f32, beta1: f32, beta2: f32, decay: f32) -> rawptr
+extern func cpx_ai_adamw_add(optimizer: rawptr, index: i32, parameter: rawptr) -> i32
+extern func cpx_ai_adamw_step(optimizer: rawptr) -> i32
+extern func cpx_ai_adamw_set_lr(optimizer: rawptr, learningRate: f32) -> void
+extern func cpx_ai_adamw_destroy(optimizer: rawptr) -> void

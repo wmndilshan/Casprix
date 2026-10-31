@@ -17,11 +17,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define VERSION "1.0.0"
+#ifndef CASPRIX_VERSION
+#define CASPRIX_VERSION "development"
+#endif
 
 static void print_usage() {
-    printf("Casperix Package Manager v%s\n\n", VERSION);
-    printf("Usage: cpkg <command> [options]\n\n");
+    printf("Casprix Package Manager v%s\n\n", CASPRIX_VERSION);
+    printf("Usage: casprix-pkg <command> [options]\n\n");
     printf("Commands:\n");
     printf("  init [name]              Initialize new package\n");
     printf("  install [package]        Install package(s)\n");
@@ -91,7 +93,7 @@ static int cmd_update(int argc, char** argv) {
 
 static int cmd_remove(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: cpkg remove <package>\n");
+        fprintf(stderr, "Usage: casprix-pkg remove <package>\n");
         return 1;
     }
     
@@ -123,7 +125,7 @@ static int cmd_list(int argc, char** argv) {
 
 static int cmd_search(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: cpkg search <query>\n");
+        fprintf(stderr, "Usage: casprix-pkg search <query>\n");
         return 1;
     }
     
@@ -152,7 +154,7 @@ static int cmd_search(int argc, char** argv) {
 
 static int cmd_info(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: cpkg info <package>\n");
+        fprintf(stderr, "Usage: casprix-pkg info <package>\n");
         return 1;
     }
     
@@ -260,7 +262,7 @@ static int cmd_publish(int argc, char** argv) {
 
 static int cmd_unpublish(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: cpkg unpublish <version>\n");
+        fprintf(stderr, "Usage: casprix-pkg unpublish <version>\n");
         return 1;
     }
     
@@ -279,7 +281,7 @@ static int cmd_unpublish(int argc, char** argv) {
 
 static int cmd_cache(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: cpkg cache <list|clean>\n");
+        fprintf(stderr, "Usage: casprix-pkg cache <list|clean>\n");
         return 1;
     }
     
@@ -311,7 +313,7 @@ static int cmd_cache(int argc, char** argv) {
 
 static int cmd_version(int argc, char** argv) {
     (void)argc; (void)argv;
-    printf("cpkg version %s\n", VERSION);
+    printf("casprix-pkg %s\n", CASPRIX_VERSION);
     return 0;
 }
 

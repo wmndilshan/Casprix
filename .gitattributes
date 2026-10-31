@@ -73,6 +73,9 @@ LICENSE     text eol=lf
 CHANGELOG*  text eol=lf
 README*     text eol=lf
 CONTRIBUTING* text eol=lf
+VERSION       text eol=lf
+.github/CODEOWNERS text eol=lf
+CMakePresets.json text eol=lf
 
 # -------------------------------------------------------------
 # IDE / tooling config (always LF)

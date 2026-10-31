@@ -31,7 +31,7 @@ class Socket {
     private type: int;
     
     // Constructor
-    func new(domain: int, type: int, protocol: int) -> Socket {
+    func Socket(domain: int, type: int, protocol: int) -> void {
         // Initialize socket subsystem on first use
         nuwan_socket_init();
         
@@ -40,7 +40,7 @@ class Socket {
         this.handle = nuwan_socket_create(domain, type, protocol);
         this.isConnected = false;
         
-        return this;
+
     }
     
     // Bind to address and port
@@ -133,7 +133,7 @@ class TcpServer {
     private port: int;
     private isListening: bool;
     
-    func new(port: int) -> TcpServer {
+    func TcpServer(port: int) -> void {
         this.port = port;
         this.socket = new Socket(AF_INET, SOCK_STREAM, 0);
         this.isListening = false;
@@ -142,7 +142,7 @@ class TcpServer {
         this.socket.setReuseAddr(true);
         this.socket.setNoDelay(true);
         
-        return this;
+
     }
     
     func start() -> bool {
@@ -174,10 +174,10 @@ class TcpServer {
 class TcpClient {
     private socket: Socket;
     
-    func new() -> TcpClient {
+    func TcpClient() -> void {
         this.socket = new Socket(AF_INET, SOCK_STREAM, 0);
         this.socket.setNoDelay(true);
-        return this;
+
     }
     
     func connect(host: string, port: int) -> bool {

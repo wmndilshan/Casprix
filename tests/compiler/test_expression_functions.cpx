@@ -1,0 +1,12 @@
+// Rust/Swift-inspired expression-bodied functions.
+func add(a: int, b: int) -> int => a + b;
+func classify(value: int) -> int => value * 2;
+
+func id<T>(value: T) -> T => value;
+
+func main() -> int {
+    // Keep the runtime assertion on one direct call; the other declarations
+    // still exercise expression-body parsing and semantic checking.
+    let sum: int = add(20, 22);
+    return sum - 42;
+}

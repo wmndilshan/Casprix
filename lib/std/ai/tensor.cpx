@@ -1,0 +1,79 @@
+// General high-level tensor/autograd API backed by optimized CPU kernels.
+import "lib/std/ai/internal/tensor_native.cpx"
+
+class Tensor {
+    public mut handle: rawptr
+
+    public func Tensor(handle: rawptr) -> void {
+        this.handle = handle
+    }
+
+    public func set(index: i32, value: f32) -> void { cpx_ai_set(this.handle, index, value) }
+    public func get(index: i32) -> f32 { return cpx_ai_get(this.handle, index) }
+    public func grad(index: i32) -> f32 { return cpx_ai_grad(this.handle, index) }
+    public func isNear(index: i32, expected: f32, tolerance: f32) -> bool {
+        return cpx_ai_is_near(this.handle, index, expected, tolerance) == 1
+    }
+
+    public func add(other: &Tensor) -> Tensor { return new Tensor(cpx_ai_add(this.handle, other.handle)) }
+    public func sub(other: &Tensor) -> Tensor { return new Tensor(cpx_ai_sub(this.handle, other.handle)) }
+    public func mul(other: &Tensor) -> Tensor { return new Tensor(cpx_ai_mul(this.handle, other.handle)) }
+    public func matmul(other: &Tensor) -> Tensor { return new Tensor(cpx_ai_matmul(this.handle, other.handle)) }
+    public func relu() -> Tensor { return new Tensor(cpx_ai_relu(this.handle)) }
+    public func sigmoid() -> Tensor { return new Tensor(cpx_ai_sigmoid(this.handle)) }
+    public func mean() -> Tensor { return new Tensor(cpx_ai_mean(this.handle)) }
+    public func mse(target: &Tensor) -> Tensor { return new Tensor(cpx_ai_mse(this.handle, target.handle)) }
+    public func embedding(table: &Tensor) -> Tensor {
+        return new Tensor(cpx_ai_embedding(this.handle, table.handle))
+    }
+    public func layerNorm(gamma: &Tensor, beta: &Tensor, epsilon: f32) -> Tensor {
+        return new Tensor(cpx_ai_layer_norm(this.handle, gamma.handle, beta.handle, epsilon))
+    }
+    public func causalAttention(key: &Tensor, value: &Tensor, heads: i32, sequence: i32) -> Tensor {
+        return new Tensor(cpx_ai_causal_attention(this.handle, key.handle, value.handle, heads, sequence))
+    }
+    public func crossEntropy(targetIds: &Tensor) -> Tensor {
+        return new Tensor(cpx_ai_cross_entropy(this.handle, targetIds.handle))
+    }
+    public func backward() -> bool { return cpx_ai_backward(this.handle) == 1 }
+}
+
+class AIContext {
+    public mut handle: rawptr
+
+    public func AIContext() -> void { this.handle = cpx_ai_graph_create() }
+
+    public func createTensor(rows: i32, cols: i32) -> Tensor {
+        return new Tensor(cpx_ai_tensor(this.handle, rows, cols, 0))
+    }
+
+    public func parameter(rows: i32, cols: i32, initial: f32) -> Tensor {
+        return new Tensor(cpx_ai_parameter(this.handle, rows, cols, initial))
+    }
+
+    public func randomParameter(rows: i32, cols: i32, deviation: f32, seed: i32) -> Tensor {
+        return new Tensor(cpx_ai_parameter_normal(this.handle, rows, cols, deviation, seed))
+    }
+
+    public func step(parameter: &Tensor, learning_rate: f32) -> void {
+        cpx_ai_sgd(parameter.handle, learning_rate)
+    }
+
+    public func zeroGrad() -> void { cpx_ai_zero_grad(this.handle) }
+    public func nextStep() -> void { cpx_ai_next_step(this.handle) }
+    public func destroy() -> void { cpx_ai_graph_destroy(this.handle) }
+}
+
+class AdamW {
+    private mut handle: rawptr
+
+    public func AdamW(count: i32, learningRate: f32, beta1: f32, beta2: f32, decay: f32) -> void {
+        this.handle = cpx_ai_adamw_create(count, learningRate, beta1, beta2, decay)
+    }
+    public func add(index: i32, parameter: &Tensor) -> bool {
+        return cpx_ai_adamw_add(this.handle, index, parameter.handle) == 1
+    }
+    public func step() -> bool { return cpx_ai_adamw_step(this.handle) == 1 }
+    public func setLearningRate(value: f32) -> void { cpx_ai_adamw_set_lr(this.handle, value) }
+    public func destroy() -> void { cpx_ai_adamw_destroy(this.handle) }
+}

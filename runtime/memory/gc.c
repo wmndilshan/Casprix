@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Lightweight Garbage Collector Implementation
+ * Casprix Runtime - Lightweight Garbage Collector Implementation
  *
  * Generational mark-and-sweep GC for objects that cannot be managed
  * by ownership/ARC alone (e.g. gc-annotated classes with complex

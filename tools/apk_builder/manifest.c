@@ -1,5 +1,5 @@
 /*
- * manifest.c — AndroidManifest.xml generator for Casperix APK Builder
+ * manifest.c — AndroidManifest.xml generator for Casprix APK Builder
  */
 
 #include "manifest.h"

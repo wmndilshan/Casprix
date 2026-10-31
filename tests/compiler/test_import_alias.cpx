@@ -1,0 +1,8 @@
+// Aliased imports are part of the canonical module syntax.
+// The alias is retained by the merged AST even though the current flat module
+// resolver does not need it for unqualified symbol lookup.
+import "lib/core/core" as core;
+
+func main() -> int {
+    return core.Abs(-3) - 3;
+}

@@ -1,0 +1,10 @@
+// Isolate shared-borrow parameter lowering from trait dispatch.
+struct Point { x: int }
+
+func read_point(point: &Point) -> int {
+    return 0;
+}
+
+func main() -> int {
+    return 0;
+}

@@ -1,4 +1,4 @@
-// Casperix Runtime - Windows Fiber-based Coroutines
+// Casprix Runtime - Windows Fiber-based Coroutines
 // Implementation of coroutine API using Windows Fibers
 //
 // Fibers are lightweight threads that are scheduled cooperatively

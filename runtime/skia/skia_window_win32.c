@@ -59,7 +59,7 @@ static LRESULT CALLBACK skia_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
 static void skia_window_recreate_surface(SkiaWindow* win);
 
 /* Window class name */
-static const char* SKIA_WINDOW_CLASS = "CasperixSkiaWindow";
+static const char* SKIA_WINDOW_CLASS = "CasprixSkiaWindow";
 static int g_class_registered = 0;
 
 static double skia_host_timestamp(void) {
@@ -136,7 +136,7 @@ SkiaWindow* skia_window_create(const char* title, int width, int height) {
     win->hwnd = CreateWindowExA(
         0,
         SKIA_WINDOW_CLASS,
-        title ? title : "Casperix",
+        title ? title : "Casprix",
         style,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,

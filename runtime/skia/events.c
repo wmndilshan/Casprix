@@ -1,5 +1,5 @@
 /*
- * Event System — Dispatch pipeline for Casperix UI
+ * Event System — Dispatch pipeline for Casprix UI
  *
  * OS events → hit test → capture/bubble through scene graph.
  * Tracks hover, focus, and pressed state.

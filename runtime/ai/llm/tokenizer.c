@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdint.h>
 
 #ifdef _WIN32
 #include <malloc.h>
@@ -18,32 +19,52 @@
 
 #include <ctype.h>
 
+static void* dataset_aligned_alloc(size_t bytes) {
+    if (bytes == 0 || bytes > SIZE_MAX - 63u) return NULL;
+    size_t rounded = (bytes + 63u) & ~(size_t)63u;
+    return aligned_alloc(64, rounded);
+}
+
 // ===== BYTE-LEVEL VOCABULARY =====
 
-static void init_byte_vocab(TokenizerVocab* vocab) {
+static bool init_byte_vocab(TokenizerVocab* vocab, i32 capacity) {
+    if (!vocab || capacity < 256) return false;
     // Initialize with 256 byte-level tokens
     vocab->size = 256;
-    vocab->tokens = (char**)malloc(256 * sizeof(char*));
-    vocab->ids = (i32*)malloc(256 * sizeof(i32));
+    vocab->tokens = (char**)calloc((size_t)capacity, sizeof(char*));
+    vocab->ids = (i32*)calloc((size_t)capacity, sizeof(i32));
+    if (!vocab->tokens || !vocab->ids) return false;
     
     for (i32 i = 0; i < 256; i++) {
         vocab->tokens[i] = (char*)malloc(2);
+        if (!vocab->tokens[i]) return false;
         vocab->tokens[i][0] = (char)i;
         vocab->tokens[i][1] = '\0';
         vocab->ids[i] = i;
     }
+    return true;
 }
 
 // ===== TOKENIZER =====
 
 Tokenizer* tokenizer_create(i32 vocab_size) {
-    Tokenizer* tok = (Tokenizer*)malloc(sizeof(Tokenizer));
+    if (vocab_size < 256) vocab_size = 256;
+    Tokenizer* tok = (Tokenizer*)calloc(1, sizeof(Tokenizer));
+    if (!tok) return NULL;
     
-    tok->vocab = (TokenizerVocab*)malloc(sizeof(TokenizerVocab));
-    init_byte_vocab(tok->vocab);
+    tok->vocab = (TokenizerVocab*)calloc(1, sizeof(TokenizerVocab));
+    if (!tok->vocab || !init_byte_vocab(tok->vocab, vocab_size)) {
+        tokenizer_destroy(tok);
+        return NULL;
+    }
     
     tok->num_merges = vocab_size - 256;  // Number of merges to learn
     tok->merges = (BPEMerge*)calloc(tok->num_merges, sizeof(BPEMerge));
+    if (tok->num_merges > 0 && !tok->merges) {
+        tokenizer_destroy(tok);
+        return NULL;
+    }
+    for (i32 i = 0; i < tok->num_merges; i++) tok->merges[i].freq = -1;
     tok->max_token_len = 16;
     
     // Special tokens (add to vocab)
@@ -319,6 +340,8 @@ Tokenizer* tokenizer_train(const char* text, i32 vocab_size, i32 min_freq) {
     free(seq_next);
     free(seq_live);
 
+    tok->vocab->size = 256 + num_merges_done;
+
     return tok;
 }
 
@@ -360,29 +383,43 @@ i32* tokenizer_encode(Tokenizer* tok, const char* text, i32* out_len) {
 }
 
 // Decode tokens back to text
+static bool decode_token(Tokenizer* tok, i32 token, char* text, i32 capacity, i32* pos) {
+    if (token >= 0 && token < 256) {
+        if (*pos >= capacity) return false;
+        text[(*pos)++] = (char)token;
+        return true;
+    }
+    i32 merge_index = token - 256;
+    if (merge_index < 0 || merge_index >= tok->num_merges ||
+        tok->merges[merge_index].freq < 0) return false;
+    return decode_token(tok, tok->merges[merge_index].token_a, text, capacity, pos) &&
+           decode_token(tok, tok->merges[merge_index].token_b, text, capacity, pos);
+}
+
+static i32 decoded_token_length(Tokenizer* tok, i32 token, i32 depth) {
+    if (token >= 0 && token < 256) return 1;
+    i32 merge_index = token - 256;
+    if (depth > tok->num_merges || merge_index < 0 ||
+        merge_index >= tok->num_merges || tok->merges[merge_index].freq < 0) return 1;
+    return decoded_token_length(tok, tok->merges[merge_index].token_a, depth + 1) +
+           decoded_token_length(tok, tok->merges[merge_index].token_b, depth + 1);
+}
+
 char* tokenizer_decode(Tokenizer* tok, const i32* tokens, i32 len) {
     if (!tokens || len <= 0) return NULL;
-    
-    // Allocate buffer (max: len * max_token_len)
-    char* text = (char*)malloc((len * tok->max_token_len + 1) * sizeof(char));
+
+    i32 decoded_length = 0;
+    for (i32 i = 0; i < len; ++i)
+        decoded_length += decoded_token_length(tok, tokens[i], 0);
+    char* text = (char*)malloc((size_t)decoded_length + 1);
+    if (!text) return NULL;
     i32 pos = 0;
     
     for (i32 i = 0; i < len; i++) {
         i32 token_id = tokens[i];
         
-        // Byte-level token
-        if (token_id < 256) {
-            text[pos++] = (char)token_id;
-        }
-        // Special tokens
-        else if (token_id == tok->bos_token || token_id == tok->eos_token ||
-                 token_id == tok->pad_token) {
-            continue;  // Skip special tokens
-        }
-        // Merged tokens (would need vocab lookup)
-        else {
-            text[pos++] = '?';  // Unknown for now
-        }
+        if (!decode_token(tok, token_id, text, decoded_length, &pos))
+            text[pos++] = '?';
     }
     
     text[pos] = '\0';
@@ -416,15 +453,19 @@ Tokenizer* tokenizer_load(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) return NULL;
     
-    Tokenizer* tok = (Tokenizer*)malloc(sizeof(Tokenizer));
-    tok->vocab = (TokenizerVocab*)malloc(sizeof(TokenizerVocab));
+    Tokenizer* tok = (Tokenizer*)calloc(1, sizeof(Tokenizer));
+    tok->vocab = (TokenizerVocab*)calloc(1, sizeof(TokenizerVocab));
     
     // Read header
-    fread(&tok->vocab->size, sizeof(i32), 1, f);
+    i32 vocab_size = 0;
+    fread(&vocab_size, sizeof(i32), 1, f);
     fread(&tok->num_merges, sizeof(i32), 1, f);
     
     // Initialize byte vocab
-    init_byte_vocab(tok->vocab);
+    if (!init_byte_vocab(tok->vocab, vocab_size > 256 ? vocab_size : 256)) {
+        fclose(f); tokenizer_destroy(tok); return NULL;
+    }
+    tok->vocab->size = vocab_size;
     
     // Read merges
     tok->merges = (BPEMerge*)malloc(tok->num_merges * sizeof(BPEMerge));
@@ -464,7 +505,11 @@ void tokenizer_destroy(Tokenizer* tok) {
 #define DATASET_MAGIC 0x54494E59  // "TINY"
 
 Dataset* dataset_create(i32 num_sequences, i32 seq_length, i32 vocab_size) {
-    Dataset* ds = (Dataset*)malloc(sizeof(Dataset));
+    if (num_sequences <= 0 || seq_length <= 1 || vocab_size <= 0 ||
+        (size_t)num_sequences > SIZE_MAX / (size_t)seq_length / sizeof(i32))
+        return NULL;
+    Dataset* ds = (Dataset*)calloc(1, sizeof(Dataset));
+    if (!ds) return NULL;
     
     ds->header.magic = DATASET_MAGIC;
     ds->header.version = 1;
@@ -472,53 +517,52 @@ Dataset* dataset_create(i32 num_sequences, i32 seq_length, i32 vocab_size) {
     ds->header.seq_length = seq_length;
     ds->header.vocab_size = vocab_size;
     
-    ds->data_size = num_sequences * seq_length * sizeof(i32);
-    ds->data = (i32*)aligned_alloc(64, ds->data_size);
+    ds->data_size = (size_t)num_sequences * (size_t)seq_length * sizeof(i32);
+    ds->data = (i32*)dataset_aligned_alloc(ds->data_size);
+    if (!ds->data) { free(ds); return NULL; }
     ds->owns_memory = true;
     
     return ds;
 }
 
 bool dataset_save(Dataset* ds, const char* path) {
+    if (!ds || !ds->data || !path) return false;
     FILE* f = fopen(path, "wb");
     if (!f) return false;
-    
-    // Write header
-    fwrite(&ds->header, sizeof(DatasetHeader), 1, f);
-    
-    // Write data
-    fwrite(ds->data, sizeof(i32), 
-           ds->header.num_sequences * ds->header.seq_length, f);
-    
-    fclose(f);
-    return true;
+    size_t count = (size_t)ds->header.num_sequences * (size_t)ds->header.seq_length;
+    bool ok = fwrite(&ds->header, sizeof(DatasetHeader), 1, f) == 1 &&
+              fwrite(ds->data, sizeof(i32), count, f) == count &&
+              fflush(f) == 0;
+    return fclose(f) == 0 && ok;
 }
 
 Dataset* dataset_load(const char* path) {
+    if (!path) return NULL;
     FILE* f = fopen(path, "rb");
     if (!f) return NULL;
-    
-    Dataset* ds = (Dataset*)malloc(sizeof(Dataset));
-    
-    // Read header
-    size_t ign = fread(&ds->header, sizeof(DatasetHeader), 1, f);
-    (void)ign;
-    
-    // Validate magic
-    if (ds->header.magic != DATASET_MAGIC) {
+    Dataset* ds = (Dataset*)calloc(1, sizeof(Dataset));
+    if (!ds || fread(&ds->header, sizeof(DatasetHeader), 1, f) != 1 ||
+        ds->header.magic != DATASET_MAGIC || ds->header.version != 1 ||
+        ds->header.num_sequences <= 0 || ds->header.seq_length <= 1 ||
+        ds->header.vocab_size <= 0 ||
+        (size_t)ds->header.num_sequences >
+            SIZE_MAX / (size_t)ds->header.seq_length / sizeof(i32)) {
         free(ds);
         fclose(f);
         return NULL;
     }
-    
-    // Read data
-    ds->data_size = ds->header.num_sequences * ds->header.seq_length * sizeof(i32);
-    ds->data = (i32*)aligned_alloc(64, ds->data_size);
-    ign = fread(ds->data, sizeof(i32), 
-          ds->header.num_sequences * ds->header.seq_length, f);
-    
+    size_t count = (size_t)ds->header.num_sequences * (size_t)ds->header.seq_length;
+    ds->data_size = count * sizeof(i32);
+    ds->data = (i32*)dataset_aligned_alloc(ds->data_size);
+    if (!ds->data || fread(ds->data, sizeof(i32), count, f) != count) {
+        aligned_free(ds->data); free(ds); fclose(f); return NULL;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (ds->data[i] < 0 || ds->data[i] >= ds->header.vocab_size) {
+            aligned_free(ds->data); free(ds); fclose(f); return NULL;
+        }
+    }
     ds->owns_memory = true;
-    
     fclose(f);
     return ds;
 }
@@ -558,6 +602,7 @@ void dataset_shuffle(Dataset* ds) {
 }
 
 Dataset** dataset_split(Dataset* input, f32 train_ratio, f32 val_ratio, f32 test_ratio) {
+    if (!input || !input->data) return NULL;
     // Validate ratios
     f32 sum = train_ratio + val_ratio + test_ratio;
     if (sum < 0.99f || sum > 1.01f) {
@@ -568,13 +613,19 @@ Dataset** dataset_split(Dataset* input, f32 train_ratio, f32 val_ratio, f32 test
     i32 train_size = (i32)(total * train_ratio);
     i32 val_size = (i32)(total * val_ratio);
     i32 test_size = total - train_size - val_size;
+    if (train_size <= 0 || val_size <= 0 || test_size <= 0) return NULL;
     
     Dataset** splits = (Dataset**)malloc(3 * sizeof(Dataset*));
+    if (!splits) return NULL;
     
     // Create datasets
     splits[0] = dataset_create(train_size, input->header.seq_length, input->header.vocab_size);
     splits[1] = dataset_create(val_size, input->header.seq_length, input->header.vocab_size);
     splits[2] = dataset_create(test_size, input->header.seq_length, input->header.vocab_size);
+    if (!splits[0] || !splits[1] || !splits[2]) {
+        dataset_destroy(splits[0]); dataset_destroy(splits[1]);
+        dataset_destroy(splits[2]); free(splits); return NULL;
+    }
     
     // Copy data
     i32 seq_len = input->header.seq_length;

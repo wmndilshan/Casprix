@@ -1,4 +1,4 @@
-// Casperix Runtime - Unified Memory Manager Implementation
+// Casprix Runtime - Unified Memory Manager Implementation
 
 #include "memory.h"
 #include "tlocal_heap.h"
@@ -321,7 +321,7 @@ MemoryStats mem_get_stats(MemoryManager* mm) {
 void mem_print_stats(MemoryManager* mm) {
     MemoryStats stats = mem_get_stats(mm);
 
-    printf("=== Casperix Memory Manager Stats ===\n");
+    printf("=== Casprix Memory Manager Stats ===\n");
     printf("ARC Objects:\n");
     printf("  Allocated:     " FMT_SIZE "\n", SZ(stats.arc.total_allocations));
     printf("  Freed:         " FMT_SIZE "\n", SZ(stats.arc.total_frees));

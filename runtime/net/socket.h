@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Socket Abstraction
+ * Casprix Runtime - Socket Abstraction
  * Cross-platform non-blocking socket API
  */
 

@@ -140,39 +140,19 @@ runtime/
 │   ├── animation.h/c              Property animation, 16 easing curves
 │   └── frame_loop.h/c             SGApp 60 fps render/event loop
 │
-├── ai/                            ML / AI accelerated runtime
-│   ├── llm/                       Transformer & LLM infrastructure
-│   │   ├── tensor.h/c             Dense tensor (CPU + AVX2)
-│   │   ├── autograd.h/c           Tape-based reverse-mode AD
-│   │   ├── ops.h/c                Element-wise & reduce ops
-│   │   ├── ops_avx2.asm           Hand-written AVX2 kernels
-│   │   ├── transformer.h/c        Transformer block (attn + MLP)
-│   │   ├── backward.h/c           All backward kernels
-│   │   ├── jit.h/c                x86-64 AVX2 JIT compiler
-│   │   ├── tensor_ir.h/c          SSA-style tensor IR
-│   │   ├── graph_opt.h/c          DCE, const-fold, op-fusion
-│   │   ├── tokenizer.h/c          BPE tokeniser
-│   │   ├── training.h/c           Training loop & gradient clipping
-│   │   └── checkpoint.h/c         Model serialisation
-│   │
-│   ├── nn/                        High-level neural-network API
-│   │   ├── nn.h                   Umbrella header
-│   │   ├── layers/                Dense, Conv2d, BatchNorm, …
-│   │   ├── activations/           ReLU, GELU, Softmax, …
-│   │   ├── loss/                  CrossEntropy, MSE, …
-│   │   ├── optimizers/            SGD, Adam, AdamW
-│   │   ├── data/                  Dataset, DataLoader, Sampler
-│   │   ├── models/                Pre-built model skeletons
-│   │   └── metrics/               Accuracy, F1, …
-│   │
-│   └── ml/                        HPC / acceleration primitives
-│       ├── cpx_tensor_engine.h/c  High-level tensor engine
-│       ├── cpx_scheduler.h/c      Work-stealing task scheduler
-│       ├── cpx_mem_arena.h/c      Arena allocator (zero-GC training)
-│       ├── cpx_kvcache.h/c        KV-cache for inference
-│       ├── cpx_quant.h/c          INT4/INT8 quantisation
-│       ├── cpx_hpc_kernel.h/c     SIMD dispatch + micro-kernels
-│       └── ml_runtime.h/c         Public ML runtime facade
+├── ai/                            Shared CPU-first AI runtime
+│   ├── ai.h                       Stable public umbrella
+│   ├── core/                      One Tensor ABI and eager DAG autograd
+│   ├── kernels/                   Model-neutral CPU and backward kernels
+│   ├── engine/                    Tape, tensor IR, graph passes and JIT
+│   ├── ops/                       Shared activations and losses
+│   ├── training/                  Optimizers, schedules and training helpers
+│   ├── evaluation/                Classification/regression metrics
+│   ├── distributed/               Deterministic CPU collectives
+│   ├── classical/                 Regression and clustering algorithms
+│   ├── nn/                        Layers, data loaders and model composition
+│   ├── llm/                       Transformer-specific model infrastructure
+│   └── backend/                   Experimental low-level CPU backend
 │
 └── android/                       Android NDK platform support
 ```
@@ -186,20 +166,9 @@ the toolchain; end-user projects import them with `import "..."`.
 
 ```
 lib/
-├── stdlib/            Core language library
-│   ├── Collections.cpx          List, Map, Set, Queue, Stack
-│   ├── Collections_Simple.cpx   Lightweight alternatives
-│   ├── Generics.cpx             Generic container helpers
-│   ├── Interfaces.cpx           Common interface definitions
-│   ├── Lambdas.cpx              Higher-order function utilities
-│   ├── Exceptions.cpx           Exception hierarchy & handlers
-│   ├── Thread.cpx               Thread & synchronisation primitives
-│   ├── AsyncThread.cpx          Async / await abstractions
-│   ├── Network.cpx              HTTP / socket client wrappers
-│   ├── AsyncNetwork.cpx         Non-blocking network helpers
-│   ├── GUI.cpx                  Declarative widget toolkit (Skia)
-│   └── ModernGUI.cpx            Material-style component library
-│
+├── std/               Canonical standard modules
+│   ├── ai/            Tensor, autograd, data and decoder APIs
+│   └── sync/          Atomic and synchronization APIs
 ├── core/              Low-level utilities
 ├── math/              Numerical & linear-algebra helpers
 ├── io/                Console, file, and stream I/O
@@ -208,9 +177,6 @@ lib/
 ├── thread/            Threading utilities
 ├── gui/               GUI component extensions
 ├── skia/              Skia / UI bindings (skia.cpx, ui.cpx)
-├── llm/               LLM utilities (Tokenizer.cpx, …)
-├── ml/                ML helpers (KMeans.cpx, LinearRegression.cpx)
-├── nn/                Neural-network DSL (nn.cpx)
 └── win32/             Windows-specific helpers
 ```
 
@@ -348,7 +314,6 @@ examples/
 ├── gui/               Skia UI widgets & animation
 ├── ml/                Tensor ops, autograd, training loop
 ├── network/           HTTP client/server
-├── tinystories/       GPT-2 mini fine-tune on TinyStories
 └── android/           Android demo app
 ```
 
@@ -358,9 +323,8 @@ examples/
 
 ```
 third_party/
-├── skia/              Aseprite prebuilt Skia headers (MSVC)
-├── skia-src/          Skia C++ source used by GDI backend
-└── …
+├── cJSON/             JSON parser
+└── skia/              Vendored Skia headers and dependencies
 ```
 
 ---

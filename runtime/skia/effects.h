@@ -1,5 +1,5 @@
 /**
- * Visual Effects System for Casperix UI
+ * Visual Effects System for Casprix UI
  * 
  * Apply post-processing effects to scene graph nodes:
  *  - Drop shadows

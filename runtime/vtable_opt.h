@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Virtual Dispatch Optimization
+ * Casprix Runtime - Virtual Dispatch Optimization
  *
  * Supplements the base object system (object.h/c) with:
  *   1. Compressed VTables — deduplicates inherited methods so child

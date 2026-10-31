@@ -1,4 +1,4 @@
-// Casperix Runtime - Unified Memory Manager
+// Casprix Runtime - Unified Memory Manager
 // Coordinates ARC, arena allocators, cycle collector, and ownership tracking
 //
 // Memory strategy by object type:

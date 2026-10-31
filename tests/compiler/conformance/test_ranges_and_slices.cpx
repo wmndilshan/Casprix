@@ -1,0 +1,10 @@
+// Conformance probe: range loops and slice expressions.
+// These are documented as canonical high-level syntax.
+func main() -> int {
+    let values = [1, 2, 3];
+    let view: [int] = values[0..2];
+    for i in 0..2 {
+        print(i);
+    }
+    return 0;
+}

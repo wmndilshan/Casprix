@@ -30,8 +30,9 @@ install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
 _deps/
-*.cmake
-!CMakeLists.txt
+# Source-controlled CMake helper scripts use the .cmake extension. Generated
+# CMake files belong inside ignored build directories or match the explicit
+# generated filenames above, so do not blanket-ignore every .cmake file.
 
 # Ninja state files (generator output, per-build)
 .ninja_log
@@ -252,7 +253,7 @@ third_party/skia/*.a
 third_party/skia/*.lib
 third_party/skia/*.dll
 third_party/skia/*.so
-third_party/skia-src/out/
+/third_party/skia/lib-android-arm64/
 
 # -------------------------------------------------------------
 # Externally-cloned git repositories checked out inside the tree
@@ -280,7 +281,9 @@ android-demo-app/local.properties
 # -------------------------------------------------------------
 # Logs & temp files
 # -------------------------------------------------------------
+/logs/
 *.log
+*.pid
 *.tmp
 # Matches `foo.tmp1234ab` style atomic-write temp files (CMake, editors).
 *.tmp[0-9a-fA-F]*

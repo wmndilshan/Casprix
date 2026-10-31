@@ -1,0 +1,8 @@
+// Range lowering must execute exactly 0, 1, 2 for a half-open range.
+func main() -> int {
+    mut sum: int = 0;
+    for i in 0..3 {
+        sum += i;
+    }
+    return sum - 3;
+}

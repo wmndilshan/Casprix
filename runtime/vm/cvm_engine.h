@@ -153,6 +153,12 @@ typedef struct {
     int             heap_obj_count;
     int             heap_obj_cap;
 
+    /* Stable, addressable storage for MIR module globals. Each MIR global is
+     * represented by one machine-word slot; aggregate globals hold a pointer
+     * to their VM-lifetime heap object. */
+    CvmReg*         globals;
+    int             global_count;
+
     /* Diagnostics */
     FILE*           diag;          /* NULL → stderr */
     int             trap_code;     /* non-zero on fatal trap */

@@ -1,0 +1,3 @@
+// Expected failure: an expression-bodied function requires an expression
+// after `=>`.
+func broken(value: int) -> int => ;

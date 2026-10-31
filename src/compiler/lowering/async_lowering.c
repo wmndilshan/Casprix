@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Async/Await Lowering Implementation
+ * Casprix Compiler - Async/Await Lowering Implementation
  */
 
 #include "async_lowering.h"

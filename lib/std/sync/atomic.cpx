@@ -14,7 +14,7 @@ extern func cpx_mutex_unlock(handle: rawptr) -> void
 class AtomicInt {
     private let handle: rawptr
 
-    public func new(initial: i64) -> void {
+    public func AtomicInt(initial: i64) -> void {
         this.handle = cpx_atomic_int_create(initial)
     }
 
@@ -38,7 +38,7 @@ class AtomicInt {
 class Mutex {
     private let handle: rawptr
 
-    public func new() -> void {
+    public func Mutex() -> void {
         this.handle = cpx_mutex_create()
     }
 

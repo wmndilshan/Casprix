@@ -348,9 +348,39 @@ void mir_print_inst(MirInst* inst, FILE* out) {
             print_value(inst->as.field_op.insert_val, out);
             break;
 
+        /* Target-independent vectors. */
+        case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+        case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+        case MIR_VEC_BROADCAST:
+        case MIR_VEC_ADD: case MIR_VEC_SUB: case MIR_VEC_MUL: case MIR_VEC_DIV:
+        case MIR_VEC_MIN: case MIR_VEC_MAX:
+        case MIR_VEC_AND: case MIR_VEC_OR: case MIR_VEC_XOR:
+        case MIR_VEC_FMA: case MIR_VEC_REDUCE_SUM: case MIR_VEC_DOT:
+        case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT: case MIR_VEC_CMP_GT:
+        case MIR_VEC_SELECT:
+            fprintf(out, "%s<", mir_opcode_name(inst->opcode));
+            mir_print_type(inst->as.vec.lane_type, out);
+            fprintf(out, " x %d> ", inst->as.vec.width);
+            print_value(inst->as.vec.a, out);
+            if (inst->as.vec.b != MIR_VALUE_NONE) {
+                fprintf(out, ", ");
+                print_value(inst->as.vec.b, out);
+            }
+            if (inst->as.vec.c != MIR_VALUE_NONE) {
+                fprintf(out, ", ");
+                print_value(inst->as.vec.c, out);
+            }
+            break;
+
         /* Debug */
         case MIR_NOP:
             fprintf(out, "nop");
+            break;
+        case MIR_UNDEF:
+            fprintf(out, "undef");
+            break;
+        case MIR_SUSPEND:
+            fprintf(out, "suspend");
             break;
         case MIR_DEBUGLOC:
             fprintf(out, "debugloc %s:%d:%d",

@@ -1,0 +1,115 @@
+// Decoder architecture composed in Casprix from general differentiable ops.
+import "lib/std/ai/tensor.cpx"
+
+class DecoderBlock {
+    public mut queryWeight: Tensor
+    public mut keyWeight: Tensor
+    public mut valueWeight: Tensor
+    public mut outputWeight: Tensor
+    public mut feedForwardIn: Tensor
+    public mut feedForwardOut: Tensor
+    public mut attentionGamma: Tensor
+    public mut attentionBeta: Tensor
+    public mut feedForwardGamma: Tensor
+    public mut feedForwardBeta: Tensor
+    public mut heads: i32
+    public mut sequenceLength: i32
+
+    public func DecoderBlock(context: &AIContext, hidden: i32, expansion: i32,
+                    headCount: i32, sequence: i32, seed: i32) -> void {
+        this.queryWeight = context.randomParameter(hidden, hidden, 0.02f32, seed + 1)
+        this.keyWeight = context.randomParameter(hidden, hidden, 0.02f32, seed + 2)
+        this.valueWeight = context.randomParameter(hidden, hidden, 0.02f32, seed + 3)
+        this.outputWeight = context.randomParameter(hidden, hidden, 0.02f32, seed + 4)
+        this.feedForwardIn = context.randomParameter(hidden, expansion, 0.02f32, seed + 5)
+        this.feedForwardOut = context.randomParameter(expansion, hidden, 0.02f32, seed + 6)
+        this.attentionGamma = context.parameter(1, hidden, 1.0f32)
+        this.attentionBeta = context.parameter(1, hidden, 0.0f32)
+        this.feedForwardGamma = context.parameter(1, hidden, 1.0f32)
+        this.feedForwardBeta = context.parameter(1, hidden, 0.0f32)
+        this.heads = headCount
+        this.sequenceLength = sequence
+    }
+
+    public func register(optimizer: &AdamW, start: i32) -> bool {
+        if !optimizer.add(start, this.queryWeight) { return false }
+        if !optimizer.add(start + 1, this.keyWeight) { return false }
+        if !optimizer.add(start + 2, this.valueWeight) { return false }
+        if !optimizer.add(start + 3, this.outputWeight) { return false }
+        if !optimizer.add(start + 4, this.feedForwardIn) { return false }
+        if !optimizer.add(start + 5, this.feedForwardOut) { return false }
+        if !optimizer.add(start + 6, this.attentionGamma) { return false }
+        if !optimizer.add(start + 7, this.attentionBeta) { return false }
+        if !optimizer.add(start + 8, this.feedForwardGamma) { return false }
+        return optimizer.add(start + 9, this.feedForwardBeta)
+    }
+}
+
+class DecoderLanguageModel {
+    public mut tokenEmbedding: Tensor
+    public mut positionEmbedding: Tensor
+    public mut block: DecoderBlock
+    public mut finalGamma: Tensor
+    public mut finalBeta: Tensor
+    public mut languageHead: Tensor
+    public mut sequenceLength: i32
+
+    public func DecoderLanguageModel(context: &AIContext, vocabulary: i32, hidden: i32,
+                    expansion: i32, heads: i32, sequence: i32) -> void {
+        this.tokenEmbedding = context.randomParameter(vocabulary, hidden, 0.02f32, 101)
+        this.positionEmbedding = context.randomParameter(sequence, hidden, 0.02f32, 102)
+        this.block = new DecoderBlock(context, hidden, expansion, heads, sequence, 200)
+        this.finalGamma = context.parameter(1, hidden, 1.0f32)
+        this.finalBeta = context.parameter(1, hidden, 0.0f32)
+        this.languageHead = context.randomParameter(hidden, vocabulary, 0.02f32, 301)
+        this.sequenceLength = sequence
+    }
+
+    public func register(optimizer: &AdamW) -> bool {
+        if !optimizer.add(0, this.tokenEmbedding) { return false }
+        if !optimizer.add(1, this.positionEmbedding) { return false }
+        if !this.block.register(optimizer, 2) { return false }
+        if !optimizer.add(12, this.finalGamma) { return false }
+        if !optimizer.add(13, this.finalBeta) { return false }
+        return optimizer.add(14, this.languageHead)
+    }
+}
+
+func decoderBlockForward(block: &DecoderBlock, input: &Tensor) -> Tensor {
+    let normalizedAttention: Tensor = input.layerNorm(
+        block.attentionGamma, block.attentionBeta, 0.00001f32
+    )
+    let query: Tensor = normalizedAttention.matmul(block.queryWeight)
+    let key: Tensor = normalizedAttention.matmul(block.keyWeight)
+    let value: Tensor = normalizedAttention.matmul(block.valueWeight)
+    let attended: Tensor = query.causalAttention(
+        key, value, block.heads, block.sequenceLength
+    )
+    let attentionOutput: Tensor = attended.matmul(block.outputWeight)
+    let residual: Tensor = input.add(attentionOutput)
+    let normalizedFeedForward: Tensor = residual.layerNorm(
+        block.feedForwardGamma, block.feedForwardBeta, 0.00001f32
+    )
+    let expandedLinear: Tensor = normalizedFeedForward.matmul(block.feedForwardIn)
+    let expanded: Tensor = expandedLinear.relu()
+    let projected: Tensor = expanded.matmul(block.feedForwardOut)
+    return residual.add(projected)
+}
+
+func decoderForward(model: &DecoderLanguageModel, tokenIds: &Tensor,
+                    positionIds: &Tensor) -> Tensor {
+    let tokens: Tensor = tokenIds.embedding(model.tokenEmbedding)
+    let positions: Tensor = positionIds.embedding(model.positionEmbedding)
+    let input: Tensor = tokens.add(positions)
+    let hidden: Tensor = decoderBlockForward(model.block, input)
+    let normalized: Tensor = hidden.layerNorm(
+        model.finalGamma, model.finalBeta, 0.00001f32
+    )
+    return normalized.matmul(model.languageHead)
+}
+
+func decoderLoss(model: &DecoderLanguageModel, tokenIds: &Tensor,
+                 positionIds: &Tensor, targets: &Tensor) -> Tensor {
+    let logits: Tensor = decoderForward(model, tokenIds, positionIds)
+    return logits.crossEntropy(targets)
+}

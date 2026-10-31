@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../ai/ml/cpx_mem_arena.h"
+#include "../ai/backend/cpx_mem_arena.h"
 
 #ifdef _WIN32
 #include <windows.h>

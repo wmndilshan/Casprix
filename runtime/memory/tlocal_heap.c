@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Thread-Local Heap Allocator
+ * Casprix Runtime - Thread-Local Heap Allocator
  *
  * Lock-free, per-thread bump allocator with a global slab cache.
  */

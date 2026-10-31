@@ -23,7 +23,7 @@ body:
         - Runtime — AI / LLM
         - Runtime — GUI / Skia
         - Compiler performance
-        - Package manager (cpkg)
+        - Package manager (casprix-pkg)
         - IDE integration
         - Documentation
         - Build system

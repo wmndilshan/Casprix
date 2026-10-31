@@ -2,7 +2,7 @@
 >
 > This document describes a planned system. It is kept for the design
 > thinking it records, not as a description of code that exists today.
-> Parts of the runtime (`runtime/net/`, `runtime/ai/ml/`) contain early
+> Parts of the runtime (`runtime/net/`, `runtime/ai/backend/`) contain early
 > building blocks, but the architecture below is largely unbuilt. Do not
 > treat any section here as current documentation.
 

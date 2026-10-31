@@ -3,10 +3,9 @@
  *
  * Implements transformer_backward() using the autograd tape.
  * Re-runs the forward pass with tracked operations, then calls
- * tape_backward() to compute all gradients automatically.
+ * ai_tape_backward() to compute all gradients automatically.
  *
- * Parameter gradient ordering matches collect_parameters() in
- * train_tinystories.c:
+ * Parameter gradient ordering is part of the transformer training ABI:
  *   [0] token_embedding
  *   [1] pos_embedding
  *   Per layer (12 each):
@@ -19,7 +18,7 @@
  *     [2+L*12+2] lm_head
  */
 
-#include "autograd.h"
+#include "../engine/tape.h"
 #include "transformer.h"
 #include "training.h"
 #include <string.h>
@@ -29,44 +28,44 @@
  * Autograd-traced forward pass for a single transformer block
  * ==========================================================================*/
 
-static GradTensor* ag_transformer_block_forward(
-    Tape* tape, GradTensor* x,
-    GradTensor* ln1_gamma, GradTensor* ln1_beta,
-    GradTensor* Wq, GradTensor* Wk, GradTensor* Wv, GradTensor* Wo,
-    GradTensor* ln2_gamma, GradTensor* ln2_beta,
-    GradTensor* W1, GradTensor* b1, GradTensor* W2, GradTensor* b2,
+static AiTapeValue* ai_tape_transformer_block_forward(
+    AiTape* tape, AiTapeValue* x,
+    AiTapeValue* ln1_gamma, AiTapeValue* ln1_beta,
+    AiTapeValue* Wq, AiTapeValue* Wk, AiTapeValue* Wv, AiTapeValue* Wo,
+    AiTapeValue* ln2_gamma, AiTapeValue* ln2_beta,
+    AiTapeValue* W1, AiTapeValue* b1, AiTapeValue* W2, AiTapeValue* b2,
     i32 batch, i32 seq_len, i32 hidden_dim,
     i32 num_heads, i32 head_dim, i32 ffn_dim)
 {
     i32 BS = batch * seq_len;
 
     /* === Pre-attention LayerNorm === */
-    GradTensor* ln1_out = ag_layernorm(tape, x, ln1_gamma, ln1_beta,
+    AiTapeValue* ln1_out = ai_tape_layernorm(tape, x, ln1_gamma, ln1_beta,
                                         BS, hidden_dim, 1e-5f);
 
     /* === Multi-head Self-Attention === */
-    GradTensor* attn_out = ag_attention(tape, ln1_out, Wq, Wk, Wv, Wo,
+    AiTapeValue* attn_out = ai_tape_attention(tape, ln1_out, Wq, Wk, Wv, Wo,
                                          batch, seq_len, num_heads, head_dim);
 
     /* === Residual connection 1 === */
-    GradTensor* res1 = ag_add(tape, x, attn_out);
+    AiTapeValue* res1 = ai_tape_add(tape, x, attn_out);
 
     /* === Pre-FFN LayerNorm === */
-    GradTensor* ln2_out = ag_layernorm(tape, res1, ln2_gamma, ln2_beta,
+    AiTapeValue* ln2_out = ai_tape_layernorm(tape, res1, ln2_gamma, ln2_beta,
                                         BS, hidden_dim, 1e-5f);
 
     /* === Feed-Forward Network === */
     /* hidden = GELU(ln2_out * W1 + b1) */
-    GradTensor* ffn_hidden = ag_gemm_bias(tape, ln2_out, W1, b1,
+    AiTapeValue* ffn_hidden = ai_tape_gemm_bias(tape, ln2_out, W1, b1,
                                            BS, hidden_dim, ffn_dim);
-    GradTensor* ffn_act = ag_gelu(tape, ffn_hidden);
+    AiTapeValue* ffn_act = ai_tape_gelu(tape, ffn_hidden);
 
     /* output = ffn_act * W2 + b2 */
-    GradTensor* ffn_out = ag_gemm_bias(tape, ffn_act, W2, b2,
+    AiTapeValue* ffn_out = ai_tape_gemm_bias(tape, ffn_act, W2, b2,
                                         BS, ffn_dim, hidden_dim);
 
     /* === Residual connection 2 === */
-    GradTensor* res2 = ag_add(tape, res1, ffn_out);
+    AiTapeValue* res2 = ai_tape_add(tape, res1, ffn_out);
 
     return res2;
 }
@@ -76,7 +75,8 @@ static GradTensor* ag_transformer_block_forward(
  * ==========================================================================*/
 
 void transformer_backward(TransformerModel* model, const Tensor* logits,
-                           const i32* targets, i32 batch, i32 seq_len,
+                           const i32* token_ids, const i32* targets,
+                           i32 batch, i32 seq_len,
                            Tensor** param_grads, MemoryPools* mem) {
     i32 hidden_dim = model->hidden_dim;
     i32 vocab_size = model->vocab_size;
@@ -84,76 +84,76 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
     i32 BS = batch * seq_len;
 
     /* Create autograd tape on the grad_cache arena */
-    Tape* tape = tape_create(mem->grad_cache);
+    AiTape* tape = ai_tape_create(mem->grad_cache);
     if (!tape) {
         fprintf(stderr, "ERROR: Failed to create autograd tape\n");
         return;
     }
-    tape_begin(tape);
+    ai_tape_begin(tape);
 
     /* ================================================================
      * Wrap all model parameters as GradTensors
-     * Ordering must match collect_parameters() in train_tinystories.c
+     * Ordering must match the public parameter layout documented above.
      * ================================================================ */
 
     /* Embeddings */
-    GradTensor* gt_tok_emb = ag_parameter(tape, model->embeddings->token_embedding);
-    GradTensor* gt_pos_emb = ag_parameter(tape, model->embeddings->pos_embedding);
+    AiTapeValue* gt_tok_emb = ai_tape_parameter(tape, model->embeddings->token_embedding);
+    AiTapeValue* gt_pos_emb = ai_tape_parameter(tape, model->embeddings->pos_embedding);
     (void)gt_pos_emb;
 
     /* Per-layer parameters */
-    GradTensor** gt_Wq = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_Wk = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_Wv = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_Wo = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_W1 = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_b1 = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_W2 = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_b2 = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_ln1g = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_ln1b = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_ln2g = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
-    GradTensor** gt_ln2b = (GradTensor**)tensor_arena_alloc(mem->grad_cache,
-        num_layers * sizeof(GradTensor*), 8);
+    AiTapeValue** gt_Wq = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_Wk = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_Wv = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_Wo = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_W1 = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_b1 = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_W2 = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_b2 = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_ln1g = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_ln1b = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_ln2g = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
+    AiTapeValue** gt_ln2b = (AiTapeValue**)tensor_arena_alloc(mem->grad_cache,
+        num_layers * sizeof(AiTapeValue*), 8);
 
     for (i32 i = 0; i < num_layers; i++) {
         TransformerBlock* block = model->blocks[i];
-        gt_Wq[i] = ag_parameter(tape, block->attn->Wq);
-        gt_Wk[i] = ag_parameter(tape, block->attn->Wk);
-        gt_Wv[i] = ag_parameter(tape, block->attn->Wv);
-        gt_Wo[i] = ag_parameter(tape, block->attn->Wo);
-        gt_W1[i] = ag_parameter(tape, block->ffn->W1);
-        gt_b1[i] = ag_parameter(tape, block->ffn->b1);
-        gt_W2[i] = ag_parameter(tape, block->ffn->W2);
-        gt_b2[i] = ag_parameter(tape, block->ffn->b2);
-        gt_ln1g[i] = ag_parameter(tape, block->ln1_gamma);
-        gt_ln1b[i] = ag_parameter(tape, block->ln1_beta);
-        gt_ln2g[i] = ag_parameter(tape, block->ln2_gamma);
-        gt_ln2b[i] = ag_parameter(tape, block->ln2_beta);
+        gt_Wq[i] = ai_tape_parameter(tape, block->attn->Wq);
+        gt_Wk[i] = ai_tape_parameter(tape, block->attn->Wk);
+        gt_Wv[i] = ai_tape_parameter(tape, block->attn->Wv);
+        gt_Wo[i] = ai_tape_parameter(tape, block->attn->Wo);
+        gt_W1[i] = ai_tape_parameter(tape, block->ffn->W1);
+        gt_b1[i] = ai_tape_parameter(tape, block->ffn->b1);
+        gt_W2[i] = ai_tape_parameter(tape, block->ffn->W2);
+        gt_b2[i] = ai_tape_parameter(tape, block->ffn->b2);
+        gt_ln1g[i] = ai_tape_parameter(tape, block->ln1_gamma);
+        gt_ln1b[i] = ai_tape_parameter(tape, block->ln1_beta);
+        gt_ln2g[i] = ai_tape_parameter(tape, block->ln2_gamma);
+        gt_ln2b[i] = ai_tape_parameter(tape, block->ln2_beta);
     }
 
     /* Final LayerNorm + LM head */
-    GradTensor* gt_ln_final_g = ag_parameter(tape, model->ln_final_gamma);
-    GradTensor* gt_ln_final_b = ag_parameter(tape, model->ln_final_beta);
-    GradTensor* gt_lm_head = ag_parameter(tape, model->lm_head);
+    AiTapeValue* gt_ln_final_g = ai_tape_parameter(tape, model->ln_final_gamma);
+    AiTapeValue* gt_ln_final_b = ai_tape_parameter(tape, model->ln_final_beta);
+    AiTapeValue* gt_lm_head = ai_tape_parameter(tape, model->lm_head);
 
     /* ================================================================
      * Re-run forward pass on tape (records all ops)
      * ================================================================ */
 
     /* Embedding: token + positional */
-    GradTensor* tok_emb_out = ag_embedding(tape, gt_tok_emb, targets,
+    AiTapeValue* tok_emb_out = ai_tape_embedding(tape, gt_tok_emb, token_ids,
                                             batch, seq_len, hidden_dim);
 
     /* Add positional embeddings manually */
@@ -168,10 +168,10 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
                    hidden_dim * sizeof(f32));
         }
     }
-    GradTensor* gt_pos_slice = ag_parameter(tape, pos_slice);
+    AiTapeValue* gt_pos_slice = ai_tape_parameter(tape, pos_slice);
     /* We track pos_slice but will map its gradients back to pos_embedding */
 
-    GradTensor* x = ag_add(tape, tok_emb_out, gt_pos_slice);
+    AiTapeValue* x = ai_tape_add(tape, tok_emb_out, gt_pos_slice);
 
     /* Transformer blocks */
     i32 num_heads = model->blocks[0]->attn->num_heads;
@@ -179,7 +179,7 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
     i32 ffn_dim = model->blocks[0]->ffn->W1->shape[1];
 
     for (i32 i = 0; i < num_layers; i++) {
-        x = ag_transformer_block_forward(tape, x,
+        x = ai_tape_transformer_block_forward(tape, x,
             gt_ln1g[i], gt_ln1b[i],
             gt_Wq[i], gt_Wk[i], gt_Wv[i], gt_Wo[i],
             gt_ln2g[i], gt_ln2b[i],
@@ -188,22 +188,22 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
     }
 
     /* Final LayerNorm */
-    GradTensor* ln_final = ag_layernorm(tape, x, gt_ln_final_g, gt_ln_final_b,
+    AiTapeValue* ln_final = ai_tape_layernorm(tape, x, gt_ln_final_g, gt_ln_final_b,
                                          BS, hidden_dim, 1e-5f);
 
     /* LM head: logits = ln_final * lm_head */
-    GradTensor* ag_logits = ag_gemm(tape, ln_final, gt_lm_head,
+    AiTapeValue* ai_tape_logits = ai_tape_gemm(tape, ln_final, gt_lm_head,
                                      BS, hidden_dim, vocab_size);
 
     /* Cross-entropy loss */
-    GradTensor* loss = ag_cross_entropy(tape, ag_logits, targets, BS, vocab_size);
+    AiTapeValue* loss = ai_tape_cross_entropy(tape, ai_tape_logits, targets, BS, vocab_size);
     (void)loss;
 
     /* ================================================================
      * Backward pass
      * ================================================================ */
-    tape_end(tape);
-    tape_backward(tape);
+    ai_tape_end(tape);
+    ai_tape_backward(tape);
 
     /* ================================================================
      * Extract gradients into param_grads array
@@ -239,7 +239,7 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
     /* Per-layer parameters (12 per layer) */
     for (i32 i = 0; i < num_layers; i++) {
         /* Attention: Wq, Wk, Wv, Wo */
-        GradTensor* attn_gts[] = { gt_Wq[i], gt_Wk[i], gt_Wv[i], gt_Wo[i] };
+        AiTapeValue* attn_gts[] = { gt_Wq[i], gt_Wk[i], gt_Wv[i], gt_Wo[i] };
         for (i32 j = 0; j < 4; j++) {
             if (attn_gts[j]->grad && param_grads[idx]) {
                 memcpy(param_grads[idx]->data, attn_gts[j]->grad->data,
@@ -249,7 +249,7 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
         }
 
         /* FFN: W1, b1, W2, b2 */
-        GradTensor* ffn_gts[] = { gt_W1[i], gt_b1[i], gt_W2[i], gt_b2[i] };
+        AiTapeValue* ffn_gts[] = { gt_W1[i], gt_b1[i], gt_W2[i], gt_b2[i] };
         for (i32 j = 0; j < 4; j++) {
             if (ffn_gts[j]->grad && param_grads[idx]) {
                 memcpy(param_grads[idx]->data, ffn_gts[j]->grad->data,
@@ -259,7 +259,7 @@ void transformer_backward(TransformerModel* model, const Tensor* logits,
         }
 
         /* LayerNorm: ln1_gamma, ln1_beta, ln2_gamma, ln2_beta */
-        GradTensor* ln_gts[] = { gt_ln1g[i], gt_ln1b[i], gt_ln2g[i], gt_ln2b[i] };
+        AiTapeValue* ln_gts[] = { gt_ln1g[i], gt_ln1b[i], gt_ln2g[i], gt_ln2b[i] };
         for (i32 j = 0; j < 4; j++) {
             if (ln_gts[j]->grad && param_grads[idx]) {
                 memcpy(param_grads[idx]->data, ln_gts[j]->grad->data,

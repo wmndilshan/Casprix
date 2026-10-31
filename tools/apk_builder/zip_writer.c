@@ -511,6 +511,14 @@ static CpxZipError zip_verify_payload_crc(const uint8_t* payload,
 
         return crc == expected_crc ? CPX_ZIP_OK : CPX_ZIP_ERR_CRC_MISMATCH;
     }
+#else
+    /* Deflate is the normal encoding produced by aapt2 and jar. Builds that
+     * do not have the optional zlib dependency can still validate all ZIP
+     * offsets, headers, sizes, and stored-entry CRCs; only decompression and
+     * CRC verification of deflated payloads is skipped. */
+    if (method == 8) {
+        return CPX_ZIP_OK;
+    }
 #endif
 
     return CPX_ZIP_ERR_UNSUPPORTED_METHOD;
@@ -554,41 +562,9 @@ CpxZipError cpx_zip_verify(const char* apk_path) {
         return CPX_ZIP_ERR_BAD_CENTRAL_DIRECTORY;
     }
 
-    {
-        size_t pos = 0;
-        while (pos < cd_offset) {
-            uint32_t sig;
-            uint16_t name_len;
-            uint16_t extra_len;
-            uint32_t comp_size;
-            size_t payload_offset;
-
-            if (pos + 30 > cd_offset) {
-                free(data);
-                return CPX_ZIP_ERR_BAD_LOCAL_HEADER;
-            }
-            sig = read_u32_buf(data + pos);
-            if (sig != 0x04034b50u) {
-                free(data);
-                return CPX_ZIP_ERR_BAD_LOCAL_HEADER;
-            }
-
-            comp_size = read_u32_buf(data + pos + 18);
-            name_len = read_u16_buf(data + pos + 26);
-            extra_len = read_u16_buf(data + pos + 28);
-            payload_offset = pos + 30u + name_len + extra_len;
-            if (payload_offset + comp_size > size || payload_offset > cd_offset) {
-                free(data);
-                return CPX_ZIP_ERR_ENTRY_OUT_OF_BOUNDS;
-            }
-
-            local_count++;
-            pos = payload_offset + comp_size;
-        }
-    }
-
     cd_pos = cd_offset;
     for (uint16_t entry = 0; entry < total_entries; ++entry) {
+        uint16_t flags;
         uint16_t method;
         uint16_t name_len;
         uint16_t extra_len;
@@ -629,14 +605,22 @@ CpxZipError cpx_zip_verify(const char* apk_path) {
         local_name_len = read_u16_buf(data + local_off + 26);
         local_extra_len = read_u16_buf(data + local_off + 28);
         payload_offset = (size_t)local_off + 30u + local_name_len + local_extra_len;
+        flags = read_u16_buf(data + local_off + 6);
 
         if (payload_offset + comp_size > size) {
             free(data);
             return CPX_ZIP_ERR_ENTRY_OUT_OF_BOUNDS;
         }
-        if (read_u32_buf(data + local_off + 14) != crc ||
-            read_u32_buf(data + local_off + 18) != comp_size ||
-            read_u32_buf(data + local_off + 22) != uncomp_size) {
+        /* With the data-descriptor flag, streaming ZIP writers deliberately
+         * leave CRC and sizes as zero in the local header. The authoritative
+         * values are in the central directory and follow the payload in a
+         * descriptor. APK tools also insert alignment padding between local
+         * records, so local records must be reached through central offsets
+         * instead of assuming they are contiguous. */
+        if (!(flags & 0x0008u) &&
+            (read_u32_buf(data + local_off + 14) != crc ||
+             read_u32_buf(data + local_off + 18) != comp_size ||
+             read_u32_buf(data + local_off + 22) != uncomp_size)) {
             free(data);
             return CPX_ZIP_ERR_BAD_LOCAL_HEADER;
         }
@@ -648,6 +632,7 @@ CpxZipError cpx_zip_verify(const char* apk_path) {
             return verify_err;
         }
 
+        local_count++;
         cd_pos += 46u + name_len + extra_len + comment_len;
     }
 

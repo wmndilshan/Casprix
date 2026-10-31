@@ -13,6 +13,22 @@ function Write-Info([string]$Message) {
     Write-Host "[build-skia] $Message"
 }
 
+function Test-ZipArchive([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $zip = $null
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        return $zip.Entries.Count -gt 0
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($zip) { $zip.Dispose() }
+    }
+}
+
 function Resolve-LatestChildDir([string]$BasePath) {
     if (-not (Test-Path $BasePath)) {
         return $null
@@ -38,19 +54,106 @@ function Ensure-RepoPython([string]$RepoRoot) {
     ) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'python.exe')) }
 
     if ($candidates.Count -eq 0) {
-        throw 'Could not find a usable Python installation. Install Python 3.x or pre-populate build-tools\\python311.'
+        $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($pythonCommand) { return (Split-Path -Parent $pythonCommand.Source) }
+        throw 'Could not find a usable Python installation. Install Python 3.x.'
     }
 
     $sourcePython = $candidates[0]
-    Write-Info "Preparing repo-local Python runtime from $sourcePython"
-    New-Item -ItemType Directory -Force -Path $repoPython | Out-Null
-    robocopy $sourcePython $repoPython /E /NFL /NDL /NJH /NJS /NC /NS /NP /XD __pycache__ | Out-Null
-    if ($LASTEXITCODE -gt 7) {
-        throw "robocopy failed while preparing repo-local Python runtime (exit $LASTEXITCODE)"
+    Write-Info "Using installed Python runtime: $sourcePython"
+    return $sourcePython
+}
+
+function Ensure-Python3Shim([string]$PythonRoot, [string]$RepoRoot) {
+    $shim = Join-Path $RepoRoot 'build-tools\python3-shim'
+    $python3 = Join-Path $shim 'python3.exe'
+    if (Test-Path $python3) { return $shim }
+
+    New-Item -ItemType Directory -Force -Path $shim | Out-Null
+    Copy-Item (Join-Path $PythonRoot 'python.exe') $python3 -Force
+    foreach ($runtime in @('python3.dll', 'python311.dll', 'vcruntime140.dll',
+                            'vcruntime140_1.dll')) {
+        $source = Join-Path $PythonRoot $runtime
+        if (Test-Path $source) { Copy-Item $source $shim -Force }
+    }
+    return $shim
+}
+
+function Ensure-SkiaSource([string]$SourceDir) {
+    if (Test-Path (Join-Path $SourceDir 'BUILD.gn')) {
+        return
     }
 
-    Copy-Item (Join-Path $repoPython 'python.exe') (Join-Path $repoPython 'python3.exe') -Force
-    return $repoPython
+    $parent = Split-Path -Parent $SourceDir
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    if ((Test-Path $SourceDir) -and
+        (Get-ChildItem $SourceDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        throw "Skia source directory exists but is incomplete: $SourceDir"
+    }
+
+    $downloadDir = Join-Path $RepoRoot 'build-tools\downloads'
+    $archive = Join-Path $downloadDir 'skia-chrome-m124.zip'
+    New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+    if (-not (Test-ZipArchive $archive)) {
+        if (Test-Path -LiteralPath $archive) {
+            $invalidArchive = "$archive.invalid-$(Get-Date -Format yyyyMMddHHmmss)"
+            Move-Item -LiteralPath $archive -Destination $invalidArchive
+            Write-Info "Preserved invalid archive as $invalidArchive"
+        }
+        Write-Info 'Fetching the Skia milestone-124 source archive matching the vendored headers'
+        & curl.exe -L --fail --show-error --connect-timeout 30 `
+            --speed-limit 1024 --speed-time 120 --retry 20 --retry-delay 3 `
+            --retry-all-errors --output $archive `
+            'https://codeload.github.com/google/skia/zip/refs/heads/chrome/m124'
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not fetch the Skia chrome/m124 source archive.'
+        }
+    } else {
+        Write-Info "Reusing verified source archive: $archive"
+    }
+
+    if (-not (Test-ZipArchive $archive)) {
+        throw "Downloaded Skia archive is invalid: $archive"
+    }
+
+    $extractRoot = Join-Path $RepoRoot `
+        ("build-tools\skia-extract-{0}" -f [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $extractRoot | Out-Null
+    $systemTar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    if (-not (Test-Path -LiteralPath $systemTar)) {
+        throw "Windows bsdtar was not found: $systemTar"
+    }
+    & $systemTar -xf $archive -C $extractRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Skia source extraction failed.' }
+    $extracted = Get-ChildItem $extractRoot -Directory | Select-Object -First 1
+    if (-not $extracted -or -not (Test-Path (Join-Path $extracted.FullName 'BUILD.gn'))) {
+        throw "Extracted Skia source is incomplete: $extractRoot"
+    }
+    if (Test-Path $SourceDir) {
+        Remove-Item -LiteralPath $SourceDir
+    }
+    Move-Item -LiteralPath $extracted.FullName -Destination $SourceDir
+    Remove-Item -LiteralPath $extractRoot
+
+    if (-not (Test-Path (Join-Path $SourceDir 'BUILD.gn'))) {
+        throw 'Could not prepare the Skia chrome/m124 source tree.'
+    }
+}
+
+function Ensure-Gn([string]$AndroidToolsDir, [string]$RepoRoot) {
+    $gn = Join-Path $AndroidToolsDir 'gn.exe'
+    if (Test-Path $gn) { return $gn }
+
+    $javaOut = Join-Path $RepoRoot 'build-tools\android-bootstrap'
+    New-Item -ItemType Directory -Force -Path $javaOut | Out-Null
+    Write-Info 'Downloading the GN build-system binary'
+    & javac -d $javaOut (Join-Path $AndroidToolsDir 'DownloadGN.java') | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Could not compile the GN downloader.' }
+    & java -cp $javaOut DownloadGN $AndroidToolsDir | Out-Host
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $gn)) {
+        throw 'Could not download GN.'
+    }
+    return $gn
 }
 
 function Get-CommandPrimaryOutput([string]$Command) {
@@ -143,18 +246,13 @@ function Ensure-ArchiveRspFile([string]$SkiaOutDir, [string]$ArchiveName) {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
-$skiaSrc = Join-Path $repoRoot 'third_party\skia-src'
+$skiaSrc = Join-Path $repoRoot 'build-tools\sources\skia'
 $skiaOut = Join-Path $skiaSrc (Join-Path 'out' $BuildName)
 $skiaLibDir = Join-Path $repoRoot 'third_party\skia\lib-android-arm64'
 $finalLib = Join-Path $skiaLibDir 'libskia.a'
-$gnExe = Join-Path $scriptDir 'gn.exe'
 
-if (-not (Test-Path $skiaSrc)) {
-    throw "Skia source tree not found: $skiaSrc"
-}
-if (-not (Test-Path $gnExe)) {
-    throw "GN executable not found: $gnExe"
-}
+Ensure-SkiaSource $skiaSrc
+$gnExe = Ensure-Gn $scriptDir $repoRoot
 
 if (-not $SdkRoot) {
     $SdkRoot = $env:ANDROID_HOME
@@ -197,8 +295,31 @@ if (-not (Test-Path $ninjaExe)) {
 }
 
 $pythonRoot = Ensure-RepoPython $repoRoot
-$env:PATH = "$pythonRoot;$pythonRoot\Scripts;$env:PATH"
+$pythonShim = Ensure-Python3Shim $pythonRoot $repoRoot
+$env:PATH = "$pythonShim;$pythonRoot;$pythonRoot\Scripts;$env:PATH"
 $env:PYTHONHOME = $pythonRoot
+$pythonExe = Join-Path $pythonRoot 'python3.exe'
+if (-not (Test-Path $pythonExe)) { $pythonExe = Join-Path $pythonRoot 'python.exe' }
+
+$depsMarker = Join-Path $skiaSrc '.casprix-deps-ready'
+if (-not (Test-Path $depsMarker)) {
+    Write-Info 'Synchronizing Skia third-party dependencies sequentially'
+    Push-Location $skiaSrc
+    try {
+        # A user-level 500 MB http.postBuffer setting makes each concurrent
+        # Git process reserve excessive memory. Override it only for this
+        # process tree and synchronize serially.
+        $env:GIT_CONFIG_COUNT = '1'
+        $env:GIT_CONFIG_KEY_0 = 'http.postBuffer'
+        $env:GIT_CONFIG_VALUE_0 = '16777216'
+        & $pythonExe (Join-Path $scriptDir 'sync_skia_deps_serial.py') $skiaSrc
+        if ($LASTEXITCODE -ne 0) { throw 'Skia dependency synchronization failed.' }
+        Set-Content -Path $depsMarker -Value 'chrome/m124' -Encoding ASCII
+    }
+    finally {
+        Pop-Location
+    }
+}
 
 if (Test-Path $finalLib) {
     Write-Info "Skia ARM64 already exists: $finalLib"
@@ -231,7 +352,6 @@ skia_use_freetype = true
 skia_use_harfbuzz = true
 skia_enable_skottie = false
 skia_enable_pdf = false
-skia_enable_sksl = true
 "@
 Set-Content -Path (Join-Path $skiaOut 'args.gn') -Value $argsGn -Encoding ASCII
 
@@ -247,66 +367,13 @@ try {
         throw "gn gen failed with exit code $LASTEXITCODE"
     }
 
-    $commands = & $ninjaExe -C (Join-Path 'out' $BuildName) -t commands skia
+    if ($StopAfter -gt 0) {
+        Write-Info 'StopAfter is ignored by the parallel Ninja build.'
+    }
+    Write-Info 'Building Skia with Ninja (-j 6)'
+    & $ninjaExe -C (Join-Path 'out' $BuildName) -j 6 skia
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to enumerate Skia build commands (exit $LASTEXITCODE)"
-    }
-
-    $commands = @($commands | Where-Object { $_ -and $_.Trim() })
-    if ($commands.Count -eq 0) {
-        throw 'Skia build command list is empty.'
-    }
-
-    $commandsFile = Join-Path $skiaOut 'skia-commands.txt'
-    Set-Content -Path $commandsFile -Value $commands -Encoding ASCII
-    Write-Info "Prepared $($commands.Count) commands"
-
-    Push-Location $skiaOut
-    try {
-        for ($i = 0; $i -lt $commands.Count; $i++) {
-            if ($StopAfter -gt 0 -and $i -ge $StopAfter) {
-                Write-Info "StopAfter hit at command $StopAfter"
-                break
-            }
-
-            $command = $commands[$i]
-            $primaryOutput = Get-CommandPrimaryOutput $command
-            if ($primaryOutput) {
-                $outputPath = if ([System.IO.Path]::IsPathRooted($primaryOutput)) {
-                    $primaryOutput
-                } else {
-                    Join-Path $skiaOut $primaryOutput
-                }
-
-                $outputDir = Split-Path -Parent $outputPath
-                if ($outputDir) {
-                    New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-                }
-
-                if ($primaryOutput -like '*.a') {
-                    Ensure-ArchiveRspFile $skiaOut $primaryOutput
-                }
-
-                if (Test-Path $outputPath) {
-                    Write-Host ("[build-skia] [{0}/{1}] Skipping existing {2}" -f ($i + 1), $commands.Count, $primaryOutput)
-                    continue
-                }
-            }
-
-            Write-Host ("[build-skia] [{0}/{1}] {2}" -f ($i + 1), $commands.Count, $command)
-            $exitCode = Invoke-BuildCommand $command
-            if ($exitCode -ne 0) {
-                throw "Command $($i + 1) failed with exit code $exitCode"
-            }
-        }
-    }
-    finally {
-        Pop-Location
-    }
-
-    if ($StopAfter -gt 0 -and $StopAfter -lt $commands.Count) {
-        Write-Info 'Partial build requested; stopping before final archive validation.'
-        exit 0
+        throw "Skia Ninja build failed with exit code $LASTEXITCODE"
     }
 
     $builtLib = Join-Path $skiaOut 'libskia.a'

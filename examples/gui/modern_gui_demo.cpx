@@ -288,8 +288,7 @@ tab3.add(scroll.handle)
 // Assemble TabPanel
 // ════════════════════════════════════════════════════════════════════════
 
-let tabs = new TabPanel()
-tabs.new3("Widgets", tab1.handle, "Controls", tab2.handle, "Dashboard", tab3.handle)
+let tabs = new TabPanel("Widgets", tab1.handle, "Controls", tab2.handle, "Dashboard", tab3.handle)
 tabs.set_min_size(0.0, 520.0)
 
 // ── Header bar ──────────────────────────────────────────────────────────

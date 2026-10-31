@@ -37,6 +37,9 @@ extern func android_push_activity(mgr: i64, activity: i64, intent: i64) -> void
 extern func android_pop_activity(mgr: i64) -> i64
 extern func android_current_activity(mgr: i64) -> i64
 extern func android_replace_activity(mgr: i64, activity: i64, intent: i64) -> void
+extern func android_activity_stack_depth(mgr: i64) -> i64
+extern func android_can_pop_activity(mgr: i64) -> i64
+extern func android_handle_back(mgr: i64) -> i64
 
 extern func android_intent_create(target: string) -> i64
 extern func android_intent_put(intent: i64, key: string, value: string) -> void
@@ -143,7 +146,7 @@ class AndroidApp {
     font_small: i64;
     font_title: i64;
 
-    func new(name: string, width: i64, height: i64) -> void {
+    func AndroidApp(name: string, width: i64, height: i64) -> void {
         this.handle        = android_app_create(name, width, height)
         this.nav_handle    = android_app_get_nav(this.handle)
         this.sg_app_handle = android_app_get_sg_app(this.handle)
@@ -195,17 +198,11 @@ class AndroidApp {
     }
 
     func navigator() -> Navigator {
-        let nav = new Navigator()
-        nav.handle = this.nav_handle
-        return nav
+        return new Navigator(this.nav_handle)
     }
 
     func create_activity(name: string, screen: Screen) -> Activity {
-        let activity = new Activity()
-        activity.handle = android_activity_create(name)
-        activity.vm_handle = android_activity_get_viewmodel(activity.handle)
-        activity.set_screen(screen)
-        return activity
+        return new Activity(name, screen)
     }
 
     func get_anim_pool() -> i64 {
@@ -216,6 +213,13 @@ class AndroidApp {
     func get_font_bold() -> i64 { return this.font_bold }
     func get_font_small() -> i64 { return this.font_small }
     func get_font_title() -> i64 { return this.font_title }
+
+    func destroy() -> void {
+        android_app_destroy(this.handle)
+        this.handle = 0
+        this.nav_handle = 0
+        this.sg_app_handle = 0
+    }
 }
 
 // ============================================================================
@@ -225,6 +229,12 @@ class AndroidApp {
 class Activity {
     handle: i64;
     vm_handle: i64;
+
+    func Activity(name: string, screen: Screen) -> void {
+        this.handle = android_activity_create(name)
+        this.vm_handle = android_activity_get_viewmodel(this.handle)
+        this.set_screen(screen)
+    }
 
     func set_screen(screen: Screen) -> void {
         android_activity_set_root(this.handle, screen.handle)
@@ -241,7 +251,7 @@ class Activity {
 
     func viewmodel() -> ViewModel {
         let vm = new ViewModel()
-        vm.handle = android_activity_get_viewmodel(this.handle)
+        vm.adopt(android_activity_get_viewmodel(this.handle))
         return vm
     }
 
@@ -257,7 +267,7 @@ class Activity {
 class Intent {
     handle: i64;
 
-    func new(target: string) -> void {
+    func Intent(target: string) -> void {
         this.handle = android_intent_create(target)
     }
 
@@ -280,9 +290,19 @@ class Intent {
 
 class ViewModel {
     handle: i64;
+    owns_handle: bool;
 
-    func new() -> void {
+    func ViewModel() -> void {
         this.handle = android_viewmodel_create()
+        this.owns_handle = true
+    }
+
+    func adopt(handle: i64) -> void {
+        if this.owns_handle {
+            android_viewmodel_destroy(this.handle)
+        }
+        this.handle = handle
+        this.owns_handle = false
     }
 
     func set(key: string, value: string) -> void {
@@ -302,7 +322,11 @@ class ViewModel {
     }
 
     func destroy() -> void {
-        android_viewmodel_destroy(this.handle)
+        if this.owns_handle {
+            android_viewmodel_destroy(this.handle)
+        }
+        this.handle = 0
+        this.owns_handle = false
     }
 }
 
@@ -312,6 +336,10 @@ class ViewModel {
 
 class Navigator {
     handle: i64;
+
+    func Navigator(handle: i64) -> void {
+        this.handle = handle
+    }
 
     func push(activity: Activity, intent: i64) -> void {
         android_push_activity(this.handle, activity.handle, intent)
@@ -328,6 +356,18 @@ class Navigator {
     func current() -> i64 {
         return android_current_activity(this.handle)
     }
+
+    func depth() -> i64 {
+        return android_activity_stack_depth(this.handle)
+    }
+
+    func can_pop() -> bool {
+        return android_can_pop_activity(this.handle) != 0
+    }
+
+    func back() -> bool {
+        return android_handle_back(this.handle) != 0
+    }
 }
 
 // ============================================================================
@@ -337,7 +377,7 @@ class Navigator {
 class AppBar {
     handle: i64;     # Root node (Row)
 
-    func new(title: string, font_title: i64, font: i64, show_back: i64, nav: i64) -> void {
+    func AppBar(title: string, font_title: i64, font: i64, show_back: i64, nav: i64) -> void {
         let bar      = new Row(0.0)
         bar.set_background(MD_PRIMARY)
         sg_style_set_padding(bar.handle, 12.0, 16.0, 12.0, 16.0)
@@ -373,7 +413,7 @@ class BottomNavBar {
     handle: i64;
     active_tab: i64;
 
-    func new(font: i64) -> void {
+    func BottomNavBar(font: i64) -> void {
         let bar = new Row(0.0)
         bar.set_background(MD_SURFACE)
         bar.set_padding(4.0)
@@ -406,7 +446,7 @@ class BottomNavBar {
 class FloatingActionButton {
     handle: i64;
 
-    func new(icon_label: string, font: i64) -> void {
+    func FloatingActionButton(icon_label: string, font: i64) -> void {
         let btn = new Button(icon_label, font)
         btn.set_background(MD_PRIMARY)
         btn.set_border(MD_PRIMARY_DARK, 0.0, 28.0)
@@ -491,29 +531,29 @@ class MaterialButton {
 class MaterialCard {
     handle: i64;
 
-    func new() -> void {
-        let c = new Card()
+    func MaterialCard() -> void {
+        let c = new Column(8.0)
         c.set_padding(16.0)
-        c.set_elevation(2)
+        sg_style_elevated(c.handle, 2)
         sg_style_set_border(c.handle, MD_OUTLINE_VARIANT, 0.0, 12.0)
         this.handle = c.handle
     }
 
     func filled(background_color: i64) -> void {
-        let c = new Card()
+        let c = new Column(8.0)
         c.set_padding(16.0)
         sg_style_set_background(c.handle, background_color)
         sg_style_set_border(c.handle, 0x00000000, 0.0, 12.0)
-        c.set_elevation(0)
+        sg_style_elevated(c.handle, 0)
         this.handle = c.handle
     }
 
     func outlined() -> void {
-        let c = new Card()
+        let c = new Column(8.0)
         c.set_padding(16.0)
         sg_style_set_background(c.handle, MD_SURFACE)
         sg_style_set_border(c.handle, MD_OUTLINE, 1.0, 12.0)
-        c.set_elevation(0)
+        sg_style_elevated(c.handle, 0)
         this.handle = c.handle
     }
 
@@ -534,7 +574,7 @@ class MaterialTextField {
     handle: i64;   # Outer column
     input: i64;    # Inner TextInput handle
 
-    func new(label: string, placeholder: string, font_label: i64, font_input: i64) -> void {
+    func MaterialTextField(label: string, placeholder: string, font_label: i64, font_input: i64) -> void {
         let col = new Column(4.0)
 
         let lbl = new Text(label, font_label, MD_ON_SURFACE_MED)
@@ -578,7 +618,7 @@ class MaterialTextField {
 class ListItem {
     handle: i64;
 
-    func new(icon: string, title: string, subtitle: string, 
+    func ListItem(icon: string, title: string, subtitle: string,
              font_icon: i64, font_title: i64, font_sub: i64) -> void {
         let row = new Row(12.0)
         row.set_background(MD_SURFACE)
@@ -620,7 +660,7 @@ class Chip {
     handle: i64;
     selected: i64;
 
-    func new(label: string, font: i64) -> void {
+    func Chip(label: string, font: i64) -> void {
         let btn = new Button(label, font)
         btn.set_background(MD_SURFACE_VARIANT)
         btn.set_border(MD_OUTLINE, 1.0, 16.0)
@@ -649,7 +689,7 @@ class Chip {
 class Avatar {
     handle: i64;
 
-    func new(initials: string, font: i64, background_color: i64) -> void {
+    func Avatar(initials: string, font: i64, background_color: i64) -> void {
         let col = new Column(0.0)
         col.set_background(background_color)
         sg_style_set_border(col.handle, background_color, 0.0, 28.0)
@@ -669,7 +709,7 @@ class Avatar {
 class Switch {
     handle: i64;
 
-    func new(label: string, font: i64, initial: bool) -> void {
+    func Switch(label: string, font: i64, initial: bool) -> void {
         let chk = new Checkbox(label, font, initial)
         this.handle = chk.handle
     }
@@ -694,7 +734,7 @@ class Switch {
 class Snackbar {
     handle: i64;
 
-    func new(parent_root: i64) -> void {
+    func Snackbar(parent_root: i64) -> void {
         this.handle = android_snackbar_create(parent_root)
     }
 
@@ -715,7 +755,7 @@ class Dialog {
     handle: i64;       # Stack (backdrop + card)
     card_handle: i64;  # Inner card content
 
-    func new(title: string, font_title: i64, font: i64) -> void {
+    func Dialog(title: string, font_title: i64, font: i64) -> void {
         // Stack: dimmed backdrop + centered card
         let overlay = new Stack()
         overlay.set_background(0x88000000)
@@ -769,11 +809,11 @@ class Screen {
     scroll: i64;
     activity_handle: i64;
 
-    func new(title: string, show_back: i64, nav: i64,
+    func Screen(title: string, show_back: i64, nav: i64,
              font_title: i64, font: i64) -> void {
         let root = new Column(0.0)
         root.set_background(MD_BACKGROUND)
-        root.set_align_items(ALIGN_STRETCH)
+        sg_node_set_align_items(root.handle, 3)
 
         // AppBar
         let bar = new AppBar(title, font_title, font, show_back, nav)
@@ -784,7 +824,7 @@ class Screen {
         scroll.set_background(MD_BACKGROUND)
         sg_node_set_min_size(scroll.handle, 0.0, 0.0)
         scroll.set_flex_grow(1.0)
-        scroll.set_align_self(ALIGN_STRETCH)
+        sg_node_set_align_self(scroll.handle, 3)
 
         let content_col = new Column(12.0)
         content_col.set_background(MD_BACKGROUND)
@@ -830,7 +870,7 @@ class Scaffold {
     screen: Screen;
     body: i64;
 
-    func new(title: string, show_back: i64, nav: i64,
+    func Scaffold(title: string, show_back: i64, nav: i64,
              font_title: i64, font: i64) -> void {
         let s = new Screen(title, show_back, nav, font_title, font)
         this.screen = s

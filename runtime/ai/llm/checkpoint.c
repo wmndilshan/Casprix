@@ -3,7 +3,7 @@
  */
 
 #include "checkpoint.h"
-#include "tensor.h"
+#include "../core/tensor.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

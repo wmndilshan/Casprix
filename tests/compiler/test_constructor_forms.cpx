@@ -1,0 +1,36 @@
+// Constructor regression: canonical class-name form and overload selection.
+class Point {
+    public mut x: i32
+    public mut y: i32
+
+    public func Point(x: i32, y: i32) -> void {
+        this.x = x
+        this.y = y
+    }
+
+    public func Point(value: i32) -> void {
+        this.x = value
+        this.y = value
+    }
+}
+
+class Box {
+    public mut value: i32
+
+    public func Box(value: i32) -> void {
+        this.value = value
+    }
+}
+
+func main() -> int {
+    let pair = new Point(3, 4)
+    let same = new Point(5)
+    let box = new Box(6)
+
+    if pair.x != 3 { return 1 }
+    if pair.y != 4 { return 2 }
+    if same.x != 5 { return 3 }
+    if same.y != 5 { return 4 }
+    if box.value != 6 { return 5 }
+    return 0
+}

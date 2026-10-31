@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Region Allocator Implementation
+ * Casprix Runtime - Region Allocator Implementation
  *
  * Lock-free bump allocator with per-region destructor chains.
  * Thread-local region stack enables zero-argument allocation

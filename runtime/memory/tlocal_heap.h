@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Thread-Local Heap Allocator
+ * Casprix Runtime - Thread-Local Heap Allocator
  *
  * Each thread gets its own fast bump-allocated heap for small objects.
  * This eliminates lock contention on the global allocator for the

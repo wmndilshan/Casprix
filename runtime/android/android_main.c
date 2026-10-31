@@ -51,6 +51,7 @@ typedef struct {
     AndroidApp*       casprix_app;    /* ND runtime app handle */
 
     int               running;
+    int               render_thread_started;
     int               visible;
     int               surface_ready;
     int               has_content_rect;
@@ -122,8 +123,12 @@ static void* render_thread_func(void* arg) {
 
     /* Wait until a window surface has been created */
     pthread_mutex_lock(&state->mutex);
-    while (!state->window) {
+    while (state->running && !state->window) {
         pthread_cond_wait(&state->cond, &state->mutex);
+    }
+    if (!state->running) {
+        pthread_mutex_unlock(&state->mutex);
+        return NULL;
     }
     ANativeWindow* window = state->window;
     pthread_mutex_unlock(&state->mutex);
@@ -132,6 +137,11 @@ static void* render_thread_func(void* arg) {
     state->egl = android_egl_create(window);
     if (!state->egl) {
         LOGE("EGL create failed!");
+        pthread_mutex_lock(&state->mutex);
+        state->running = 0;
+        pthread_cond_broadcast(&state->cond);
+        pthread_mutex_unlock(&state->mutex);
+        ANativeActivity_finish(state->activity);
         return NULL;
     }
     android_egl_make_current(state->egl);
@@ -147,19 +157,36 @@ static void* render_thread_func(void* arg) {
     if (!state->casprix_app) {
         LOGE("android_app_create_native failed");
         android_egl_destroy(state->egl);
+        state->egl = NULL;
+        pthread_mutex_lock(&state->mutex);
+        state->running = 0;
+        pthread_cond_broadcast(&state->cond);
+        pthread_mutex_unlock(&state->mutex);
+        ANativeActivity_finish(state->activity);
         return NULL;
     }
+
+    /* High-level `new AndroidApp(...)` adopts this EGL-backed instance. */
+    android_app_bind_current(state->casprix_app);
 
     state->casprix_app->native_renderer = android_renderer_create(state->egl);
     if (!state->casprix_app->native_renderer) {
         LOGE("android_renderer_create failed");
         android_app_destroy(state->casprix_app);
+        state->casprix_app = NULL;
         android_egl_destroy(state->egl);
+        state->egl = NULL;
+        pthread_mutex_lock(&state->mutex);
+        state->running = 0;
+        pthread_cond_broadcast(&state->cond);
+        pthread_mutex_unlock(&state->mutex);
+        ANativeActivity_finish(state->activity);
         return NULL;
     }
     android_app_bind_renderer(state->casprix_app, state->casprix_app->native_renderer);
 
     pthread_mutex_lock(&state->mutex);
+    state->surface_ready = 1;
     apply_content_rect_locked(state);
     pthread_mutex_unlock(&state->mutex);
 
@@ -175,13 +202,19 @@ static void* render_thread_func(void* arg) {
         pthread_mutex_lock(&state->mutex);
 
         /* Handle window surface changes */
-        if (!state->surface_ready && state->window) {
-            android_egl_surface_changed(state->egl, state->window);
-            int w, h;
-            android_egl_get_size(state->egl, &w, &h);
-            android_app_resize(state->casprix_app, w, h);
-            apply_content_rect_locked(state);
-            state->surface_ready = 1;
+        if (!state->surface_ready) {
+            if (state->window) {
+                if (android_egl_surface_changed(state->egl, state->window)) {
+                    int w, h;
+                    android_egl_get_size(state->egl, &w, &h);
+                    android_app_resize(state->casprix_app, w, h);
+                    apply_content_rect_locked(state);
+                    state->surface_ready = 1;
+                }
+            } else {
+                android_egl_surface_destroy(state->egl);
+                pthread_cond_broadcast(&state->cond);
+            }
         }
         if (!state->visible || !state->surface_ready) {
             pthread_mutex_unlock(&state->mutex);
@@ -207,6 +240,7 @@ static void* render_thread_func(void* arg) {
                     if      (action == AMOTION_EVENT_ACTION_DOWN)  sg_type = SG_EVENT_MOUSE_DOWN;
                     else if (action == AMOTION_EVENT_ACTION_UP)    sg_type = SG_EVENT_MOUSE_UP;
                     else if (action == AMOTION_EVENT_ACTION_MOVE)  sg_type = SG_EVENT_MOUSE_MOVE;
+                    else if (action == AMOTION_EVENT_ACTION_CANCEL) sg_type = SG_EVENT_MOUSE_UP;
 
                     if (sg_type != 0) {
                         SGEvent sg_event = {0};
@@ -220,6 +254,13 @@ static void* render_thread_func(void* arg) {
                 } else if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY) {
                     int action  = AKeyEvent_getAction(event);
                     int keycode = AKeyEvent_getKeyCode(event);
+                    if (action == AKEY_EVENT_ACTION_DOWN && keycode == AKEYCODE_BACK) {
+                        if (!android_handle_back(state->casprix_app->nav)) {
+                            ANativeActivity_finish(state->activity);
+                        }
+                        AInputQueue_finishEvent(iq, event, 1);
+                        continue;
+                    }
                     /* Pass key events to scene graph text inputs */
                     SGEvent sg_event = {0};
                     sg_event.type = (action == AKEY_EVENT_ACTION_DOWN)
@@ -253,8 +294,11 @@ static void* render_thread_func(void* arg) {
         }
     }
 
+    android_app_lifecycle(state->casprix_app, ANDROID_LIFECYCLE_DESTROY);
     android_app_destroy(state->casprix_app);
+    state->casprix_app = NULL;
     android_egl_destroy(state->egl);
+    state->egl = NULL;
     return NULL;
 }
 
@@ -274,15 +318,21 @@ static void on_window_created(ANativeActivity* act, ANativeWindow* window) {
 
 static void on_window_destroyed(ANativeActivity* act, ANativeWindow* window) {
     AppState* state = (AppState*)act->instance;
+    (void)window;
     LOGI("onNativeWindowDestroyed");
     pthread_mutex_lock(&state->mutex);
     state->window        = NULL;
     state->surface_ready = 0;
+    pthread_cond_broadcast(&state->cond);
+    while (state->running && state->egl && state->egl->surface != EGL_NO_SURFACE) {
+        pthread_cond_wait(&state->cond, &state->mutex);
+    }
     pthread_mutex_unlock(&state->mutex);
 }
 
 static void on_window_resized(ANativeActivity* act, ANativeWindow* window) {
     AppState* state = (AppState*)act->instance;
+    (void)window;
     pthread_mutex_lock(&state->mutex);
     state->surface_ready = 0;   /* force EGL resize on next frame */
     pthread_mutex_unlock(&state->mutex);
@@ -315,11 +365,13 @@ static void on_stop(ANativeActivity* act) {
 static void on_destroy(ANativeActivity* act) {
     AppState* state = (AppState*)act->instance;
     LOGI("onDestroy");
+    pthread_mutex_lock(&state->mutex);
     state->running = 0;
-    if (state->casprix_app) {
-        android_app_lifecycle(state->casprix_app, ANDROID_LIFECYCLE_DESTROY);
+    pthread_cond_broadcast(&state->cond);
+    pthread_mutex_unlock(&state->mutex);
+    if (state->render_thread_started) {
+        pthread_join(state->render_thread, NULL);
     }
-    pthread_join(state->render_thread, NULL);
     pthread_mutex_destroy(&state->mutex);
     pthread_cond_destroy(&state->cond);
     free(state);
@@ -334,6 +386,7 @@ static void on_input_queue_created(ANativeActivity* act, AInputQueue* queue) {
 
 static void on_input_queue_destroyed(ANativeActivity* act, AInputQueue* queue) {
     AppState* state = (AppState*)act->instance;
+    (void)queue;
     pthread_mutex_lock(&state->mutex);
     state->input_queue = NULL;
     pthread_mutex_unlock(&state->mutex);
@@ -365,6 +418,8 @@ static void on_content_rect_changed(ANativeActivity* act, const ARect* rect) {
 __attribute__((visibility("default")))
 void ANativeActivity_onCreate(ANativeActivity* activity,
                               void* saved_state, size_t saved_state_size) {
+    (void)saved_state;
+    (void)saved_state_size;
     LOGI("ANativeActivity_onCreate — Casprix runtime");
 
     AppState* state = (AppState*)calloc(1, sizeof(AppState));
@@ -390,5 +445,11 @@ void ANativeActivity_onCreate(ANativeActivity* activity,
     activity->instance = state;
 
     /* Spawn the render thread */
-    pthread_create(&state->render_thread, NULL, render_thread_func, state);
+    if (pthread_create(&state->render_thread, NULL, render_thread_func, state) == 0) {
+        state->render_thread_started = 1;
+    } else {
+        LOGE("Failed to create render thread");
+        state->running = 0;
+        ANativeActivity_finish(activity);
+    }
 }

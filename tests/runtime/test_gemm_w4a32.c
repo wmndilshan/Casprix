@@ -5,9 +5,9 @@
  * on a 64×64×64 matrix (M=N=K=64).
  *
  * Build:
- *   gcc -O2 -mavx2 -mfma -I runtime/ai/ml \
+ *   gcc -O2 -mavx2 -mfma -I runtime/ai/backend \
  *       tests/runtime/test_gemm_w4a32.c \
- *       runtime/ai/ml/cpx_quant.c runtime/ai/ml/cpx_mem_arena.c \
+ *       runtime/ai/backend/cpx_quant.c runtime/ai/backend/cpx_mem_arena.c \
  *       -lm -o test_gemm_w4a32
  */
 

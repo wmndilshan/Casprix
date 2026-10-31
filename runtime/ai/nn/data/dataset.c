@@ -1,5 +1,5 @@
 /**
- * Dataset Implementation
+ * NnDataset Implementation
  */
 
 #include "dataset.h"
@@ -13,7 +13,7 @@ typedef struct {
     int* sample_shapes_y;
 } SimpleDataset;
 
-static bool simple_dataset_get_item(Dataset* self, int idx, Tensor** x, Tensor** y) {
+static bool simple_nn_dataset_get_item(NnDataset* self, int idx, Tensor** x, Tensor** y) {
     SimpleDataset* dataset = (SimpleDataset*)self->data;
     
     if (idx < 0 || idx >= self->num_samples) {
@@ -38,15 +38,15 @@ static bool simple_dataset_get_item(Dataset* self, int idx, Tensor** x, Tensor**
     return true;
 }
 
-static void simple_dataset_free(Dataset* self) {
+static void simple_nn_dataset_free(NnDataset* self) {
     SimpleDataset* dataset = (SimpleDataset*)self->data;
     /* Note: X and y are owned by caller, don't free */
     free(dataset);
     free(self);
 }
 
-Dataset* dataset_create_simple(Tensor* X, Tensor* y) {
-    Dataset* dataset = (Dataset*)calloc(1, sizeof(Dataset));
+NnDataset* nn_dataset_create_simple(Tensor* X, Tensor* y) {
+    NnDataset* dataset = (NnDataset*)calloc(1, sizeof(NnDataset));
     SimpleDataset* simple = (SimpleDataset*)calloc(1, sizeof(SimpleDataset));
     
     simple->X = X;
@@ -54,13 +54,13 @@ Dataset* dataset_create_simple(Tensor* X, Tensor* y) {
     
     dataset->data = simple;
     dataset->num_samples = X->shape[0];
-    dataset->get_item = simple_dataset_get_item;
-    dataset->free_fn = simple_dataset_free;
+    dataset->get_item = simple_nn_dataset_get_item;
+    dataset->free_fn = simple_nn_dataset_free;
     
     return dataset;
 }
 
-void dataset_free(Dataset* dataset) {
+void nn_dataset_free(NnDataset* dataset) {
     if (dataset && dataset->free_fn) {
         dataset->free_fn(dataset);
     }

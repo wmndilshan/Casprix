@@ -9,7 +9,7 @@ class PackageRegistry {
     field remote_url: string    # https://packages.casprix.org
     field packages: Map<string, PackageInfo>
 
-    func new(cache_dir: string, remote_url: string) {
+    func PackageRegistry(cache_dir: string, remote_url: string) -> void {
         this.cache_dir = cache_dir
         this.remote_url = remote_url
         this.packages = new Map<string, PackageInfo>()

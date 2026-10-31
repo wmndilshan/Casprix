@@ -6,6 +6,13 @@
 #include <fileapi.h>
 #include <handleapi.h>
 #include <memoryapi.h>
+
+typedef struct CpxMemoryRangeEntry {
+    void* virtual_address;
+    SIZE_T number_of_bytes;
+} CpxMemoryRangeEntry;
+typedef BOOL (WINAPI *CpxPrefetchVirtualMemoryFn)(HANDLE, ULONG_PTR,
+                                                  CpxMemoryRangeEntry*, ULONG);
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -104,9 +111,12 @@ int cpx_dataset_advise(CpxMappedDataset* ds, size_t offset, size_t nbytes) {
     if (!ds || !ds->base) return -1;
     if (offset + nbytes > ds->len) return -1;
 #if defined(_WIN32) || defined(_WIN64)
-    WIN32_MEMORY_RANGE_ENTRY entry = {.VirtualAddress = (void*)(ds->base + offset), .NumberOfBytes = nbytes};
-    if (PrefetchVirtualMemory(GetCurrentProcess(), 1, &entry, 0)) return 0;
-    return -1;
+    HMODULE kernel = GetModuleHandleA("kernel32.dll");
+    CpxPrefetchVirtualMemoryFn prefetch = kernel ? (CpxPrefetchVirtualMemoryFn)(void*)
+        GetProcAddress(kernel, "PrefetchVirtualMemory") : NULL;
+    if (!prefetch) return 0; /* Optional performance hint on older SDK/Windows. */
+    CpxMemoryRangeEntry entry = { (void*)(ds->base + offset), nbytes };
+    return prefetch(GetCurrentProcess(), 1, &entry, 0) ? 0 : -1;
 #else
     return posix_madvise((void*)(ds->base + offset), nbytes, POSIX_MADV_SEQUENTIAL);
 #endif

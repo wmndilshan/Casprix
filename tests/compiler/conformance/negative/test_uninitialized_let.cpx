@@ -1,0 +1,5 @@
+// Expected semantic failure: immutable bindings require an initializer.
+func main() -> int {
+    let value: int;
+    return 0;
+}

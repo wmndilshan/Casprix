@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef CASPRIX_VERSION
+#define CASPRIX_VERSION "development"
+#endif
+
 bool g_lsp_initialized        = false;
 bool g_lsp_shutdown_requested = false;
 
@@ -43,7 +47,7 @@ static void handle_initialize(const char *id_json, FILE *out) {
             "\"diagnosticProvider\":{\"interFileDependencies\":false,"
                                     "\"workspaceDiagnostics\":false}"
           "},"
-          "\"serverInfo\":{\"name\":\"casprix-lsp\",\"version\":\"0.1.0\"}"
+          "\"serverInfo\":{\"name\":\"casprix-lsp\",\"version\":\"" CASPRIX_VERSION "\"}"
         "}";
     jsonrpc_send_response_raw(out, id_json, result);
     g_lsp_initialized = true;

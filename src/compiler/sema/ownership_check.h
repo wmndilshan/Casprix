@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Ownership & Borrowing Checker
+ * Casprix Compiler - Ownership & Borrowing Checker
  * 
  * Implements compile-time ownership tracking to prevent:
  * - Use-after-move errors

@@ -26,11 +26,11 @@ class Matrix {
     private cols: int;
     
     // Constructor
-    func new(rows: int, cols: int) -> Matrix {
+    func Matrix(rows: int, cols: int) -> void {
         this.rows = rows;
         this.cols = cols;
         this.handle = nuwan_matrix_create(rows, cols);
-        return this;
+
     }
     
     // Element access

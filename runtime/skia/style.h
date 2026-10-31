@@ -1,5 +1,5 @@
 /*
- * Styling System — CSS-like visual properties for Casperix UI
+ * Styling System — CSS-like visual properties for Casprix UI
  *
  * Provides convenience functions for applying visual styles to scene graph
  * nodes: backgrounds, borders, shadows, gradients, opacity.

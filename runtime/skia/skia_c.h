@@ -1,5 +1,5 @@
 /*
- * Skia C Binding Layer for Casperix/Casprix Runtime
+ * Skia C Binding Layer for Casprix Runtime
  *
  * Thin C wrapper around Skia C++ API. All Skia objects are exposed as
  * opaque void* handles. Implementation in skia_c.cpp.

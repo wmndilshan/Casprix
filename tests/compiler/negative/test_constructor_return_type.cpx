@@ -1,0 +1,6 @@
+// Constructors return their initialized instance implicitly.
+class Invalid {
+    func Invalid() -> Invalid {
+        return this
+    }
+}

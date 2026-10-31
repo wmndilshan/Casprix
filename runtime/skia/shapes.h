@@ -1,5 +1,5 @@
 /**
- * Advanced Shape Drawing for Casperix UI
+ * Advanced Shape Drawing for Casprix UI
  * 
  * Higher-level shape primitives beyond basic rect/circle:
  *  - Regular/irregular polygons

@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Ownership & Borrowing Checker Implementation
+ * Casprix Compiler - Ownership & Borrowing Checker Implementation
  */
 
 #include "ownership_check.h"

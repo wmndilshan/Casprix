@@ -1,0 +1,3 @@
+// Expected semantic failure: non-void function has no return path.
+func broken() -> int {
+}

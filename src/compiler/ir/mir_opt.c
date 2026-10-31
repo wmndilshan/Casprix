@@ -603,6 +603,10 @@ int mir_pass_simplify_cfg(MirFunction* func) {
                 }
                 cfg_remove_pred(target, bb);
                 bb->pred_count = 0;
+                /* The forwarder is now detached and will be removed by the
+                 * unreachable-block sweep. Clear its outgoing edge as well
+                 * so CFG validation remains symmetric between passes. */
+                bb->succ_count = 0;
                 changes++;
             }
         }

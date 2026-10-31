@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Scope-Based Drop Planner
+ * Casprix Compiler - Scope-Based Drop Planner
  *
  * Implements deterministic destructors (RAII) by tracking which variables
  * need cleanup at each scope exit point.  The codegen uses this information

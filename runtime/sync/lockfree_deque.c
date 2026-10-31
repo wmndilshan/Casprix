@@ -1,4 +1,4 @@
-// Casperix Runtime - Lock-Free Work-Stealing Deque Implementation
+// Casprix Runtime - Lock-Free Work-Stealing Deque Implementation
 // Based on the Chase-Lev algorithm with dynamic circular array
 //
 // Reference: "Dynamic Circular Work-Stealing Deque" by Chase and Lev (SPAA 2005)

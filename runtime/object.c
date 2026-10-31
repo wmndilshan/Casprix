@@ -1,4 +1,4 @@
-// Casperix Runtime - Object System Implementation
+// Casprix Runtime - Object System Implementation
 
 #include "object.h"
 #include <stdlib.h>

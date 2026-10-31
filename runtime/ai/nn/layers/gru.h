@@ -7,7 +7,7 @@
 #ifndef NN_GRU_H
 #define NN_GRU_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include "dense.h"
 
 #ifdef __cplusplus

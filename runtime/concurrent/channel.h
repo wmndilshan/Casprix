@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Channel Implementation
+ * Casprix Runtime - Channel Implementation
  * CSP-style message passing for concurrent tasks
  */
 
@@ -8,24 +8,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <pthread.h>
-
-// Channel structure (generic container)
-typedef struct Channel {
-    void** buffer;           // Ring buffer for messages
-    int capacity;            // 0 for unbuffered
-    int size;                // Current number of messages
-    int read_pos;            // Read position
-    int write_pos;           // Write position
-    
-    pthread_mutex_t lock;
-    pthread_cond_t not_empty;
-    pthread_cond_t not_full;
-    
-    bool closed;
-    int waiting_senders;
-    int waiting_receivers;
-} Channel;
+typedef struct Channel Channel;
 
 // Create a channel
 Channel* channel_create(int capacity);

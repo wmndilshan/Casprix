@@ -1,27 +1,13 @@
 @echo off
-REM scripts\build.bat — Build Casprix on Windows (MinGW / MSVC)
-setlocal EnableDelayedExpansion
+setlocal
 
-set "SCRIPT_DIR=%~dp0"
-set "PROJECT_ROOT=%SCRIPT_DIR%.."
-set "BUILD_DIR=%PROJECT_ROOT%\build"
-set "BUILD_TYPE=%~1"
-if "%BUILD_TYPE%"=="" set "BUILD_TYPE=Release"
+set "PRESET=%~1"
+if "%PRESET%"=="" set "PRESET=dev"
 
-echo === Casprix Build ===
-echo   Project:    %PROJECT_ROOT%
-echo   Build type: %BUILD_TYPE%
-echo.
+if /I not "%PRESET%"=="dev" if /I not "%PRESET%"=="release" if /I not "%PRESET%"=="ci" (
+    echo usage: %~nx0 [dev^|release^|ci] 1>&2
+    exit /b 64
+)
 
-cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" ^
-    -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
-    -DBUILD_COMPILER=ON ^
-    -DBUILD_RUNTIME=ON ^
-    -DBUILD_TESTS=ON
-
-cmake --build "%BUILD_DIR%" --config %BUILD_TYPE%
-
-echo.
-echo === Build complete ===
-echo   Compiler:  %BUILD_DIR%\casprix.exe
-echo   Runtime:   %BUILD_DIR%\libcasprix_runtime.a
+cmake --preset "%PRESET%" || exit /b %ERRORLEVEL%
+cmake --build --preset "%PRESET%" --parallel || exit /b %ERRORLEVEL%

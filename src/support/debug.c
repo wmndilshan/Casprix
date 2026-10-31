@@ -76,6 +76,7 @@ static const char* token_names[] = {
     [TOKEN_CONTINUE] = "CONTINUE",
     [TOKEN_INCLUDE] = "INCLUDE",
     [TOKEN_IMPORT] = "IMPORT",
+    [TOKEN_AS] = "AS",
     [TOKEN_CLASS] = "CLASS",
     [TOKEN_EXTENDS] = "EXTENDS",
     [TOKEN_THIS] = "THIS",
@@ -140,6 +141,8 @@ static const char* token_names[] = {
     [TOKEN_COMMA] = "COMMA",
     [TOKEN_ARROW] = "ARROW",
     [TOKEN_DOT] = "DOT",
+    [TOKEN_RANGE] = "RANGE",
+    [TOKEN_RANGE_INCLUSIVE] = "RANGE_INCLUSIVE",
     [TOKEN_PIPE] = "PIPE",
     [TOKEN_FAT_ARROW] = "FAT_ARROW",
     [TOKEN_QUESTION] = "QUESTION",
@@ -736,6 +739,9 @@ void debug_print_stmt(Stmt* stmt, int indent) {
             fprintf(out, " '%s'", stmt->as.include.module_name);
             if (stmt->as.include.is_import) {
                 fprintf(out, " [import]");
+            }
+            if (stmt->as.include.alias) {
+                fprintf(out, " as %s", stmt->as.include.alias);
             }
             fprintf(out, "\n");
             break;

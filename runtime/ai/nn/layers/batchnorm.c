@@ -3,7 +3,7 @@
  */
 
 #include "batchnorm.h"
-#include "../../llm/ops.h"
+#include "../../kernels/cpu_ops.h"
 #include <stdlib.h>
 #include <math.h>
 

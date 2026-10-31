@@ -10,8 +10,7 @@ let col2 = new Column(8.0)
 let lbl2 = new Text("Tab 2 content", app.get_font(), 0xFF000000)
 col2.add(lbl2.handle)
 
-let tabs = new TabPanel()
-tabs.new2("Tab One", col1.handle, "Tab Two", col2.handle)
+let tabs = new TabPanel("Tab One", col1.handle, "Tab Two", col2.handle)
 
 let root = new Column(0.0)
 root.add(tabs.handle)

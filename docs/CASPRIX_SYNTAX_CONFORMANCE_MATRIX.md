@@ -25,7 +25,7 @@ This matrix defines parser/type-checker acceptance criteria for core syntax gove
 | Case | Sample | Class | Notes |
 |---|---|---|---|
 | Block function | `func add(a: int, b: int) -> int { return a+b; }` | A | Canonical |
-| Short function | `func add(a: int, b: int) -> int => a+b;` | A | Canonical sugar |
+| Short function | `func add(a: int, b: int) -> int => a+b;` | A | Desugared to a return block |
 | Async function | `async func f() -> i64 { ... }` | A | Parsed and lowered to a state machine |
 | Missing return path | `func f() -> int { }` | D | Non-void must return |
 | Comptime async | `comptime async func f() -> int { ... }` | C | `comptime` not implemented |
@@ -39,6 +39,11 @@ This matrix defines parser/type-checker acceptance criteria for core syntax gove
 | Immutable class field | `public let name: string;` | A | Canonical |
 | Mutable class field | `private mut count: int;` | A | Canonical |
 | Static const field | `public static const count: int = 0;` | A | Canonical |
+| Constructor declaration | `public func Counter(start: int) -> void { this.value = start; }` | A | Name must exactly match the class; instance return is implicit |
+| Constructor overload | multiple `func Counter(...) -> void` signatures | A | Resolved by argument count and compatible types |
+| Object allocation | `let c = new Counter(1);` | A | `new` is an expression keyword only |
+| Legacy constructor method | `func new(start: int) -> void {}` | C | Rejected; use the class name |
+| Constructor return value | `func Counter() -> Counter { return this; }` | D | Constructors must return `void`; `this` is returned implicitly |
 | Legacy `field` keyword | `public field name: string;` | B | Accepted for compatibility, not canonical |
 | Bare class field | `public name: string;` | B | Accepted for compatibility, not canonical |
 
@@ -49,7 +54,7 @@ This matrix defines parser/type-checker acceptance criteria for core syntax gove
 | Public decl | `public func f() -> void {}` | A | Canonical |
 | Private decl | `private func f() -> void {}` | A | Canonical |
 | Module import | `import "std/io";` | A | Canonical |
-| Alias import | `import "math/linear" as ml;` | C | Not yet accepted by parser |
+| Alias import | `import "math/linear" as ml;` | A | Qualified imported function calls use the alias |
 | Internal visibility | `internal func f() {}` | C | Not in v1 core |
 
 ## 6. Arrays and Slices
@@ -66,10 +71,10 @@ This matrix defines parser/type-checker acceptance criteria for core syntax gove
 
 | Case | Sample | Class | Notes |
 |---|---|---|---|
-| If/else | `if c { ... } else { ... }` | A | Canonical |
+| If/else | `if c { ... } else { ... }` | A | `else if` and `elif` chains are supported |
 | For-range | `for i in 0..10 { ... }` | A | Canonical |
 | Match exhaustive | `match x { 0 => ..., _ => ... }` | A | Canonical |
-| Non-exhaustive match on enum | `match e { A => ... }` | D | Semantic reject |
+| Non-exhaustive match on enum | `match e { A => ... }` | D | Semantic reject; bare and `Enum.A` variants are supported |
 
 ## 8. Closures
 
@@ -86,8 +91,8 @@ This matrix defines parser/type-checker acceptance criteria for core syntax gove
 
 | Case | Sample | Class | Notes |
 |---|---|---|---|
-| Result return | `func read() -> Result<int, Error> { ... }` | A | Canonical |
-| Try propagation | `let x = parse()?;` | C | `?` is tokenized but not parsed |
+| Result return | `func read() -> Result<int, Error> { ... }` | A | Error path uses the exception channel; success lowers as `int` |
+| Try propagation | `let x = parse()?;` | A | Zero-cost propagation over the exception-backed Result ABI |
 | Throw keyword | `throw err;` | A | Canonical |
 
 ## 10. Async/Await

@@ -1,4 +1,4 @@
-// Casperix Runtime - ARC Implementation
+// Casprix Runtime - ARC Implementation
 // Thread-safe automatic reference counting with weak references
 
 #include "arc.h"

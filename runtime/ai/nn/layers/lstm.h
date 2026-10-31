@@ -7,7 +7,7 @@
 #ifndef NN_LSTM_H
 #define NN_LSTM_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include "dense.h"
 
 #ifdef __cplusplus

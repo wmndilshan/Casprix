@@ -3,8 +3,8 @@
  */
 
 #include "lstm.h"
-#include "../activations/activations.h"
-#include "../../llm/ops.h"
+#include "../../ops/activations.h"
+#include "../../kernels/cpu_ops.h"
 #include <stdlib.h>
 #include <string.h>
 

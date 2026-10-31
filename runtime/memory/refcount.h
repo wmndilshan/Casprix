@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Rc<T> and Arc<T> Smart Pointer Wrappers
+ * Casprix Runtime - Rc<T> and Arc<T> Smart Pointer Wrappers
  *
  * Language-level reference-counted smart pointer types that wrap the
  * low-level ARC subsystem with ergonomic APIs.

@@ -43,7 +43,7 @@ body:
         - Runtime (async / coroutines)
         - Runtime (AI / LLM)
         - Runtime (Skia / GUI)
-        - Package Manager (cpkg)
+        - Package Manager (casprix-pkg)
         - Standard Library
         - Build System (CMake / Make)
         - Other / Unknown

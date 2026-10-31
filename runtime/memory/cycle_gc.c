@@ -1,4 +1,4 @@
-// Casperix Runtime - Cycle Collector Implementation
+// Casprix Runtime - Cycle Collector Implementation
 // Bacon-Rajan synchronous cycle collection
 
 #include "cycle_gc.h"

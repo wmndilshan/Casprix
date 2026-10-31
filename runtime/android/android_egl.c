@@ -101,11 +101,8 @@ int android_egl_swap_buffers(AndroidEGL* egl) {
 
 int android_egl_surface_changed(AndroidEGL* egl, ANativeWindow* window) {
     /* Destroy old surface and recreate for the new window */
-    if (egl->surface != EGL_NO_SURFACE) {
-        eglMakeCurrent(egl->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        eglDestroySurface(egl->display, egl->surface);
-        egl->surface = EGL_NO_SURFACE;
-    }
+    if (!egl || !window) return 0;
+    android_egl_surface_destroy(egl);
     egl->surface = eglCreateWindowSurface(egl->display, egl->config, window, NULL);
     if (egl->surface == EGL_NO_SURFACE) {
         LOGE("surface recreate failed");
@@ -115,6 +112,15 @@ int android_egl_surface_changed(AndroidEGL* egl, ANativeWindow* window) {
     eglQuerySurface(egl->display, egl->surface, EGL_HEIGHT, &egl->height);
     LOGI("Surface resized: %d x %d", egl->width, egl->height);
     return android_egl_make_current(egl);
+}
+
+void android_egl_surface_destroy(AndroidEGL* egl) {
+    if (!egl || egl->display == EGL_NO_DISPLAY || egl->surface == EGL_NO_SURFACE) return;
+    eglMakeCurrent(egl->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglDestroySurface(egl->display, egl->surface);
+    egl->surface = EGL_NO_SURFACE;
+    egl->width = 0;
+    egl->height = 0;
 }
 
 void android_egl_get_size(AndroidEGL* egl, int* w, int* h) {

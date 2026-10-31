@@ -110,6 +110,9 @@ void cpx_a11y_set_root(struct SGNode* root);
  * (0,0), which is correct for a full-bleed NativeActivity surface. */
 void cpx_a11y_set_root_origin(int32_t screen_x, int32_t screen_y);
 
+/* Install scene-graph mutation hooks. Safe to call more than once. */
+void cpx_a11y_install_scene_hook(void);
+
 /* Registered by the JNI layer; invoked on a structural change so the Java
  * shim can post AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED. */
 typedef void (*CpxA11yContentChangedFn)(void);

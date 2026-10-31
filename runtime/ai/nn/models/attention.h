@@ -7,7 +7,7 @@
 #ifndef NN_ATTENTION_H
 #define NN_ATTENTION_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include "../layers/dense.h"
 
 #ifdef __cplusplus
@@ -38,7 +38,7 @@ typedef struct {
  * @param num_heads Number of attention heads (embed_dim must be divisible)
  * @param dropout_rate Dropout rate for attention weights (0.0 = no dropout)
  */
-MultiHeadAttention* attention_create(int embed_dim, int num_heads, float dropout_rate);
+MultiHeadAttention* nn_attention_create(int embed_dim, int num_heads, float dropout_rate);
 
 /**
  * Forward pass (self-attention)
@@ -48,14 +48,14 @@ MultiHeadAttention* attention_create(int embed_dim, int num_heads, float dropout
  * @param mask Optional attention mask [batch, seq_len, seq_len] (NULL for no mask)
  * @param output Output tensor [batch, seq_len, embed_dim]
  */
-void attention_forward(MultiHeadAttention* attn,
+void nn_attention_forward(MultiHeadAttention* attn,
                       const Tensor* query, const Tensor* key, const Tensor* value,
                       const Tensor* mask, Tensor* output);
 
 /**
  * Free attention layer
  */
-void attention_free(MultiHeadAttention* attn);
+void nn_attention_free(MultiHeadAttention* attn);
 
 #ifdef __cplusplus
 }

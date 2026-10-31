@@ -10,8 +10,8 @@
  * Build:
  *   gcc -O2 -I runtime/ai/llm \
  *       tests/runtime/test_checkpoint_validation.c \
- *       runtime/ai/llm/checkpoint.c runtime/ai/llm/tensor.c \
- *       runtime/ai/llm/transformer.c runtime/ai/llm/ops.c \
+ *       runtime/ai/llm/checkpoint.c runtime/ai/core/tensor.c \
+ *       runtime/ai/llm/transformer.c runtime/ai/kernels/cpu_ops.c \
  *       -lm -o test_checkpoint_validation
  */
 

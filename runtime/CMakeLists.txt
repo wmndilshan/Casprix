@@ -28,7 +28,11 @@ file(GLOB_RECURSE RUNTIME_CORE_SRCS
 file(GLOB_RECURSE RUNTIME_AI_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/ai/llm/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/ai/nn/*.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ai/ml/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ai/backend/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ai/classical/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ai/core/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ai/engine/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ai/kernels/*.c"
 )
 
 set(SKIA_GUI_SOURCES
@@ -100,6 +104,3 @@ else()
         C_STANDARD_REQUIRED ON
     )
 endif()
-
-# net2/ archived to archive/net2/ — removed from the active build.
-# See archive/net2/README.md. To revisit: add_subdirectory(${CMAKE_SOURCE_DIR}/archive/net2)

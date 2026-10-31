@@ -44,7 +44,7 @@ static int class_constructor_count(ClassSymbol* class_sym) {
 }
 
 /* Emit the asm label for a constructor into `buf`.
- *   ctor_ord < 0  OR  the class has a single constructor  -> legacy "Class_new"
+ *   ctor_ord < 0  OR  the class has a single constructor  -> "Class_new"
  *   otherwise                                             -> "Class_new__c<ord>"
  * Both the definition site (class codegen) and the call site (EXPR_NEW) call
  * this with the same inputs so the labels always agree. */
@@ -886,10 +886,20 @@ static void generate_asm_literal(AssemblyGenerator* gen, Expr* expr, const char*
     LiteralExpr* lit = &expr->as.literal;
     
     switch (lit->type) {
-        case TYPE_INT:
+        case TYPE_I8:
+        case TYPE_I16:
+        case TYPE_I32:
+        case TYPE_I64:
+        case TYPE_I128:
+        case TYPE_U8:
+        case TYPE_U16:
+        case TYPE_U32:
+        case TYPE_U64:
+        case TYPE_U128:
             emit_asm(gen, "    mov %s, %lld\n", reg, lit->value.int_value);
             break;
-        case TYPE_FLOAT: {
+        case TYPE_F32:
+        case TYPE_F64: {
             // Emit IEEE 754 double bit pattern (not truncated integer)
             double dval = lit->value.float_value;
             uint64_t bits;
@@ -1003,6 +1013,18 @@ static void prescan_locals(AssemblyGenerator* gen, Stmt* stmt) {
             prescan_locals(gen, stmt->as.for_stmt.increment);
             break;
         case STMT_FOR_IN: {
+            alloc_local(gen, stmt->as.for_in_stmt.var_name);
+            if (stmt->as.for_in_stmt.iterable &&
+                stmt->as.for_in_stmt.iterable->type == EXPR_BINARY &&
+                (stmt->as.for_in_stmt.iterable->as.binary.operator == TOKEN_RANGE ||
+                 stmt->as.for_in_stmt.iterable->as.binary.operator == TOKEN_RANGE_INCLUSIVE)) {
+                char end_name[64];
+                snprintf(end_name, sizeof(end_name), "__cpx_range_end_%p", (void*)stmt);
+                alloc_local(gen, end_name);
+                prescan_expr_locals(gen, stmt->as.for_in_stmt.iterable);
+                prescan_locals(gen, stmt->as.for_in_stmt.body);
+                break;
+            }
             char iter_name[64];
             char len_name[64];
             char idx_name[64];
@@ -1010,7 +1032,6 @@ static void prescan_locals(AssemblyGenerator* gen, Stmt* stmt) {
             snprintf(len_name, sizeof(len_name), "__cpx_fi_len_%p", (void*)stmt);
             snprintf(idx_name, sizeof(idx_name), "__cpx_fi_idx_%p", (void*)stmt);
 
-            alloc_local(gen, stmt->as.for_in_stmt.var_name);
             alloc_local(gen, idx_name);
             alloc_local(gen, iter_name);
             alloc_local(gen, len_name);
@@ -1238,8 +1259,17 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             break;
         case EXPR_UNARY: {
             UnaryExpr* unary = &expr->as.unary;
-            // Generate the operand
-            generate_asm_expr(gen, unary->operand, reg, symbols);
+            if (unary->operator == TOKEN_BITAND &&
+                unary->operand->type == EXPR_VARIABLE &&
+                unary->operand->data_type != TYPE_CLASS &&
+                unary->operand->data_type != TYPE_ARRAY &&
+                unary->operand->data_type != TYPE_SLICE) {
+                emit_load_var_addr(gen, unary->operand->as.variable.name, reg);
+            } else {
+                /* Class/array values already use reference representation, so
+                 * borrowing them is a zero-cost ownership annotation. */
+                generate_asm_expr(gen, unary->operand, reg, symbols);
+            }
 
             // Apply unary operator
             switch (unary->operator) {
@@ -1256,6 +1286,9 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 case TOKEN_BITNOT:
                     // Bitwise complement: ~value
                     emit_asm(gen, "    not %s\n", reg);
+                    break;
+                case TOKEN_BITAND:
+                case TOKEN_QUESTION:
                     break;
                 default:
                     break;
@@ -1400,6 +1433,13 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
 
             if (func_sym && func_sym->kind == SYMBOL_FUNCTION && func_sym->is_extern) {
                 emit_asm(gen, "    call %s\n", call->name);
+                /* Casprix carries floating-point values as their 64-bit bit pattern
+                 * in general-purpose registers.  Native C ABIs return floating
+                 * values in xmm0, so bridge the representation at the FFI edge. */
+                if (func_sym->return_type == TYPE_FLOAT ||
+                    func_sym->return_type == TYPE_F32) {
+                    emit_asm(gen, "    movq rax, xmm0  ; native float return\n");
+                }
             } else if (func_sym && func_sym->kind == SYMBOL_FUNCTION) {
                 emit_asm(gen, "    call __casprix_%s\n", call->name);
             } else if (call->callee) {
@@ -1546,8 +1586,8 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             break;
         }
         case EXPR_THIS:
-            // Load 'this' pointer from the global variable
-            emit_asm(gen, "    mov %s, [rel this_ptr]  ; Load 'this' pointer\n", reg);
+            emit_asm(gen, "    mov %s, [rbp - %d]  ; Load frame-local 'this' pointer\n",
+                     reg, find_local(gen, "__this"));
             break;
         case EXPR_SUPER: {
             SuperExpr* super_expr = &expr->as.super_expr;
@@ -1569,7 +1609,8 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 }
                 
                 // First argument is always 'this' for method calls
-                emit_asm(gen, "    mov %s, [rel this_ptr]\n", ABI_I_REGS[0]);
+                emit_asm(gen, "    mov %s, [rbp - %d]\n", ABI_I_REGS[0],
+                         find_local(gen, "__this"));
                 
                 // Load remaining arguments into registers
                 int s_args = super_expr->arg_count < reg_args_limit ? super_expr->arg_count : reg_args_limit;
@@ -1592,7 +1633,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             } else {
                 // Super field access: Super.field
                 // Load this pointer, then access field at parent's offset
-                emit_asm(gen, "    mov rax, [rel this_ptr]\n");
+                emit_asm(gen, "    mov rax, [rbp - %d]\n", find_local(gen, "__this"));
                 
                 if (gen->current_class && gen->current_class->parent_class) {
                     ClassSymbol* parent_class = lookup_class(symbols, gen->current_class->parent_class);
@@ -1720,6 +1761,43 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
         }
         case EXPR_INDEX: {
             IndexExpr* index_expr = &expr->as.index;
+
+            if (index_expr->index && index_expr->index->type == EXPR_BINARY &&
+                (index_expr->index->as.binary.operator == TOKEN_RANGE ||
+                 index_expr->index->as.binary.operator == TOKEN_RANGE_INCLUSIVE)) {
+                BinaryExpr* range = &index_expr->index->as.binary;
+                emit_asm(gen, "    ; Array slice view\n");
+                generate_asm_expr(gen, index_expr->array, "rax", symbols);
+                emit_asm(gen, "    push rax  ; save source array\n");
+                generate_asm_expr(gen, range->left, "rbx", symbols);
+                emit_asm(gen, "    push rbx  ; save slice start\n");
+                generate_asm_expr(gen, range->right, "rcx", symbols);
+                emit_asm(gen, "    pop rbx   ; restore slice start\n");
+                emit_asm(gen, "    pop rdx   ; restore source array\n");
+                if (range->operator == TOKEN_RANGE_INCLUSIVE) {
+                    emit_asm(gen, "    add rcx, 1  ; inclusive end to exclusive end\n");
+                }
+                emit_asm(gen, "    sub rcx, rbx  ; slice length\n");
+                emit_asm(gen, "    mov rdx, [rdx + 8]  ; source data pointer\n");
+                emit_asm(gen, "    lea rdx, [rdx + rbx*8]  ; first slice element\n");
+                emit_asm(gen, "    push rcx  ; preserve length\n");
+                emit_asm(gen, "    push rdx  ; preserve data pointer\n");
+                {
+                    int slice_stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+                    emit_asm(gen, "    sub rsp, %d\n", slice_stack_adj);
+                    emit_asm(gen, "    mov %s, 16\n", ABI_I_REGS[0]);
+                    emit_asm(gen, "    xor %s, %s\n", ABI_I_REGS[1], ABI_I_REGS[1]);
+                    emit_asm(gen, "    xor %s, %s\n", ABI_I_REGS[2], ABI_I_REGS[2]);
+                    emit_asm(gen, "    call arc_alloc_full\n");
+                    emit_asm(gen, "    add rsp, %d\n", slice_stack_adj);
+                }
+                emit_asm(gen, "    pop rdx\n");
+                emit_asm(gen, "    pop rcx\n");
+                emit_asm(gen, "    mov [rax + 0], rcx\n");
+                emit_asm(gen, "    mov [rax + 8], rdx\n");
+                if (strcmp(reg, "rax") != 0) emit_asm(gen, "    mov %s, rax\n", reg);
+                break;
+            }
 
             emit_asm(gen, "    ; Array indexing\n");
 
@@ -1906,7 +1984,11 @@ static void generate_asm_declaration(AssemblyGenerator* gen, Stmt* stmt, SymbolT
     }
 
     /* ── ARC: Register the variable for drop tracking if it is reference-counted ── */
-    if (decl->type == TYPE_CLASS || decl->type == TYPE_STRING || decl->type == TYPE_STRBUF) {
+    ClassSymbol* declared_class = decl->class_name
+        ? lookup_class(symbols, decl->class_name) : NULL;
+    if ((decl->type == TYPE_CLASS && !(declared_class && declared_class->is_enum)) ||
+        decl->type == TYPE_STRING || decl->type == TYPE_STRBUF ||
+        decl->type == TYPE_SLICE) {
         int off = find_local(gen, decl->name);
         drop_planner_register(&gen->drop_ctx, decl->name,
                                off, DROP_ARC, NULL, false);
@@ -2032,9 +2114,13 @@ static void generate_asm_print(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
 #endif
             emit_asm(gen, "    call printf\n");
             break;
-        case TYPE_FLOAT:
+        case TYPE_FLOAT: /* TYPE_F64 is an alias of TYPE_FLOAT. */
+        case TYPE_F32:
             emit_asm(gen, "    lea %s, [rel fmt_float]\n", ABI_I_REGS[0]);
 #ifdef _WIN32
+            /* Win64 variadic calls duplicate floating arguments in the
+             * corresponding integer register as well as the XMM register. */
+            emit_asm(gen, "    mov %s, rax\n", ABI_I_REGS[1]);
             emit_asm(gen, "    movq xmm1, rax\n");
 #else
             emit_asm(gen, "    movq xmm0, rax\n");
@@ -2214,7 +2300,11 @@ static void generate_asm_function(AssemblyGenerator* gen, Stmt* stmt, SymbolTabl
     drop_planner_enter_scope(&gen->drop_ctx);
     for (int j = 0; j < func->param_count; j++) {
         DataType pt = func->parameters[j].type;
-        if (pt == TYPE_CLASS || pt == TYPE_STRING || pt == TYPE_STRBUF) {
+        ClassSymbol* param_class = func->parameters[j].class_name
+            ? lookup_class(symbols, func->parameters[j].class_name) : NULL;
+        if (func->parameters[j].ownership == OWNERSHIP_OWNED &&
+            ((pt == TYPE_CLASS && !(param_class && param_class->is_enum)) ||
+            pt == TYPE_STRING || pt == TYPE_STRBUF || pt == TYPE_SLICE)) {
             int off = find_local(gen, func->parameters[j].name);
             drop_planner_register(&gen->drop_ctx, func->parameters[j].name,
                                    off, DROP_ARC, NULL, true);
@@ -2308,7 +2398,7 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
             snprintf(mangled_name, sizeof(mangled_name), "__static_%s_%s", class_stmt->name, method->name);
         } else if (method->is_constructor) {
             /* Overloaded constructors get a per-ordinal suffix so their asm
-               labels don't collide; a lone constructor keeps "Class_new". */
+               labels don't collide; a lone constructor uses "Class_new". */
             constructor_label(mangled_name, sizeof(mangled_name), class_stmt->name,
                               total_ctors, ctor_ord_seen);
             ctor_ord_seen++;
@@ -2326,6 +2416,8 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
         /* ── Per-method stack frame ── */
         begin_local_frame(gen);
 
+        if (!method->is_static) alloc_local(gen, "__this");
+
         for (int j = 0; j < method->param_count; j++)
             alloc_local(gen, method->parameters[j].name);
         prescan_locals(gen, method->body);
@@ -2338,7 +2430,8 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
 
         if (!method->is_static) {
             /* 'this' pointer comes in the first argument register */
-            emit_asm(gen, "    mov [rel this_ptr], %s\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    mov [rbp - %d], %s\n",
+                     find_local(gen, "__this"), ABI_I_REGS[0]);
         }
 
         /* Store parameters into stack slots */
@@ -2372,7 +2465,11 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
         drop_planner_enter_scope(&gen->drop_ctx);
         for (int j = 0; j < method->param_count; j++) {
             DataType pt = method->parameters[j].type;
-            if (pt == TYPE_CLASS || pt == TYPE_STRING || pt == TYPE_STRBUF) {
+            ClassSymbol* param_class = method->parameters[j].class_name
+                ? lookup_class(symbols, method->parameters[j].class_name) : NULL;
+            if (method->parameters[j].ownership == OWNERSHIP_OWNED &&
+                ((pt == TYPE_CLASS && !(param_class && param_class->is_enum)) ||
+                 pt == TYPE_STRING || pt == TYPE_STRBUF || pt == TYPE_SLICE)) {
                 int off = find_local(gen, method->parameters[j].name);
                 drop_planner_register(&gen->drop_ctx, method->parameters[j].name,
                                        off, DROP_ARC, NULL, true);
@@ -2392,7 +2489,8 @@ static void generate_asm_class(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
 
         /* Epilogue */
         if (method->is_constructor) {
-            emit_asm(gen, "    mov rax, [rel this_ptr]  ; Return 'this' from constructor\n");
+            emit_asm(gen, "    mov rax, [rbp - %d]  ; Return frame-local 'this'\n",
+                     find_local(gen, "__this"));
         } else if (method->return_type == TYPE_VOID) {
             emit_asm(gen, "    mov rax, 0\n");
         }
@@ -2745,6 +2843,49 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
 
         case STMT_FOR_IN: {
             ForInStmt* fi = &stmt->as.for_in_stmt;
+            if (fi->iterable && fi->iterable->type == EXPR_BINARY &&
+                (fi->iterable->as.binary.operator == TOKEN_RANGE ||
+                 fi->iterable->as.binary.operator == TOKEN_RANGE_INCLUSIVE)) {
+                BinaryExpr* range = &fi->iterable->as.binary;
+                int cond_id = gen->label_count++;
+                int continue_id = gen->label_count++;
+                int end_id = gen->label_count++;
+                char cond_lbl[32], continue_lbl[32], end_lbl[32];
+                snprintf(cond_lbl, sizeof(cond_lbl), "L%d", cond_id);
+                snprintf(continue_lbl, sizeof(continue_lbl), "L%d", continue_id);
+                snprintf(end_lbl, sizeof(end_lbl), "L%d", end_id);
+
+                char end_name[64];
+                snprintf(end_name, sizeof(end_name), "__cpx_range_end_%p", (void*)stmt);
+                int var_off = alloc_local(gen, fi->var_name);
+                int end_off = alloc_local(gen, end_name);
+
+                generate_asm_expr(gen, range->left, "rax", symbols);
+                emit_asm(gen, "    mov [rbp - %d], rax  ; range start\n", var_off);
+                generate_asm_expr(gen, range->right, "rax", symbols);
+                emit_asm(gen, "    mov [rbp - %d], rax  ; range end\n", end_off);
+
+                if (gen->loop_depth < 32) {
+                    snprintf(gen->loop_start_labels[gen->loop_depth], 32, "%s", continue_lbl);
+                    snprintf(gen->loop_end_labels[gen->loop_depth], 32, "%s", end_lbl);
+                }
+                gen->loop_depth++;
+
+                emit_asm(gen, "%s:\n", cond_lbl);
+                emit_asm(gen, "    mov rax, [rbp - %d]\n", var_off);
+                emit_asm(gen, "    cmp rax, [rbp - %d]\n", end_off);
+                emit_asm(gen, "    %s %s\n",
+                         range->operator == TOKEN_RANGE_INCLUSIVE ? "jg" : "jge",
+                         end_lbl);
+                generate_asm_stmt(gen, fi->body, symbols);
+                emit_asm(gen, "%s:\n", continue_lbl);
+                emit_asm(gen, "    add qword [rbp - %d], 1\n", var_off);
+                emit_asm(gen, "    jmp %s\n", cond_lbl);
+                emit_asm(gen, "%s:\n", end_lbl);
+                gen->loop_depth--;
+                break;
+            }
+
             /*
              * Lowering: for var in arr  →
              *   __cpx_for_in_arr_len = arr.length
@@ -2757,8 +2898,9 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
              *   end:
              */
             int lb = gen->label_count++;
-            char loop_lbl[32], end_lbl[32];
+            char loop_lbl[32], continue_lbl[32], end_lbl[32];
             snprintf(loop_lbl, sizeof(loop_lbl), "L%d", lb);
+            snprintf(continue_lbl, sizeof(continue_lbl), "L%d", gen->label_count++);
             snprintf(end_lbl,  sizeof(end_lbl),  "L%d", gen->label_count++);
 
             char iter_name[64];
@@ -2782,7 +2924,7 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
 
             /* Push loop labels for break/continue */
             if (gen->loop_depth < 32) {
-                snprintf(gen->loop_start_labels[gen->loop_depth], 32, "%s", loop_lbl);
+                snprintf(gen->loop_start_labels[gen->loop_depth], 32, "%s", continue_lbl);
                 snprintf(gen->loop_end_labels[gen->loop_depth], 32, "%s", end_lbl);
             }
             gen->loop_depth++;
@@ -2799,6 +2941,7 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
 
             generate_asm_stmt(gen, fi->body, symbols);
 
+            emit_asm(gen, "%s:\n", continue_lbl);
             emit_asm(gen, "    add qword [rbp - %d], 1  ; idx++\n", idx_off);
             emit_asm(gen, "    jmp %s\n", loop_lbl);
             emit_asm(gen, "%s:\n", end_lbl);
@@ -2829,6 +2972,23 @@ static void generate_asm_stmt(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* s
                     emit_asm(gen, "    ; match arm: wildcard\n");
                     generate_asm_stmt(gen, arm->body, symbols);
                     emit_asm(gen, "    jmp %s  ; end match\n", end_lbl);
+                } else if (arm->pattern->type == EXPR_BINARY &&
+                           (arm->pattern->as.binary.operator == TOKEN_RANGE ||
+                            arm->pattern->as.binary.operator == TOKEN_RANGE_INCLUSIVE)) {
+                    BinaryExpr* range = &arm->pattern->as.binary;
+                    generate_asm_expr(gen, range->left, "rax", symbols);
+                    emit_asm(gen, "    mov rcx, [rbp - %d]\n", ms_subj_off);
+                    emit_asm(gen, "    cmp rcx, rax\n");
+                    emit_asm(gen, "    jl %s\n", arm_lbl);
+                    generate_asm_expr(gen, range->right, "rax", symbols);
+                    emit_asm(gen, "    mov rcx, [rbp - %d]\n", ms_subj_off);
+                    emit_asm(gen, "    cmp rcx, rax\n");
+                    emit_asm(gen, "    %s %s\n",
+                             range->operator == TOKEN_RANGE_INCLUSIVE ? "jg" : "jge",
+                             arm_lbl);
+                    generate_asm_stmt(gen, arm->body, symbols);
+                    emit_asm(gen, "    jmp %s  ; end match\n", end_lbl);
+                    emit_asm(gen, "%s:\n", arm_lbl);
                 } else {
                     /* Compare subject to pattern */
                     generate_asm_expr(gen, arm->pattern, "rax", symbols);
@@ -3164,7 +3324,9 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     /* Set up stack frame for top-level local variables */
     begin_local_frame(gen);
     for (int i = 0; i < count; i++) {
-        if (statements[i]->type != STMT_FUNCTION && statements[i]->type != STMT_CLASS) {
+        if (statements[i]->type != STMT_FUNCTION &&
+            statements[i]->type != STMT_CLASS &&
+            statements[i]->type != STMT_IMPL) {
             prescan_locals(gen, statements[i]);
         }
     }
@@ -3189,7 +3351,9 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
 
     // Generate top-level statements (exclude functions and classes)
     for (int i = 0; i < count; i++) {
-        if (statements[i]->type != STMT_FUNCTION && statements[i]->type != STMT_CLASS) {
+        if (statements[i]->type != STMT_FUNCTION &&
+            statements[i]->type != STMT_CLASS &&
+            statements[i]->type != STMT_IMPL) {
             generate_asm_stmt(gen, statements[i], symbols);
         }
     }
@@ -3201,16 +3365,19 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
         emit_asm(gen, "    sub rsp, %d\n", main_stack_adj);
         emit_asm(gen, "    call __casprix_main\n");
         emit_asm(gen, "    add rsp, %d\n", main_stack_adj);
+    } else {
+        emit_asm(gen, "    mov rax, 0\n");
     }
-    
-    // Exit
-    emit_asm(gen, "    mov rax, 0\n"); // return 0
+
+    // Return the user's main result when one exists.
     emit_asm(gen, "    leave\n");
     emit_asm(gen, "    ret\n\n");
     
     // Generate functions and class methods
     for (int i = 0; i < count; i++) {
-        if (statements[i]->type == STMT_FUNCTION || statements[i]->type == STMT_CLASS) {
+        if (statements[i]->type == STMT_FUNCTION ||
+            statements[i]->type == STMT_CLASS ||
+            statements[i]->type == STMT_IMPL) {
             generate_asm_stmt(gen, statements[i], symbols);
         }
     }

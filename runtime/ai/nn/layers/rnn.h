@@ -7,7 +7,7 @@
 #ifndef NN_RNN_H
 #define NN_RNN_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include "../layers/lstm.h"
 #include "../layers/gru.h"
 #include <stdbool.h>

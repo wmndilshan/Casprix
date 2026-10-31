@@ -470,6 +470,7 @@ typedef struct {
 
 typedef struct {
     char* module_name;
+    char* alias;       // Optional local alias for an import
     bool is_import;  // true for Import, false for Include
 } IncludeStmt;
 
@@ -505,8 +506,9 @@ typedef struct {
     Parameter* parameters;
     int param_count;
     DataType return_type;
+    char* return_class_name;   // Specific class when return_type == TYPE_CLASS
     Stmt* body;
-    bool is_constructor;       // True for constructor method (class name or legacy "new")
+    bool is_constructor;       // True when the method name matches its class name
     bool is_static;            // True for static methods
     bool is_abstract;          // True for abstract methods (no body)
     AccessModifier access;     // Access modifier (default: PUBLIC)
@@ -717,7 +719,7 @@ Stmt* create_break_stmt(int line, int col);
 Stmt* create_continue_stmt(int line, int col);
 Stmt* create_expr_stmt(Expr* expr, int line, int col);
 Stmt* create_block_stmt(Stmt** stmts, int count, int line, int col);
-Stmt* create_include_stmt(char* module_name, bool is_import, int line, int col);
+Stmt* create_include_stmt(char* module_name, char* alias, bool is_import, int line, int col);
 Stmt* create_class_stmt(char* name, char* parent_name, FieldDecl* fields, int field_count,
                         MethodDecl* methods, int method_count, int line, int col);
 Stmt* create_extern_stmt(char* name, Parameter* params, int param_count,

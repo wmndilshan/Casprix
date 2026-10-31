@@ -1,0 +1,10 @@
+enum State { Idle, Running, Done }
+
+func code(state: State) -> int {
+    match state {
+        Idle => { return 0; }
+        Running => { return 1; }
+    }
+}
+
+func main() -> int { return 0; }

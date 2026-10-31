@@ -1,14 +1,17 @@
 /**
- * Casperix Runtime - Socket Implementation
+ * Casprix Runtime - Socket Implementation
  */
 
 #include "socket.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 
 #ifdef _WIN32
+#ifdef _MSC_VER
 #pragma comment(lib, "ws2_32.lib")
+#endif
 #else
 #include <unistd.h>
 #include <fcntl.h>
@@ -137,7 +140,10 @@ bool socket_bind(Socket* sock, const char* ip, uint16_t port) {
     addr.sin_port = htons(port);
     
     if (ip && strlen(ip) > 0) {
-        addr.sin_addr.s_addr = inet_addr(ip);
+        if (inet_pton(AF_INET, ip, &addr.sin_addr) != 1) {
+            sock->last_error = -1;
+            return false;
+        }
     } else {
         addr.sin_addr.s_addr = INADDR_ANY;
     }
@@ -206,10 +212,8 @@ Socket* socket_accept(Socket* sock) {
     
     // Store remote address
     {
-        char* addr_str = inet_ntoa(client_addr.sin_addr);
-        if (addr_str) {
-            snprintf(client->remote_addr.ip, sizeof(client->remote_addr.ip), "%s", addr_str);
-        }
+        inet_ntop(AF_INET, &client_addr.sin_addr, client->remote_addr.ip,
+                  sizeof(client->remote_addr.ip));
     }
     client->remote_addr.port = ntohs(client_addr.sin_port);
     
@@ -223,7 +227,11 @@ bool socket_connect(Socket* sock, const char* ip, uint16_t port) {
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = inet_addr(ip);
+    if (inet_pton(AF_INET, ip, &addr.sin_addr) != 1) {
+        sock->last_error = -1;
+        sock->state = SOCKET_STATE_ERROR;
+        return false;
+    }
     
     sock->state = SOCKET_STATE_CONNECTING;
     
@@ -253,8 +261,12 @@ bool socket_connect(Socket* sock, const char* ip, uint16_t port) {
 
 int socket_send(Socket* sock, const void* data, size_t length) {
     if (!sock || !data) return -1;
-    
-    int sent = send(sock->handle, (const char*)data, (int)length, 0);
+    int chunk = length > (size_t)INT_MAX ? INT_MAX : (int)length;
+#ifdef MSG_NOSIGNAL
+    int sent = send(sock->handle, (const char*)data, chunk, MSG_NOSIGNAL);
+#else
+    int sent = send(sock->handle, (const char*)data, chunk, 0);
+#endif
     if (sent < 0) {
 #ifdef _WIN32
         sock->last_error = WSAGetLastError();
@@ -268,8 +280,8 @@ int socket_send(Socket* sock, const void* data, size_t length) {
 
 int socket_recv(Socket* sock, void* buffer, size_t length) {
     if (!sock || !buffer) return -1;
-    
-    int received = recv(sock->handle, (char*)buffer, (int)length, 0);
+    int chunk = length > (size_t)INT_MAX ? INT_MAX : (int)length;
+    int received = recv(sock->handle, (char*)buffer, chunk, 0);
     if (received < 0) {
 #ifdef _WIN32
         sock->last_error = WSAGetLastError();
@@ -319,10 +331,7 @@ int socket_recvfrom(Socket* sock, void* buffer, size_t length, Address* from) {
         sock->last_error = errno;
 #endif
     } else if (from) {
-        char* addr_str = inet_ntoa(addr.sin_addr);
-        if (addr_str) {
-            snprintf(from->ip, sizeof(from->ip), "%s", addr_str);
-        }
+        inet_ntop(AF_INET, &addr.sin_addr, from->ip, sizeof(from->ip));
         from->port = ntohs(addr.sin_port);
         from->is_ipv6 = false;
     }

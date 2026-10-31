@@ -5,8 +5,8 @@
 #ifndef LLM_TRANSFORMER_H
 #define LLM_TRANSFORMER_H
 
-#include "tensor.h"
-#include "ops.h"
+#include "../core/tensor.h"
+#include "../kernels/cpu_ops.h"
 
 // ===== ATTENTION =====
 

@@ -78,6 +78,7 @@ typedef enum {
     TOKEN_CONTINUE,      // continue
     TOKEN_INCLUDE,       // (legacy, maps to import)
     TOKEN_IMPORT,        // import
+    TOKEN_AS,             // as (import alias)
     TOKEN_CLASS,         // class
     TOKEN_EXTENDS,       // extends
     TOKEN_THIS,          // this
@@ -161,6 +162,8 @@ typedef enum {
     TOKEN_COMMA,         // ,
     TOKEN_ARROW,         // ->
     TOKEN_DOT,           // .
+    TOKEN_RANGE,         // .. (half-open range)
+    TOKEN_RANGE_INCLUSIVE, // ..= (closed range)
     TOKEN_PIPE,          // | (for lambda params)
     TOKEN_FAT_ARROW,     // => (for lambda shorthand)
     TOKEN_QUESTION,      // ? (for optional types)

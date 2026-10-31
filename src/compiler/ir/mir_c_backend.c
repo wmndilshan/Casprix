@@ -159,14 +159,24 @@ static void c_emit_escaped_string(FILE* out, const char* text) {
 static void c_emit_signature(FILE* out, const char* prefix, MirFunction* func) {
     char ret_buf[64];
     c_type_name(func->return_type, ret_buf, sizeof(ret_buf));
-    fprintf(out, "%s %s %s(", prefix, ret_buf, func->name);
+    if (prefix && prefix[0] != '\0') fprintf(out, "%s ", prefix);
+    fprintf(out, "%s %s(", ret_buf, func->name);
     for (int i = 0; i < func->param_count; i++) {
         char param_buf[64];
         c_type_name(func->params[i].type, param_buf, sizeof(param_buf));
         if (i > 0) fputs(", ", out);
         fprintf(out, "%s arg%d", param_buf, i);
     }
+    if (func->param_count == 0) fputs("void", out);
     fputs(")", out);
+}
+
+/* A source-level main must retain external linkage so the platform C startup
+ * code can find it. Other lowered functions remain translation-unit local. */
+static const char* c_function_linkage(MirFunction* func) {
+    if (func->is_extern) return "extern";
+    if (strcmp(func->name, "main") == 0) return "";
+    return "static";
 }
 
 static MirInst* c_find_inst_by_result(MirFunction* func, MirValueId id) {
@@ -306,7 +316,7 @@ static bool c_begin_module(MirBackend* self, MirModule* module) {
     c_emit_global_decls(data->out, module);
 
     for (MirFunction* func = module->func_list; func; func = func->next_func) {
-        c_emit_signature(data->out, func->is_extern ? "extern" : "static", func);
+        c_emit_signature(data->out, c_function_linkage(func), func);
         fprintf(data->out, ";\n");
         if (strcmp(func->name, "__casprix_entry") == 0) data->has_entry = true;
     }
@@ -319,10 +329,31 @@ static void c_end_module(MirBackend* self) {
     if (!data->out) return;
 
     if (data->has_entry) {
-        fprintf(data->out, "int main(int argc, char** argv) {\n");
-        fprintf(data->out, "    __casprix_entry();\n");
-        fprintf(data->out, "    return 0;\n");
-        fprintf(data->out, "}\n");
+        const char* entry = self->config.entry_symbol;
+        if (entry && entry[0]) {
+            const unsigned char* p = (const unsigned char*)entry;
+            if (!(isalpha(*p) || *p == '_')) {
+                data->had_error = true;
+                return;
+            }
+            for (++p; *p; ++p) {
+                if (!(isalnum(*p) || *p == '_')) {
+                    data->had_error = true;
+                    return;
+                }
+            }
+            fprintf(data->out, "void %s(void* context) {\n", entry);
+            fprintf(data->out, "    (void)context;\n");
+            fprintf(data->out, "    __casprix_entry();\n");
+            fprintf(data->out, "}\n");
+        } else {
+            fprintf(data->out, "int main(int argc, char** argv) {\n");
+            fprintf(data->out, "    (void)argc;\n");
+            fprintf(data->out, "    (void)argv;\n");
+            fprintf(data->out, "    __casprix_entry();\n");
+            fprintf(data->out, "    return 0;\n");
+            fprintf(data->out, "}\n");
+        }
     }
 }
 
@@ -331,7 +362,7 @@ static bool c_begin_function(MirBackend* self, MirFunction* func) {
     data->current_func = func;
     if (func->is_extern) return true;
 
-    c_emit_signature(data->out, "static", func);
+    c_emit_signature(data->out, c_function_linkage(func), func);
     fprintf(data->out, " {\n");
     c_emit_locals(data->out, func);
     fprintf(data->out, "    goto bb%u;\n\n", func->entry_block ? func->entry_block->id : 0);
@@ -512,9 +543,14 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
             fprintf(data->out, ");\n");
             break;
         case MIR_LOGIC_NOT:
-        case MIR_BNOT:
             c_type_name(inst->type, type_buf, sizeof(type_buf));
             fprintf(data->out, "    cpx_v%u = (%s)(!", inst->result, type_buf);
+            c_emit_value(data->out, func, inst->as.unary.operand, inst->type);
+            fprintf(data->out, ");\n");
+            break;
+        case MIR_BNOT:
+            c_type_name(inst->type, type_buf, sizeof(type_buf));
+            fprintf(data->out, "    cpx_v%u = (%s)(~", inst->result, type_buf);
             c_emit_value(data->out, func, inst->as.unary.operand, inst->type);
             fprintf(data->out, ");\n");
             break;

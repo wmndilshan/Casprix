@@ -20,6 +20,7 @@ void free_symbol_table(SymbolTable* table) {
         if (table->symbols[i]->ownership_data) {
             free(table->symbols[i]->ownership_data);
         }
+        if (table->symbols[i]->enum_name) free(table->symbols[i]->enum_name);
         if (table->symbols[i]->kind == SYMBOL_CLASS && table->symbols[i]->class_info) {
             ClassSymbol* cls = table->symbols[i]->class_info;
             free(cls->name);
@@ -39,6 +40,10 @@ void free_symbol_table(SymbolTable* table) {
                 }
             }
             if (cls->methods) free(cls->methods);
+            for (int j = 0; j < cls->enum_variant_count; j++) {
+                free(cls->enum_variants[j]);
+            }
+            if (cls->enum_variants) free(cls->enum_variants);
             free(cls);
         }
         if (table->symbols[i]->kind == SYMBOL_TRAIT && table->symbols[i]->trait_info) {
@@ -100,6 +105,9 @@ bool add_symbol(SymbolTable* table, const char* name, SymbolKind kind,
     symbol->closure_capture_types = NULL;
     symbol->closure_lambda_id = -1;
     symbol->is_heap_allocated = false;
+    symbol->is_enum_variant = false;
+    symbol->const_int_value = 0;
+    symbol->enum_name = NULL;
     symbol->ownership_data = NULL;
 
     table->symbols[table->count++] = symbol;
@@ -204,6 +212,9 @@ bool add_class(SymbolTable* table, const char* name, const char* parent_name, in
     cls->methods = NULL;
     cls->method_count = 0;
     cls->instance_size = 8; // Start with VTable pointer (8 bytes on x64)
+    cls->is_enum = false;
+    cls->enum_variants = NULL;
+    cls->enum_variant_count = 0;
 
     // Resolve parent if specified
     if (parent_name) {
@@ -292,9 +303,7 @@ bool add_method_to_class(ClassSymbol* class_sym, const char* name, DataType retu
     // Check for duplicate method in this class. Constructors are exempt:
     // multiple same-named constructors form an overload set resolved by
     // argument count/type at each `new` call site (see resolve_constructor
-    // in semantic.c). Non-constructor overloading is still rejected — a
-    // duplicate spelling of a real named constructor (class-name form) and
-    // a matching-arity legacy `new` is caught in semantic.c instead.
+    // in semantic.c). Non-constructor overloading is still rejected.
     for (int i = 0; i < class_sym->method_count; i++) {
         if (strcmp(class_sym->methods[i].name, name) == 0) {
             if (is_constructor && class_sym->methods[i].is_constructor) {

@@ -58,6 +58,7 @@ typedef struct {
     bool                pic;                /* Position-independent code */
     bool                size_opt;           /* Optimize for code size */
     const char*         output_path;        /* Output file path */
+    const char*         entry_symbol;       /* Optional C library entry symbol */
 } MirBackendConfig;
 
 /* ────────────────────────────────────────────────────────────
@@ -289,4 +290,3 @@ typedef struct {
 #define JIT_OPTIMIZE_THRESHOLD   5000   /* calls before Tier 2 compile */
 
 #endif /* MIR_BACKEND_H */
-

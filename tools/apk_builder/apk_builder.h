@@ -1,8 +1,8 @@
 /*
- * APK Builder — Packages a Casperix/ND Android program into an .apk file
+ * APK Builder — Packages a Casprix Android program into an .apk file
  *
  * Pipeline:
- *   1. Compile  .cpx → ARM64 native shared library (.so) via Casperix compiler
+ *   1. Compile  .cpx → ARM64 native shared library (.so) via Casprix compiler
  *              cross-compiling with --target android-arm64
  *   2. Manifest Generate AndroidManifest.xml from app metadata
  *   3. Resources Pack resources (icons, fonts) into resources.arsc
@@ -11,7 +11,7 @@
  *   6. Align    zipalign 4-byte alignment for Android runtime loading
  *
  * Prerequisites on PATH:
- *   - casprix      (the Casperix compiler, supports --target android-arm64)
+ *   - casprix      (the Casprix compiler, supports --target android-arm64)
  *   - llvm-ar      (or Android NDK toolchain for linking)
  *   - zipalign     (Android SDK Build Tools)
  *   - apksigner    (Android SDK Build Tools) — optional, falls back to jarsigner

@@ -279,8 +279,15 @@ int simd_legalize_function(MirFunction* func, SimdTarget target,
     if (!stats) stats = &local;
 
     for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
-        for (MirInst* inst = bb->first; inst; inst = inst->next) {
-            if (!mir_opcode_is_vec(inst->opcode)) continue;
+        for (MirInst* inst = bb->first; inst;) {
+            /* Legalization inserts chunks after inst. Continue from the next
+             * instruction that existed before legalization so generated
+             * chunks are not recursively split and double-counted. */
+            MirInst* next_original = inst->next;
+            if (!mir_opcode_is_vec(inst->opcode)) {
+                inst = next_original;
+                continue;
+            }
             stats->vec_ops_seen++;
 
             MirType* lane = inst->as.vec.lane_type;
@@ -324,6 +331,7 @@ int simd_legalize_function(MirFunction* func, SimdTarget target,
                     stats->vec_ops_scalarized++;
                     changed++;
                 }
+                inst = next_original;
                 continue;
             }
 
@@ -337,7 +345,6 @@ int simd_legalize_function(MirFunction* func, SimdTarget target,
                     MirValueId new_id = mir_function_new_value(func, inst->type);
                     INSERT_CLONE_AFTER(bb, prev, inst, new_id);
                     prev->as.vec.width = native;
-                    stats->vec_ops_split++;
                     changed++;
                 }
                 /* Remaining tail (if width not a multiple of native) */
@@ -346,7 +353,6 @@ int simd_legalize_function(MirFunction* func, SimdTarget target,
                     MirValueId new_id = mir_function_new_value(func, inst->type);
                     INSERT_CLONE_AFTER(bb, prev, inst, new_id);
                     prev->as.vec.width = tail;
-                    stats->vec_ops_split++;
                     changed++;
                 }
                 inst->as.vec.width = native;
@@ -373,6 +379,7 @@ int simd_legalize_function(MirFunction* func, SimdTarget target,
                 stats->fma_expanded++;
                 changed++;
             }
+            inst = next_original;
         }
     }
     return changed;

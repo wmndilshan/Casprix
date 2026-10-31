@@ -14,9 +14,9 @@ void pool_output_size(int in_h, int in_w, int kernel_h, int kernel_w,
     *out_w = (in_w + 2 * pad_w - kernel_w) / stride_w + 1;
 }
 
-PoolLayer* pool_create(PoolType type, int kernel_h, int kernel_w,
-                       int stride_h, int stride_w,
-                       int pad_h, int pad_w) {
+PoolLayer* pool_layer_create(PoolType type, int kernel_h, int kernel_w,
+                             int stride_h, int stride_w,
+                             int pad_h, int pad_w) {
     PoolLayer* layer = (PoolLayer*)calloc(1, sizeof(PoolLayer));
     
     layer->type = type;

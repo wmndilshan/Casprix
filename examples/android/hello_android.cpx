@@ -1,0 +1,35 @@
+// Minimal production-style Android application written entirely in Casprix.
+// Native bindings remain encapsulated by lib/android/android.cpx.
+
+import "lib/android/android"
+
+let app = new AndroidApp("Casprix Android", 720, 1600)
+let screen = new Screen(
+    "Casprix",
+    0,
+    app.nav(),
+    app.get_font_title(),
+    app.get_font()
+)
+
+let card = new MaterialCard()
+card.outlined()
+
+let heading = new Text(
+    "Hello from Casprix",
+    app.get_font_title(),
+    MD_ON_SURFACE
+)
+let detail = new Text(
+    "A native Android UI driven by high-level Casprix code.",
+    app.get_font(),
+    MD_ON_SURFACE_MED
+)
+
+card.add(heading.handle)
+card.add(detail.handle)
+screen.add(card.handle)
+
+let main_activity = app.create_activity("Home", screen)
+app.set_main(main_activity.handle)
+app.run()

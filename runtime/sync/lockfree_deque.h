@@ -1,4 +1,4 @@
-// Casperix Runtime - Lock-Free Deque
+// Casprix Runtime - Lock-Free Deque
 // Implementation of Chase-Lev work-stealing deque
 //
 // A work-stealing deque supports:

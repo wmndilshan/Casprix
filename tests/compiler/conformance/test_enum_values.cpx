@@ -1,0 +1,10 @@
+// Conformance probe: enum declaration and named enum parameter types.
+enum Color { Red, Green, Blue }
+
+func paint(color: Color) -> int {
+    return 0;
+}
+
+func main() -> int {
+    return 0;
+}

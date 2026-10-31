@@ -1,9 +1,9 @@
 /*
- * apk_builder.c ??? Main APK build pipeline implementation
+ * apk_builder.c - Main APK build pipeline implementation
  *
  * Stages:
  *   1. Validate config
- *   2. Compile .cpx ??? ARM64 .so  (via Casperix compiler cross-compilation)
+ *   2. Compile .cpx to an ARM64 .so (via Casprix cross-compilation)
  *   3. Generate AndroidManifest.xml
  *   4. Pack resources (strings.xml, icon)
  *   5. Package everything into unsigned APK (ZIP)
@@ -50,8 +50,22 @@ static void log_step(const ApkBuildConfig* cfg, const char* msg) {
 }
 
 static int run_cmd(const ApkBuildConfig* cfg, const char* cmd) {
+    int r;
     if (cfg->verbose) printf("[apk-builder] CMD: %s\n", cmd);
-    int r = system(cmd);
+#ifdef _WIN32
+    /* system() hands the command to cmd.exe. A command beginning with a
+     * quoted absolute executable path otherwise loses its first quote under
+     * cmd.exe's legacy /C parsing rules. Give cmd.exe an explicit outer pair. */
+    if (cmd && cmd[0] == '"') {
+        char wrapped[8192];
+        snprintf(wrapped, sizeof(wrapped), "cmd.exe /D /S /C \"%s\"", cmd);
+        r = system(wrapped);
+    } else {
+        r = system(cmd);
+    }
+#else
+    r = system(cmd);
+#endif
     if (r != 0) fprintf(stderr, "[apk-builder] FAILED (exit %d): %s\n", r, cmd);
     return r;
 }
@@ -297,42 +311,6 @@ static void normalize_cmake_path(char* path) {
     }
 }
 
-static int patch_generated_c_source(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) return -1;
-
-    fseek(f, 0L, SEEK_END);
-    long size = ftell(f);
-    rewind(f);
-    if (size < 0) { fclose(f); return -1; }
-
-    char* data = (char*)malloc((size_t)size + 1);
-    if (!data) { fclose(f); return -1; }
-
-    if (fread(data, 1, (size_t)size, f) != (size_t)size) {
-        free(data);
-        fclose(f);
-        return -1;
-    }
-    data[size] = '\0';
-    fclose(f);
-
-    for (char* p = data; (p = strstr(p, "_New(")) != NULL; ++p) {
-        p[1] = 'n';
-    }
-
-    f = fopen(path, "wb");
-    if (!f) { free(data); return -1; }
-    if (fwrite(data, 1, (size_t)size, f) != (size_t)size) {
-        free(data);
-        fclose(f);
-        return -1;
-    }
-    fclose(f);
-    free(data);
-    return 0;
-}
-
 static void mkdir_p(const char* path) {
     char tmp[1024];
     snprintf(tmp, sizeof(tmp), "%s", path);
@@ -396,40 +374,54 @@ static int resolve_latest_sdk_build_tool(const ApkBuildConfig* cfg,
 #ifdef _WIN32
     {
         char bt_base[1024];
-        char dir_cmd[1024];
-        char line[512];
+        char search_pattern[1100];
+        WIN32_FIND_DATAA entry;
+        HANDLE search;
+        int best_major = -1;
+        int best_minor = -1;
+        int best_patch = -1;
+        char best_tool[1024] = "";
 
         snprintf(bt_base, sizeof(bt_base), "%s\\build-tools", cfg->android_sdk);
-        snprintf(dir_cmd, sizeof(dir_cmd),
-                 "cmd /C \"dir /b /ad /o-n \\\"%s\\\"\"",
-                 bt_base);
+        snprintf(search_pattern, sizeof(search_pattern), "%s\\*", bt_base);
+        search = FindFirstFileA(search_pattern, &entry);
+        if (search == INVALID_HANDLE_VALUE) return -1;
 
-        FILE* pipe = _popen(dir_cmd, "r");
-        if (!pipe) return -1;
-
-        while (fgets(line, sizeof(line), pipe)) {
+        do {
             char candidate_dir[1024];
             char candidate_tool[1024];
-            size_t len = strlen(line);
+            int major = 0;
+            int minor = 0;
+            int patch = 0;
 
-            while (len > 0 && (line[len - 1] == '\n' ||
-                               line[len - 1] == '\r' ||
-                               line[len - 1] == ' ')) {
-                line[--len] = '\0';
+            if (!(entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+                entry.cFileName[0] == '.' ||
+                sscanf(entry.cFileName, "%d.%d.%d", &major, &minor, &patch) < 1) {
+                continue;
             }
-            if (len == 0) continue;
+            if (major < best_major ||
+                (major == best_major && minor < best_minor) ||
+                (major == best_major && minor == best_minor && patch <= best_patch)) {
+                continue;
+            }
 
-            snprintf(candidate_dir, sizeof(candidate_dir), "%s\\%s", bt_base, line);
+            snprintf(candidate_dir, sizeof(candidate_dir), "%s\\%s",
+                     bt_base, entry.cFileName);
             snprintf(candidate_tool, sizeof(candidate_tool), "%s\\%s",
                      candidate_dir, tool_name);
             if (file_exists(candidate_tool)) {
-                snprintf(output, output_size, "%s", candidate_tool);
-                _pclose(pipe);
-                return 0;
+                best_major = major;
+                best_minor = minor;
+                best_patch = patch;
+                snprintf(best_tool, sizeof(best_tool), "%s", candidate_tool);
             }
-        }
+        } while (FindNextFileA(search, &entry));
+        FindClose(search);
 
-        _pclose(pipe);
+        if (best_tool[0]) {
+            snprintf(output, output_size, "%s", best_tool);
+            return 0;
+        }
     }
 #else
     (void)cfg;
@@ -576,7 +568,19 @@ static int resolve_posix_build_tool(const ApkBuildConfig* cfg,
 static int resolve_build_tool(const ApkBuildConfig* cfg, const char* tool_name,
                               char* output, size_t output_size) {
 #ifdef _WIN32
-    return resolve_latest_sdk_build_tool(cfg, tool_name, output, output_size);
+    char suffixed[160];
+    if (resolve_latest_sdk_build_tool(cfg, tool_name, output, output_size) == 0) {
+        return 0;
+    }
+    if (!strrchr(tool_name, '.')) {
+        snprintf(suffixed, sizeof(suffixed), "%s.bat", tool_name);
+        if (resolve_latest_sdk_build_tool(cfg, suffixed, output, output_size) == 0) {
+            return 0;
+        }
+        snprintf(suffixed, sizeof(suffixed), "%s.exe", tool_name);
+        return resolve_latest_sdk_build_tool(cfg, suffixed, output, output_size);
+    }
+    return -1;
 #else
     return resolve_posix_build_tool(cfg, tool_name, output, output_size);
 #endif
@@ -737,7 +741,9 @@ ApkError apk_stage_compile(const ApkBuildConfig* cfg, const char* build_dir) {
         return APK_ERR_NDK_NOT_FOUND;
     }
 
-    if (file_exists("build\\casprix.exe")) {
+    if (file_exists("build-gcc\\casprix.exe")) {
+        compiler = "build-gcc\\casprix.exe";
+    } else if (file_exists("build\\casprix.exe")) {
         compiler = "build\\casprix.exe";
     } else if (file_exists("build\\Release\\casprix.exe")) {
         compiler = "build\\Release\\casprix.exe";
@@ -755,14 +761,14 @@ ApkError apk_stage_compile(const ApkBuildConfig* cfg, const char* build_dir) {
 
 #ifdef _WIN32
         snprintf(cmd, sizeof(cmd),
-            "cmd /C \"\"%s\" \"%s\" --mir --emit-c --output \"%s\" > \"%s\" 2>&1\"",
+            "cmd /C \"\"%s\" \"%s\" --mir --emit-c --c-entry cpx_app_main --output \"%s\" > \"%s\" 2>&1\"",
             compiler,
             cfg->input_file,
             generated_base,
             compiler_log);
 #else
         snprintf(cmd, sizeof(cmd),
-            "%s \"%s\" --mir --emit-c --output \"%s\" > \"%s\" 2>&1",
+            "%s \"%s\" --mir --emit-c --c-entry cpx_app_main --output \"%s\" > \"%s\" 2>&1",
             compiler,
             cfg->input_file,
             generated_base,
@@ -776,11 +782,6 @@ ApkError apk_stage_compile(const ApkBuildConfig* cfg, const char* build_dir) {
 
         if (!file_exists(generated_c)) {
             fprintf(stderr, "[apk-builder] Generated C file missing: %s\n", generated_c);
-            return APK_ERR_COMPILE_FAILED;
-        }
-
-        if (patch_generated_c_source(generated_c) != 0) {
-            fprintf(stderr, "[apk-builder] Failed to patch generated C source: %s\n", generated_c);
             return APK_ERR_COMPILE_FAILED;
         }
 
@@ -817,18 +818,13 @@ ApkError apk_stage_compile(const ApkBuildConfig* cfg, const char* build_dir) {
         mkdir_p(cmake_build_dir);
         make_absolute_path(lib_dir, lib_dir_abs, sizeof(lib_dir_abs));
         make_absolute_path(generated_c, generated_c_abs, sizeof(generated_c_abs));
-        make_absolute_path("third_party/skia-src", skia_dir_abs, sizeof(skia_dir_abs));
+        make_absolute_path("third_party/skia", skia_dir_abs, sizeof(skia_dir_abs));
         snprintf(toolchain_file, sizeof(toolchain_file), "%s/build/cmake/android.toolchain.cmake", ndk);
         normalize_cmake_path(lib_dir_abs);
         normalize_cmake_path(generated_c_abs);
         normalize_cmake_path(skia_dir_abs);
         normalize_cmake_path(toolchain_file);
         snprintf(so_path, sizeof(so_path), "%s/lib%s.so", lib_dir_abs, act);
-
-        if (file_exists(so_path)) {
-            printf("[apk-builder]   Reusing existing ABI %s -> %s\n", abi_names[abi_idx], so_path);
-            continue;
-        }
 
         snprintf(cmd, sizeof(cmd),
             "cmake -G Ninja -S \"runtime/android\" -B \"%s\" "
@@ -1271,7 +1267,7 @@ ApkError apk_generate_debug_keystore(const char* keystore_path) {
 }
 
 ApkError apk_stage_sign(const ApkBuildConfig* cfg, const char* build_dir,
-                         const char* unsigned_apk, const char* signed_apk) {
+                        const char* unsigned_apk, const char* signed_apk) {
     const char* ks   = cfg->keystore_path[0] ? cfg->keystore_path : NULL;
     const char* ksp  = cfg->keystore_pass[0] ? cfg->keystore_pass : "android";
     const char* kp   = cfg->key_pass    [0] ? cfg->key_pass     : "android";
@@ -1301,6 +1297,7 @@ ApkError apk_stage_sign(const ApkBuildConfig* cfg, const char* build_dir,
     }
 
     char cmd[4096];
+    (void)remove(signed_apk);
 
     /*
      * Find apksigner in SDK build-tools.
@@ -1341,6 +1338,11 @@ ApkError apk_stage_sign(const ApkBuildConfig* cfg, const char* build_dir,
 ApkError apk_stage_align(const ApkBuildConfig* cfg, const char* signed_apk,
                           const char* output_apk) {
     char cmd[2048];
+
+    /* zipalign intentionally refuses to overwrite its destination. Reused
+     * --keep-build directories therefore need this exact stale artifact
+     * removed before rebuilding. */
+    (void)remove(output_apk);
 
     /* Find zipalign in SDK build-tools */
     char zipalign[1024] = "zipalign";
@@ -1495,8 +1497,10 @@ fail:
     if (result.stage == APK_STAGE_NONE) {
         apk_result_begin_stage(&result, APK_STAGE_CLEANUP, build_dir);
     }
-    if (remove_path_recursive(build_dir) != 0) {
+    if (!cfg.keep_intermediates && remove_path_recursive(build_dir) != 0) {
         fprintf(stderr, "[apk-builder] cleanup warning: failed to remove %s\n", build_dir);
+    } else if (cfg.keep_intermediates) {
+        fprintf(stderr, "[apk-builder] Preserved failed build diagnostics: %s\n", build_dir);
     }
     if (result.code == APK_OK) {
         result.code = err;

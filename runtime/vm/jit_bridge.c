@@ -290,21 +290,29 @@ typedef struct {
  *         *first* operand.
  *   R11 — reload scratch for a spilled *second* operand / divisor.
  *
- * The remaining 12 registers form the allocatable pool. RBX and R12..R15 are
- * callee-saved and are already pushed/popped by the prologue/epilogue.
- * RCX/RDX/RSI/RDI/R8/R9/R10 are caller-saved but that is irrelevant here since
- * the subset makes no calls.
+ * The remaining registers form the allocatable pool. RBX and R12..R15 are
+ * saved by the prologue. Win64 also makes RSI and RDI callee-saved, so they are
+ * excluded from the Windows pool; System V keeps them available.
  *
  * Values that don't get a register are assigned a spill slot at
  * [rbp - 8*(slot+1)] within a frame the prologue reserves with `sub rsp, N`.
  */
 #define JIT_SCRATCH_A   RAX
 #define JIT_SCRATCH_B   R11
+#if defined(_WIN32) || defined(_WIN64)
+#define JIT_ALLOC_POOL_SIZE 10
+static const int kAllocPool[JIT_ALLOC_POOL_SIZE] = {
+    RCX, RDX, R8, R9, R10,
+    RBX, R12, R13, R14, R15,
+};
+#else
 #define JIT_ALLOC_POOL_SIZE 12
 static const int kAllocPool[JIT_ALLOC_POOL_SIZE] = {
     RCX, RDX, RSI, RDI, R8, R9, R10,   /* caller-saved (no calls → safe) */
     RBX, R12, R13, R14, R15,           /* callee-saved (pushed in prologue) */
 };
+
+#endif
 
 #define JIT_MAX_SPILL_SLOTS 64   /* post-allocation capacity bail-out */
 #define JIT_REG_NONE   (-1)
@@ -766,13 +774,18 @@ static uint8_t* jit_compile_function(MirFunction* func, size_t* out_size) {
         }
 
         /* Params beyond the ABI register count arrive on the caller's stack.
-         * The prologue pushed 6 callee-saved regs (48 bytes) then `mov rbp,rsp`,
-         * so relative to rbp: [rbp+48] = return address, [rbp+56] = first stack
-         * argument, then +8 each. */
+         * The prologue pushed 6 callee-saved regs (48 bytes) then `mov rbp,rsp`.
+         * SysV puts its first overflow argument immediately after the return
+         * address. Win64 has a mandatory 32-byte home area between the return
+         * address and its first overflow argument. */
         for (int i = max_arg; i < func->param_count; i++) {
             MirValueId pid = func->params[i].value_id;
             if (pid == MIR_VALUE_NONE) continue;
+#if defined(_WIN32) || defined(_WIN64)
+            int32_t caller_disp = (int32_t)(88 + 8 * (i - max_arg));
+#else
             int32_t caller_disp = (int32_t)(56 + 8 * (i - max_arg));
+#endif
             int hr = jra_home_reg(&ra, pid);
             if (hr != JIT_REG_NONE) {
                 xe_mov_r_rbpdisp(&e, hr, caller_disp);
@@ -1157,6 +1170,7 @@ typedef struct {
 
 /* Generic dispatcher — called from generated stub below.
  * Signature: int64_t cjb_dispatcher(void* code, CvmReg* regs, int n_args) */
+#if 0 /* Superseded by the generated per-function ABI trampoline below. */
 static int64_t cjb_dispatcher(void* code,
                                CvmReg* regs, int n_args) {
     /* Marshal up to 6 args, call code, return rax */
@@ -1167,6 +1181,7 @@ static int64_t cjb_dispatcher(void* code,
     for (int i = 0; i < c; i++) a[i] = (int64_t)regs[i];
     return fn(a[0], a[1], a[2], a[3], a[4], a[5]);
 }
+#endif
 
 /* Each closure's trampoline stub (generated into exec memory):
  *

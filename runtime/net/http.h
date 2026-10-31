@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - HTTP Client/Server
+ * Casprix Runtime - HTTP Client/Server
  * Simple HTTP implementation for async I/O
  */
 

@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Drop Planner Implementation
+ * Casprix Compiler - Drop Planner Implementation
  *
  * Tracks variable lifetimes and determines cleanup actions at scope exit.
  */

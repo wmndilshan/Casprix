@@ -29,6 +29,8 @@
 /* Platform-specific font manager */
 #ifdef _WIN32
 #include "include/ports/SkTypeface_win.h"
+#elif defined(__ANDROID__)
+#include "include/ports/SkFontMgr_android.h"
 #endif
 
 #include <cstring>
@@ -43,6 +45,8 @@ static sk_sp<SkFontMgr> get_font_mgr() {
     if (!mgr) {
 #ifdef _WIN32
         mgr = SkFontMgr_New_GDI();
+#elif defined(__ANDROID__)
+        mgr = SkFontMgr_New_Android(nullptr);
 #else
         mgr = SkFontMgr::RefEmpty();
 #endif
@@ -426,7 +430,7 @@ extern "C" SkiaFont skia_font_create(const char* family, double size) {
         typeface = mgr->matchFamilyStyle("Arial", SkFontStyle::Normal());
     }
     if (!typeface) {
-        typeface = SkTypeface::MakeDefault();
+        typeface = mgr->legacyMakeTypeface(nullptr, SkFontStyle::Normal());
     }
 
     SkFont* font = new SkFont(typeface, size);

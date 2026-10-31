@@ -125,6 +125,11 @@ static MirValueId remap_get(ValueRemap* r, MirValueId val) {
     return val;  /* unmapped — return as-is (shouldn't happen in correct IR) */
 }
 
+static bool remap_has(ValueRemap* r, MirValueId val) {
+    return val != MIR_VALUE_NONE && (int)val < r->capacity &&
+           r->map[val] != MIR_VALUE_NONE;
+}
+
 /* ================================================================
  * Block remapping table
  * ================================================================ */
@@ -175,9 +180,13 @@ static MirInst* clone_inst(MirArena* arena, MirInst* src,
 
     /* Allocate new result value in caller if the instruction defines one */
     if (src->result != MIR_VALUE_NONE) {
-        MirValueId new_val = mir_function_new_value(caller, src->type);
-        remap_set(vr, src->result, new_val);
-        dst->result = new_val;
+        if (remap_has(vr, src->result)) {
+            dst->result = remap_get(vr, src->result);
+        } else {
+            MirValueId new_val = mir_function_new_value(caller, src->type);
+            remap_set(vr, src->result, new_val);
+            dst->result = new_val;
+        }
     }
 
     /* Remap operands based on opcode */
@@ -396,6 +405,19 @@ static bool inline_call_site(MirModule* module, MirFunction* caller,
         if (stats) stats->blocks_copied++;
     }
 
+    /* Reserve every cloned SSA result before cloning any operands. Loop PHIs
+     * refer to values defined on later backedges, so single-pass allocation
+     * can retain a callee value id that aliases an unrelated caller value. */
+    for (MirBlock* src_bb = callee->block_list; src_bb; src_bb = src_bb->next_block) {
+        for (MirInst* src_inst = src_bb->first; src_inst; src_inst = src_inst->next) {
+            if (src_inst->result != MIR_VALUE_NONE &&
+                !remap_has(vr, src_inst->result)) {
+                MirValueId new_val = mir_function_new_value(caller, src_inst->type);
+                remap_set(vr, src_inst->result, new_val);
+            }
+        }
+    }
+
     /* ── 4. Phi node for return value (if non-void) ── */
     MirInst* ret_phi = NULL;
     if (callee->return_type && callee->return_type->kind != MIR_TYPE_VOID
@@ -513,6 +535,9 @@ static bool inline_call_site(MirModule* module, MirFunction* caller,
                 break;
             }
         }
+        /* Some earlier simplifications may have rebuilt only the successor
+         * side of an edge. Ensure symmetry explicitly before validation. */
+        mir_block_add_predecessor(old_succ, merge_bb);
         /* Also redirect phi edges: any phi in old_succ that referenced
          * call_bb should now reference merge_bb. */
         for (MirInst* phi = old_succ->first;

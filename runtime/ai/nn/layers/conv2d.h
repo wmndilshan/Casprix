@@ -7,7 +7,7 @@
 #ifndef NN_CONV2D_H
 #define NN_CONV2D_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus

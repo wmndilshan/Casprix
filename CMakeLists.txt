@@ -2,10 +2,17 @@
 # Copyright (c) 2026 Casprix Project
 # SPDX-License-Identifier: MIT
 
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
+
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" CASPRIX_VERSION LIMIT_COUNT 1)
+string(STRIP "${CASPRIX_VERSION}" CASPRIX_VERSION)
+if(NOT CASPRIX_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR
+        "VERSION must contain one semantic version (for example, 1.2.3)")
+endif()
 
 project(Casprix
-    VERSION 1.0.0
+    VERSION ${CASPRIX_VERSION}
     LANGUAGES C
     DESCRIPTION "Casprix: Modern high-performance compiled programming language"
     HOMEPAGE_URL "https://github.com/wmndilshan/casprix"
@@ -19,6 +26,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+add_compile_definitions(CASPRIX_VERSION="${PROJECT_VERSION}")
 
 # Default to Release if no build type specified
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -84,15 +92,15 @@ add_library(casprix_compile_options INTERFACE)
 if(MSVC)
     target_compile_options(casprix_compile_options INTERFACE
         /W4 /wd4996
-        $<$<CONFIG:Release>:/O2 /DNDEBUG>
+        $<$<CONFIG:Release>:/O2>
         $<$<CONFIG:Debug>:/Od /Zi>
     )
 else()
     target_compile_options(casprix_compile_options INTERFACE
         -Wall -Wextra -Wno-unused-parameter
-        $<$<CONFIG:Release>:-O2 -DNDEBUG>
+        $<$<CONFIG:Release>:-O2>
         $<$<CONFIG:Debug>:-O0 -g>
-        $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+        $<$<CONFIG:RelWithDebInfo>:-O2 -g>
         $<$<BOOL:${ENABLE_AVX2}>:-mavx2 -mfma>
     )
     # Expose all glibc extensions on Linux/macOS (includes POSIX-2008, strdup, usleep, DT_DIR…)
@@ -295,14 +303,44 @@ if(BUILD_RUNTIME)
         endif()
     endforeach()
 
-    # LLM subsystem
-    foreach(_f tensor ops transformer backward training checkpoint
-                 tokenizer bindings autograd transformer_backward
-                 tensor_ir graph_opt jit)
-        if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/ai/llm/${_f}.c")
-            list(APPEND RUNTIME_SOURCES "runtime/ai/llm/${_f}.c")
+    # Shared AI storage and public dependency-derived autograd graph.
+    foreach(_f tensor autograd bindings)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/ai/core/${_f}.c")
+            list(APPEND RUNTIME_SOURCES "runtime/ai/core/${_f}.c")
         endif()
     endforeach()
+
+    # Backend-neutral CPU training utilities and collectives.
+    foreach(_entry training/training training/optimizer training/scheduler distributed/cpu_collective classical/algorithms evaluation/metrics ops/activations ops/losses)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/ai/${_entry}.c")
+            list(APPEND RUNTIME_SOURCES "runtime/ai/${_entry}.c")
+        endif()
+    endforeach()
+    list(APPEND RUNTIME_SOURCES runtime/ai/data/token_stream.c)
+
+    # Model-neutral CPU kernels and optimized graph execution internals.
+    foreach(_f cpu_ops grad_kernels)
+        list(APPEND RUNTIME_SOURCES "runtime/ai/kernels/${_f}.c")
+    endforeach()
+    foreach(_f tape tensor_ir graph_opt jit)
+        list(APPEND RUNTIME_SOURCES "runtime/ai/engine/${_f}.c")
+    endforeach()
+
+    # Neural-network domain code. Shared ops/training are compiled above.
+    list(APPEND RUNTIME_SOURCES runtime/ai/nn/nn.c)
+    foreach(_f dense conv2d pool rnn lstm gru dropout batchnorm)
+        list(APPEND RUNTIME_SOURCES "runtime/ai/nn/layers/${_f}.c")
+    endforeach()
+    foreach(_f dataset dataloader)
+        list(APPEND RUNTIME_SOURCES "runtime/ai/nn/data/${_f}.c")
+    endforeach()
+    foreach(_f sequential resnet attention checkpoint)
+        list(APPEND RUNTIME_SOURCES "runtime/ai/nn/models/${_f}.c")
+    endforeach()
+
+    # Architectures and training policy belong in high-level Casprix modules.
+    # The native runtime is intentionally limited to the model-neutral storage,
+    # graph, kernels, optimizer, and streaming-data facilities above.
 
     # Math subsystem
     foreach(_f math_lib_runtime linalg_runtime stats_runtime)
@@ -316,14 +354,14 @@ if(BUILD_RUNTIME)
         set_source_files_properties(runtime/math/simd_kernels.asm
             PROPERTIES COMPILE_OPTIONS "")  # don't forward C flags to NASM
     endif()
-    if(NASM_AVAILABLE AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/ai/llm/ops_avx2.asm")
-        list(APPEND RUNTIME_SOURCES runtime/ai/llm/ops_avx2.asm)
-        set_source_files_properties(runtime/ai/llm/ops_avx2.asm
+    if(NASM_AVAILABLE AND EXISTS "${CMAKE_SOURCE_DIR}/runtime/ai/kernels/cpu_avx2.asm")
+        list(APPEND RUNTIME_SOURCES runtime/ai/kernels/cpu_avx2.asm)
+        set_source_files_properties(runtime/ai/kernels/cpu_avx2.asm
             PROPERTIES COMPILE_OPTIONS "")
     endif()
 
     # Async subsystem
-    foreach(_f future task scheduler)
+    foreach(_f future task scheduler async_runtime)
         if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/async/${_f}.c")
             list(APPEND RUNTIME_SOURCES "runtime/async/${_f}.c")
         endif()
@@ -351,13 +389,12 @@ if(BUILD_RUNTIME)
         list(APPEND RUNTIME_SOURCES runtime/sync/lockfree_deque.c)
     endif()
 
-    # Network (new clean API — legacy disabled due to type conflicts)
-    foreach(_f socket http http_server reactor threadpool mpsc_queue ringbuf iouring scheduler_bridge cx_arena)
+    # Network
+    foreach(_f socket http http_server)
         if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/net/${_f}.c")
             list(APPEND RUNTIME_SOURCES "runtime/net/${_f}.c")
         endif()
     endforeach()
-
     # I/O subsystem
     foreach(_f direct_io fast_format lockfree_log ml_telemetry dataset_stream checkpoint_io)
         if(EXISTS "${CMAKE_SOURCE_DIR}/runtime/io/${_f}.c")
@@ -401,9 +438,17 @@ if(BUILD_RUNTIME)
         ${CMAKE_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/runtime
         ${CMAKE_SOURCE_DIR}/runtime/memory
+        ${CMAKE_SOURCE_DIR}/runtime/ai/core
         ${CMAKE_SOURCE_DIR}/runtime/ai/llm
         ${CMAKE_SOURCE_DIR}/runtime/ai/nn
-        ${CMAKE_SOURCE_DIR}/runtime/ai/ml
+        ${CMAKE_SOURCE_DIR}/runtime/ai/classical
+        ${CMAKE_SOURCE_DIR}/runtime/ai/kernels
+        ${CMAKE_SOURCE_DIR}/runtime/ai/engine
+        ${CMAKE_SOURCE_DIR}/runtime/ai/backend
+        ${CMAKE_SOURCE_DIR}/runtime/ai/ops
+        ${CMAKE_SOURCE_DIR}/runtime/ai/evaluation
+        ${CMAKE_SOURCE_DIR}/runtime/ai/training
+        ${CMAKE_SOURCE_DIR}/runtime/ai/distributed
         ${CMAKE_SOURCE_DIR}/runtime/async
         ${CMAKE_SOURCE_DIR}/runtime/concurrent
         ${CMAKE_SOURCE_DIR}/runtime/sync
@@ -420,13 +465,6 @@ if(BUILD_RUNTIME)
 
     install(TARGETS casprix_runtime DESTINATION lib)
 endif()
-
-# net2/ was an experimental reactor + stackful-coroutine async networking
-# rewrite. Archived to archive/net2/ (zero consumers, unfinished protocol
-# support, a known cx_runtime.c build break, and a double-wake scheduler race).
-# runtime/net/ is the actively-maintained implementation. See archive/net2/README.md.
-# To revisit: fix the breaks documented in that README, then re-enable:
-#   add_subdirectory(archive/net2)
 
 # ============================================================================
 # Package manager
@@ -582,6 +620,7 @@ endif()
 
 install(DIRECTORY include/casprix/ DESTINATION include/casprix
         FILES_MATCHING PATTERN "*.h")
+install(FILES README.md LICENSE VERSION DESTINATION share/casprix)
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/stdlib")
     install(DIRECTORY stdlib/ DESTINATION lib/casprix/stdlib
@@ -591,6 +630,15 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/lib")
     install(DIRECTORY lib/ DESTINATION lib/casprix/lib
             FILES_MATCHING PATTERN "*.cpx")
 endif()
+
+set(CPACK_PACKAGE_NAME "Casprix")
+set(CPACK_PACKAGE_VENDOR "Casprix Project")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_FILE_NAME
+    "casprix-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+include(CPack)
 
 # ============================================================================
 # Configuration summary

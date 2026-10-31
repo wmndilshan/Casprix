@@ -186,6 +186,16 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
 /* Forward-declare VM-lifetime heap object allocator (MIR_OBJ_ALLOC) */
 static void* cvm_heap_object_alloc(CvmState* vm, size_t size);
 
+static CvmReg* cvm_global_addr(CvmState* vm, const char* name) {
+    if (!vm || !vm->module || !name) return NULL;
+    for (int i = 0; i < vm->module->global_count; i++) {
+        const char* candidate = vm->module->globals[i].name;
+        if (candidate && strcmp(candidate, name) == 0)
+            return &vm->globals[i];
+    }
+    return NULL;
+}
+
 static inline CvmReg cvm_reg_get(CvmState* vm, CvmFrame* frame, MirValueId id) {
     if (id == MIR_VALUE_NONE) return 0;
     if (CVM_UNLIKELY((int)id >= frame->reg_count)) {
@@ -327,7 +337,7 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
         /* [MIR_CONST_STRING] */ &&op_const_string,
         /* [MIR_CONST_FUNC]   */ &&op_nop,
         /* [MIR_CONST_NULL]   */ &&op_const_null,
-        /* [MIR_GLOBAL_ADDR]  */ &&op_nop,
+        /* [MIR_GLOBAL_ADDR]  */ &&op_global_addr,
         /* [MIR_ADD]          */ &&op_add,
         /* [MIR_SUB]          */ &&op_sub,
         /* [MIR_MUL]          */ &&op_mul,
@@ -544,6 +554,19 @@ op_sitofp:
 op_fptosi:
     SET(inst->result, cvm_safe_fptosi(cvm_bits_to_f64(REG(inst->as.unary.operand))));
     NEXT_INST();
+
+op_global_addr: {
+    CvmReg* slot = cvm_global_addr(vm, inst->as.global_name);
+    if (CVM_UNLIKELY(!slot)) {
+        cvm_diag(vm, "[CVM] unresolved global '%s' in %s\n",
+                 inst->as.global_name ? inst->as.global_name : "(null)",
+                 func->name);
+        vm->trap_code = 7;
+        goto done;
+    }
+    SET(inst->result, (CvmReg)(uintptr_t)slot);
+    NEXT_INST();
+}
 
 op_alloca: {
     /* Heap-allocate a slot (in a real VM this would use a bump allocator) */
@@ -807,6 +830,12 @@ done:
                     SET(inst->result, cvm_f64_to_bits((double)(int64_t)REG(inst->as.unary.operand))); break;
                 case MIR_FPTOSI:
                     SET(inst->result, cvm_safe_fptosi(cvm_bits_to_f64(REG(inst->as.unary.operand)))); break;
+                case MIR_GLOBAL_ADDR: {
+                    CvmReg* slot = cvm_global_addr(vm, inst->as.global_name);
+                    if (!slot) { vm->trap_code = 7; goto done_sw; }
+                    SET(inst->result, (CvmReg)(uintptr_t)slot);
+                    break;
+                }
                 case MIR_ALLOCA: {
                     int sz = inst->as.alloca.count > 0 ? inst->as.alloca.count : 1;
                     void* mem = calloc((size_t)sz, 8);
@@ -1092,6 +1121,15 @@ CvmState* cvm_state_create(MirModule* module, CvmJitBridge* jit) {
     vm->module = module;
     vm->jit    = jit;
     vm->diag   = stderr;
+    vm->global_count = module ? module->global_count : 0;
+    if (vm->global_count > 0) {
+        vm->globals = (CvmReg*)calloc((size_t)vm->global_count,
+                                     sizeof(CvmReg));
+        if (!vm->globals) {
+            free(vm);
+            return NULL;
+        }
+    }
     return vm;
 }
 
@@ -1117,6 +1155,7 @@ void cvm_state_destroy(CvmState* vm) {
     if (!vm) return;
     for (int i = 0; i < vm->heap_obj_count; i++) free(vm->heap_objs[i]);
     free(vm->heap_objs);
+    free(vm->globals);
     free(vm->profiles);
     free(vm);
 }

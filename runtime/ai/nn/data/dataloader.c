@@ -1,5 +1,5 @@
 /**
- * DataLoader Implementation
+ * NnDataLoader Implementation
  */
 
 #include "dataloader.h"
@@ -16,9 +16,9 @@ static void shuffle_indices(int* indices, int n) {
     }
 }
 
-DataLoader* dataloader_create(Dataset* dataset, int batch_size,
+NnDataLoader* nn_dataloader_create(NnDataset* dataset, int batch_size,
                               bool shuffle, bool drop_last) {
-    DataLoader* loader = (DataLoader*)calloc(1, sizeof(DataLoader));
+    NnDataLoader* loader = (NnDataLoader*)calloc(1, sizeof(NnDataLoader));
     
     loader->dataset = dataset;
     loader->batch_size = batch_size;
@@ -47,7 +47,7 @@ DataLoader* dataloader_create(Dataset* dataset, int batch_size,
     return loader;
 }
 
-bool dataloader_next(DataLoader* loader, Tensor** batch_x, Tensor** batch_y) {
+bool nn_dataloader_next(NnDataLoader* loader, Tensor** batch_x, Tensor** batch_y) {
     int n = loader->dataset->num_samples;
     
     /* Check if epoch ended */
@@ -112,7 +112,7 @@ bool dataloader_next(DataLoader* loader, Tensor** batch_x, Tensor** batch_y) {
     return true;
 }
 
-void dataloader_reset(DataLoader* loader) {
+void nn_dataloader_reset(NnDataLoader* loader) {
     loader->current_idx = 0;
     
     if (loader->shuffle) {
@@ -120,11 +120,11 @@ void dataloader_reset(DataLoader* loader) {
     }
 }
 
-int dataloader_num_batches(DataLoader* loader) {
+int nn_dataloader_num_batches(NnDataLoader* loader) {
     return loader->num_batches;
 }
 
-void dataloader_free(DataLoader* loader) {
+void nn_dataloader_free(NnDataLoader* loader) {
     if (!loader) return;
     
     free(loader->indices);

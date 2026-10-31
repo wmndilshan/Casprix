@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Escape Analysis
+ * Casprix Compiler - Escape Analysis
  *
  * Determines whether a value escapes its defining scope.
  * Values that do NOT escape can be stack-allocated (zero heap overhead).

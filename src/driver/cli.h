@@ -30,6 +30,7 @@ typedef struct {
     bool            keep_asm_file;
     bool            optimize;
     const char*     output_name;
+    const char*     c_entry_symbol;
 
     /* Debug / academic options */
     bool            dump_tokens;

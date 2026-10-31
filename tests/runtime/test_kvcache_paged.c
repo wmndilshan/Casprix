@@ -5,9 +5,9 @@
  * contiguous layout for write → read_range round-trips.
  *
  * Build:
- *   gcc -O2 -I runtime/ai/ml \
+ *   gcc -O2 -I runtime/ai/backend \
  *       tests/runtime/test_kvcache_paged.c \
- *       runtime/ai/ml/cpx_kvcache.c runtime/ai/ml/cpx_mem_arena.c \
+ *       runtime/ai/backend/cpx_kvcache.c runtime/ai/backend/cpx_mem_arena.c \
  *       -o test_kvcache_paged
  */
 

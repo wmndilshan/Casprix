@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Region Allocator
+ * Casprix Runtime - Region Allocator
  *
  * Provides language-level region blocks where all allocations inside a
  * region are freed together at region exit.  Uses a bump allocator for

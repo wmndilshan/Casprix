@@ -1,4 +1,4 @@
-// Casperix Runtime - Coroutine Abstraction
+// Casprix Runtime - Coroutine Abstraction
 // Platform-agnostic coroutine API for async/await implementation
 //
 // Supports stackful coroutines with platform-specific backends:

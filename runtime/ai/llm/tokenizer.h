@@ -7,7 +7,7 @@
 #ifndef LLM_TOKENIZER_H
 #define LLM_TOKENIZER_H
 
-#include "tensor.h"
+#include "../core/tensor.h"
 
 // ===== TOKENIZER =====
 

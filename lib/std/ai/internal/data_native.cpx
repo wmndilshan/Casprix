@@ -1,0 +1,8 @@
+extern func cpx_ai_token_stream_open(path: string, batchSize: i32) -> rawptr
+extern func cpx_ai_token_stream_next(stream: rawptr) -> rawptr
+extern func cpx_ai_token_stream_sequence_length(stream: rawptr) -> i32
+extern func cpx_ai_token_stream_vocabulary_size(stream: rawptr) -> i32
+extern func cpx_ai_token_stream_close(stream: rawptr) -> void
+extern func cpx_ai_token_batch_inputs(batch: rawptr, graph: rawptr) -> rawptr
+extern func cpx_ai_token_batch_targets(batch: rawptr, graph: rawptr) -> rawptr
+extern func cpx_ai_token_batch_destroy(batch: rawptr) -> void

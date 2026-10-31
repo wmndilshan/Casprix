@@ -1,5 +1,5 @@
 /**
- * Chart Widgets - Data Visualization for Casperix UI
+ * Chart Widgets - Data Visualization for Casprix UI
  * 
  * Production-ready chart widgets:
  *  - Line charts (time series, trends)

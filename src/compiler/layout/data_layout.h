@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Data Layout Optimization
+ * Casprix Compiler - Data Layout Optimization
  *
  * Optimizes struct field ordering and array-of-struct transformations
  * to improve cache locality and reduce padding waste.

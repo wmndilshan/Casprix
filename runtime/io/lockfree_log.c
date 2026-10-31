@@ -9,10 +9,18 @@
 #if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
 static DWORD WINAPI cpx_log_drain_thread(void* arg);
+static uint64_t cpx_log_monotonic_ns(void) {
+    return (uint64_t)GetTickCount64() * UINT64_C(1000000);
+}
 #else
 #include <pthread.h>
 #include <time.h>
 static void* cpx_log_drain_thread(void* arg);
+static uint64_t cpx_log_monotonic_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+}
 #endif
 
 static bool cpx_is_pow2(uint32_t v) {
@@ -135,19 +143,18 @@ static void cpx_log_drain_once(CpxLogQueue* q) {
         picked_pos[n] = pos;
         
         /* Format timestamp for this log batch */
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t timestamp_ns = cpx_log_monotonic_ns();
         size_t ts_len = 0;
         
         /* Fast formatting for the timestamp: [sec.nsec] */
         ts_bufs[n][0] = '[';
         CpxFmtBuffer fb;
         cpx_fmt_init(&fb, ts_bufs[n] + 1, sizeof(ts_bufs[n]) - 1);
-        cpx_fmt_append_u64(&fb, (uint64_t)ts.tv_sec);
+        cpx_fmt_append_u64(&fb, timestamp_ns / UINT64_C(1000000000));
         cpx_fmt_putc(&fb, '.');
         
         /* Pad nsec to 9 digits */
-        uint64_t nsec = (uint64_t)ts.tv_nsec;
+        uint64_t nsec = timestamp_ns % UINT64_C(1000000000);
         char nsec_buf[9];
         for (int i = 8; i >= 0; --i) {
             nsec_buf[i] = (char)('0' + (nsec % 10));

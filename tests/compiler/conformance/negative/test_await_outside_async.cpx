@@ -1,0 +1,7 @@
+// Expected semantic failure: await is only valid inside async functions.
+extern func fetch() -> int;
+
+func main() -> int {
+    let value = await fetch();
+    return value;
+}

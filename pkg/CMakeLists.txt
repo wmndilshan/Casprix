@@ -1,7 +1,7 @@
 # pkg/CMakeLists.txt — Casprix Package Manager
 # Can be used as a standalone build or included from the root CMakeLists.
 
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 
 if(NOT DEFINED CASPRIX_PKG_STANDALONE)
     # Included from parent — targets are already defined
@@ -9,9 +9,12 @@ if(NOT DEFINED CASPRIX_PKG_STANDALONE)
 endif()
 
 # Standalone build
-project(casprix-pkg VERSION 1.0.0 LANGUAGES C)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" CASPRIX_VERSION LIMIT_COUNT 1)
+string(STRIP "${CASPRIX_VERSION}" CASPRIX_VERSION)
+project(casprix-pkg VERSION ${CASPRIX_VERSION} LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+add_compile_definitions(CASPRIX_VERSION="${PROJECT_VERSION}")
 
 add_executable(casprix-pkg
     core/registry.c

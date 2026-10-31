@@ -15,6 +15,14 @@ static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_generic_inst_expr(SemanticAnalyzer* analyzer, Expr* expr);
 
+static bool is_module_alias(const SemanticAnalyzer* analyzer, const char* name) {
+    if (!analyzer || !name) return false;
+    for (int i = 0; i < analyzer->module_alias_count; i++) {
+        if (strcmp(analyzer->module_aliases[i], name) == 0) return true;
+    }
+    return false;
+}
+
 /* ─── Global memory-model analysis contexts ─── */
 static EscapeAnalyzer   g_escape_ctx;
 static DropPlanner      g_drop_ctx;
@@ -37,6 +45,8 @@ void init_semantic_analyzer(SemanticAnalyzer* analyzer) {
     analyzer->current_method = NULL;
     analyzer->loop_depth = 0;  // Initialize loop depth tracking
     analyzer->alloc_scope_depth = 0;
+    analyzer->module_aliases = NULL;
+    analyzer->module_alias_count = 0;
     init_closure_analyzer();
 
     /* Initialize memory-model analysis subsystems */
@@ -49,6 +59,14 @@ void init_semantic_analyzer(SemanticAnalyzer* analyzer) {
 }
 
 void free_semantic_analyzer(SemanticAnalyzer* analyzer) {
+    if (analyzer->module_aliases) {
+        for (int i = 0; i < analyzer->module_alias_count; i++) {
+            free(analyzer->module_aliases[i]);
+        }
+        free(analyzer->module_aliases);
+        analyzer->module_aliases = NULL;
+        analyzer->module_alias_count = 0;
+    }
     if (analyzer->symbols) {
         free_symbol_table(analyzer->symbols);
         free(analyzer->symbols);
@@ -155,14 +173,13 @@ static TypeInfo* build_function_type_info(DataType* param_types, int param_count
     return info;
 }
 
-/* Like build_function_type_info, but if `rich_return` is a structured function
- * TypeInfo (e.g. from a `-> lambda(int) -> int` return annotation), use a clone
- * of it as the return type so callers can arity-check the returned callable. */
+/* Preserve richer return metadata, including concrete class names and nested
+ * callable signatures, instead of reducing every return to a flat DataType. */
 static TypeInfo* build_function_type_info_ex(DataType* param_types, int param_count,
                                              DataType return_type,
                                              const TypeInfo* rich_return) {
     TypeInfo* info = build_function_type_info(param_types, param_count, return_type);
-    if (rich_return && rich_return->base == TYPE_FUNC) {
+    if (rich_return) {
         if (info->return_type) free_type_info(info->return_type);
         info->return_type = clone_type_info((TypeInfo*)rich_return);
     }
@@ -352,6 +369,19 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
     
     switch (binary->operator) {
+        case TOKEN_RANGE:
+        case TOKEN_RANGE_INCLUSIVE:
+            if (type_is_integer(left_type) && type_is_integer(right_type)) {
+                expr->data_type = TYPE_CLASS;
+                if (expr->class_name) free(expr->class_name);
+                expr->class_name = strdup("Range");
+            } else {
+                report_type_error(expr->line, expr->column,
+                    "Range bounds must be integers");
+                expr->data_type = TYPE_ERROR;
+            }
+            break;
+
         case TOKEN_PLUS:
             // String concatenation or numeric addition
             if (left_type == TYPE_STRING || right_type == TYPE_STRING) {
@@ -445,6 +475,24 @@ static void analyze_unary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     }
     
     switch (unary->operator) {
+        case TOKEN_BITAND:
+            expr->data_type = operand_type;
+            if (unary->operand->class_name) {
+                if (expr->class_name) free(expr->class_name);
+                expr->class_name = strdup(unary->operand->class_name);
+            }
+            break;
+
+        case TOKEN_QUESTION:
+            /* Result<T, E> uses the existing exception channel for E, so a
+             * successful `expr?` has exactly expr's lowered success type. */
+            expr->data_type = operand_type;
+            if (unary->operand->class_name) {
+                if (expr->class_name) free(expr->class_name);
+                expr->class_name = strdup(unary->operand->class_name);
+            }
+            break;
+
         case TOKEN_MINUS:
             if (type_is_numeric(operand_type)) {
                 expr->data_type = operand_type;
@@ -484,6 +532,20 @@ static void analyze_variable_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         snprintf(msg, sizeof(msg), "Undefined variable '%s'", var->name);
         report_semantic_error(expr->line, expr->column, msg);
         expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    if (symbol->is_enum_variant) {
+        int64_t tag = symbol->const_int_value;
+        char* enum_name = symbol->enum_name ? strdup(symbol->enum_name) : NULL;
+        free(var->name);
+        memset(&expr->as, 0, sizeof(expr->as));
+        expr->type = EXPR_LITERAL;
+        expr->as.literal.type = TYPE_I64;
+        expr->as.literal.value.int_value = tag;
+        expr->data_type = TYPE_CLASS;
+        if (expr->class_name) free(expr->class_name);
+        expr->class_name = enum_name;
         return;
     }
 
@@ -889,10 +951,9 @@ static void analyze_new_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         analyze_expr(analyzer, new_expr->arguments[i]);
     }
 
-    /* Collect this class's constructor overloads, in declaration order.
-     * Constructors are matched only on the instantiated class itself, not
-     * inherited from parents. Both spellings — the class-name form and the
-     * legacy `func new` form — count as constructors. */
+    /* Collect this class's constructor overloads in declaration order.
+     * Constructors are named exactly like the instantiated class and are not
+     * inherited from parent classes. */
     int ctor_positions[16];
     int ctor_n = 0;
     for (int i = 0; i < class_sym->method_count && ctor_n < 16; i++) {
@@ -972,8 +1033,8 @@ static void analyze_new_expr(SemanticAnalyzer* analyzer, Expr* expr) {
 
     MethodSymbol* constructor = &class_sym->methods[best_pos];
 
-    /* Record the selected overload for codegen. -1 when the class has a single
-     * constructor so codegen keeps emitting the legacy `Class_new` label. */
+    /* Record the selected overload for codegen. -1 keeps the compact
+     * `Class_new` ABI label when the class has a single constructor. */
     new_expr->ctor_index = (ctor_n > 1) ? best_ctor_ord : -1;
 
     /* Narrowing / lossy-conversion diagnostics on the chosen signature. */
@@ -1005,6 +1066,13 @@ static void analyze_index_expr(SemanticAnalyzer* analyzer, Expr* expr) {
 
     // Analyze index expression
     analyze_expr(analyzer, index_expr->index);
+
+    if (index_expr->index->type == EXPR_BINARY &&
+        (index_expr->index->as.binary.operator == TOKEN_RANGE ||
+         index_expr->index->as.binary.operator == TOKEN_RANGE_INCLUSIVE)) {
+        expr->data_type = TYPE_SLICE;
+        return;
+    }
 
     // Index must be an integer
     if (index_expr->index->data_type != TYPE_INT && index_expr->index->data_type != TYPE_ERROR) {
@@ -1043,6 +1111,47 @@ static void analyze_member_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     
     if (!member->object) {
         expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    /* The module resolver currently merges imported declarations into one
+     * symbol table.  An import alias therefore lowers to a qualified lookup
+     * of the imported function while keeping normal object.member semantics
+     * unchanged. */
+    if (member->object->type == EXPR_VARIABLE &&
+        is_module_alias(analyzer, member->object->as.variable.name)) {
+        if (!member->is_method_call) {
+            report_semantic_error(expr->line, expr->column,
+                "Module aliases currently support qualified function calls only");
+            expr->data_type = TYPE_ERROR;
+            return;
+        }
+
+        Symbol* target = lookup_symbol(analyzer->symbols, member->member_name);
+        if (!target || target->kind != SYMBOL_FUNCTION) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Function '%s' is not available through module alias",
+                     member->member_name ? member->member_name : "<unnamed>");
+            report_semantic_error(expr->line, expr->column, msg);
+            expr->data_type = TYPE_ERROR;
+            return;
+        }
+
+        char* function_name = member->member_name;
+        Expr* alias_object = member->object;
+        Expr** arguments = member->arguments;
+        int arg_count = member->arg_count;
+
+        free_expr(alias_object);
+        expr->type = EXPR_CALL;
+        expr->as.call.callee = create_variable_expr(strdup(function_name),
+                                                    expr->line, expr->column);
+        expr->as.call.name = strdup(function_name);
+        expr->as.call.arguments = arguments;
+        expr->as.call.arg_count = arg_count;
+        free(function_name);
+
+        analyze_call_expr(analyzer, expr);
         return;
     }
 
@@ -1196,14 +1305,10 @@ static void analyze_member_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
 
         expr->data_type = method->return_type;
 
-        // If method returns a class type, we need to track which class
-        // For now, we'll infer it from method name patterns or use the return type
-        // This is a simplification - ideally methods would store return class names
         if (method->return_type == TYPE_CLASS) {
-            // Check if the method name suggests it returns the same class (like getTask)
-            // Or use the class_sym name as a heuristic
-            // For now, just copy the class name (this will need refinement)
-            expr->class_name = strdup(class_sym->name);
+            expr->class_name = strdup(method->return_class_name
+                                      ? method->return_class_name
+                                      : class_sym->name);
         }
     } else {
         // Field access
@@ -1239,6 +1344,30 @@ static void analyze_static_access_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     if (!class_sym) {
         char msg[256];
         snprintf(msg, sizeof(msg), "Unknown class '%s'", static_access->class_name);
+        report_semantic_error(expr->line, expr->column, msg);
+        expr->data_type = TYPE_ERROR;
+        return;
+    }
+
+    if (class_sym->is_enum && !static_access->is_method_call) {
+        for (int i = 0; i < class_sym->enum_variant_count; i++) {
+            if (strcmp(class_sym->enum_variants[i], static_access->member_name) == 0) {
+                char* enum_name = strdup(class_sym->name);
+                free(static_access->class_name);
+                free(static_access->member_name);
+                memset(&expr->as, 0, sizeof(expr->as));
+                expr->type = EXPR_LITERAL;
+                expr->as.literal.type = TYPE_I64;
+                expr->as.literal.value.int_value = i;
+                expr->data_type = TYPE_CLASS;
+                if (expr->class_name) free(expr->class_name);
+                expr->class_name = enum_name;
+                return;
+            }
+        }
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Variant '%s' not found in enum '%s'",
+                 static_access->member_name, class_sym->name);
         report_semantic_error(expr->line, expr->column, msg);
         expr->data_type = TYPE_ERROR;
         return;
@@ -1656,9 +1785,35 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
         return;
     }
 
+    /* Immutable local bindings must be initialized at their declaration.
+     * Besides preventing reads of indeterminate storage, this keeps `let`
+     * semantics aligned with the language's Swift/Rust-inspired surface.
+     * Mutable bindings remain allowed without an initializer so the existing
+     * definite-initialization tracking can validate their later use. */
+    if (!decl->initializer && !decl->is_mutable && !decl->is_const) {
+        report_semantic_error(stmt->line, stmt->column,
+            "Immutable binding requires an initializer");
+    }
+
     // Analyze initializer first
     if (decl->initializer) {
         analyze_expr(analyzer, decl->initializer);
+
+        if (decl->type == TYPE_STATIC_ARRAY &&
+            decl->initializer->type == EXPR_ARRAY_LITERAL) {
+            int actual = decl->initializer->as.array_literal.element_count;
+            int expected = decl->type_info ? decl->type_info->static_size : -1;
+            if (expected >= 0 && actual != expected) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Static array length mismatch (expected %d, got %d)",
+                         expected, actual);
+                report_type_error(stmt->line, stmt->column, msg);
+            }
+            /* Array literals are layout-compatible with fixed arrays once
+             * their rank has been validated. */
+            decl->initializer->data_type = TYPE_STATIC_ARRAY;
+        }
 
         // If this is a move expression, mark the source variable as moved
         if (is_move_expr(decl->initializer)) {
@@ -2279,9 +2434,20 @@ static void analyze_match_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     OwnStateSnapshot acc;       /* accumulated intersection of reachable arms */
     own_state_copy(&acc, &pre); /* start from fall-through (nothing extra moved) */
 
+    bool has_wildcard = false;
     for (int i = 0; i < ms->arm_count; i++) {
         if (ms->arms[i].pattern)  /* NULL == wildcard _  */
             analyze_expr(analyzer, ms->arms[i].pattern);
+        else
+            has_wildcard = true;
+
+        if (ms->arms[i].pattern && ms->subject->class_name &&
+            ms->arms[i].pattern->class_name &&
+            strcmp(ms->subject->class_name, ms->arms[i].pattern->class_name) != 0) {
+            report_type_error(ms->arms[i].pattern->line,
+                              ms->arms[i].pattern->column,
+                              "Match pattern belongs to a different enum type");
+        }
 
         own_state_restore(&g_ownership_ctx, &pre);
         if (ms->arms[i].body)
@@ -2298,6 +2464,31 @@ static void analyze_match_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     own_state_restore(&g_ownership_ctx, &acc);
     own_state_free(&acc);
     own_state_free(&pre);
+
+    if (!has_wildcard && ms->subject->class_name) {
+        ClassSymbol* enum_type = lookup_class(analyzer->symbols,
+                                              ms->subject->class_name);
+        if (enum_type && enum_type->is_enum) {
+            int covered = 0;
+            for (int v = 0; v < enum_type->enum_variant_count; v++) {
+                for (int i = 0; i < ms->arm_count; i++) {
+                    if (ms->arms[i].variant_name &&
+                        strcmp(ms->arms[i].variant_name,
+                               enum_type->enum_variants[v]) == 0) {
+                        covered++;
+                        break;
+                    }
+                }
+            }
+            if (covered < enum_type->enum_variant_count) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Non-exhaustive match on enum '%s' (%d of %d variants covered)",
+                         enum_type->name, covered, enum_type->enum_variant_count);
+                report_semantic_error(stmt->line, stmt->column, msg);
+            }
+        }
+    }
 }
 
 /* ─── throw statement ─── */
@@ -2450,6 +2641,19 @@ static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
 
     if (func->body) {
         analyze_stmt(analyzer, func->body);
+    }
+
+    /* A non-void function must not have a reachable fallthrough path.  The
+     * same conservative divergence analysis used by ownership-state merging
+     * already understands blocks, if/else chains, match arms, return and
+     * throw, so reuse it here rather than maintaining a second CFG walker. */
+    if (func->return_type != TYPE_VOID && func->return_type != TYPE_ERROR &&
+        func->body && !branch_diverges(func->body)) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Function '%s' may complete without returning %s",
+                 func->name, type_to_string(func->return_type));
+        report_type_error(stmt->line, stmt->column, msg);
     }
 
     /* ── Memory model: run escape analysis on function body ── */
@@ -2640,6 +2844,21 @@ static void analyze_class_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     // Analyze method bodies (methods were already registered in pre-pass)
     for (int i = 0; i < class_stmt->method_count; i++) {
         MethodDecl* method = &class_stmt->methods[i];
+
+        if (method->is_constructor) {
+            if (method->return_type != TYPE_VOID) {
+                report_semantic_error(stmt->line, stmt->column,
+                    "Constructors initialize an instance implicitly and must return void");
+            }
+            if (method->is_static) {
+                report_semantic_error(stmt->line, stmt->column,
+                    "A constructor cannot be static");
+            }
+            if (method->is_abstract) {
+                report_semantic_error(stmt->line, stmt->column,
+                    "A constructor cannot be abstract");
+            }
+        }
 
         // Analyze method body with class context
         ClassSymbol* prev_class = analyzer->current_class;
@@ -2862,6 +3081,36 @@ static void preregister_enum(SemanticAnalyzer* analyzer, Stmt* stmt) {
         snprintf(msg, sizeof(msg), "Enum '%s' already declared", enum_stmt->name);
         report_type_error(stmt->line, stmt->column, msg);
         return;
+    }
+
+    ClassSymbol* enum_type = lookup_class(analyzer->symbols, enum_stmt->name);
+    if (!enum_type) return;
+    enum_type->is_enum = true;
+    enum_type->enum_variant_count = enum_stmt->variant_count;
+    if (enum_stmt->variant_count > 0) {
+        enum_type->enum_variants = ALLOCATE(char*, enum_stmt->variant_count);
+    }
+    for (int i = 0; i < enum_stmt->variant_count; i++) {
+        EnumVariant* variant = &enum_stmt->variants[i];
+        if (variant->tag_value < 0) variant->tag_value = i;
+        enum_type->enum_variants[i] = strdup(variant->name);
+        if (!add_symbol(analyzer->symbols, variant->name, SYMBOL_VARIABLE,
+                        TYPE_CLASS, analyzer->scope_depth)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "Enum variant '%s' conflicts with another declaration",
+                     variant->name);
+            report_semantic_error(stmt->line, stmt->column, msg);
+            continue;
+        }
+        Symbol* symbol = lookup_symbol(analyzer->symbols, variant->name);
+        symbol->is_initialized = true;
+        symbol->is_mutable = false;
+        symbol->is_const = true;
+        symbol->is_enum_variant = true;
+        symbol->const_int_value = variant->tag_value;
+        symbol->enum_name = strdup(enum_stmt->name);
+        symbol->class_info = enum_type;
     }
 }
 
@@ -3340,6 +3589,13 @@ static void preregister_class(SemanticAnalyzer* analyzer, Stmt* stmt) {
                             param_types, method->param_count,
                             method->is_constructor, method->is_static, method->access);
 
+        MethodSymbol* registered_method = find_method(class_sym, method->name);
+        if (registered_method && method->return_type == TYPE_CLASS &&
+            method->return_class_name) {
+            free(registered_method->return_class_name);
+            registered_method->return_class_name = strdup(method->return_class_name);
+        }
+
         /* Propagate abstract method flag */
         if (method->is_abstract) {
             MethodSymbol* msym = find_method(class_sym, method->name);
@@ -3363,6 +3619,22 @@ bool analyze_program(SemanticAnalyzer* analyzer, Stmt** statements, int count) {
        across imported modules. */
     for (int i = 0; i < count; i++) {
         if (!statements[i]) continue;
+        if (statements[i]->type == STMT_INCLUDE &&
+            statements[i]->as.include.is_import &&
+            statements[i]->as.include.alias) {
+            const char* alias = statements[i]->as.include.alias;
+            if (is_module_alias(analyzer, alias)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Duplicate module alias '%s'", alias);
+                report_semantic_error(statements[i]->line, statements[i]->column, msg);
+            } else {
+                analyzer->module_aliases = GROW_ARRAY(char*,
+                    analyzer->module_aliases,
+                    analyzer->module_alias_count,
+                    analyzer->module_alias_count + 1);
+                analyzer->module_aliases[analyzer->module_alias_count++] = strdup(alias);
+            }
+        }
         switch (statements[i]->type) {
             case STMT_EXTERN:
                 analyze_extern_stmt(analyzer, statements[i]);
@@ -3394,6 +3666,9 @@ bool analyze_program(SemanticAnalyzer* analyzer, Stmt** statements, int count) {
                 }
                 add_function(analyzer->symbols, func->name, func->return_type,
                              param_types, func->param_count, analyzer->scope_depth);
+                Symbol* function_symbol = lookup_symbol(analyzer->symbols, func->name);
+                if (function_symbol && function_symbol->kind == SYMBOL_FUNCTION)
+                    function_symbol->return_type_info = func->return_type_info;
                 if (param_types) free(param_types);
                 break;
             }

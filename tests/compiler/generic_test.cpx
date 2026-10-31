@@ -7,7 +7,7 @@ class List<T> {
     mut items: Array<T>
     mut count: int
 
-    func new() {
+    func List() {
         this.count = 0
     }
 
@@ -51,7 +51,7 @@ class Pair<K, V> {
     let key: K
     let value: V
 
-    func new(k: K, v: V) {
+    func Pair(k: K, v: V) {
         this.key = k
         this.value = v
     }

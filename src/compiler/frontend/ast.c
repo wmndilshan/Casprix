@@ -298,12 +298,13 @@ Stmt* create_block_stmt(Stmt** stmts, int count, int line, int col) {
     return stmt;
 }
 
-Stmt* create_include_stmt(char* module_name, bool is_import, int line, int col) {
+Stmt* create_include_stmt(char* module_name, char* alias, bool is_import, int line, int col) {
     Stmt* stmt = ALLOCATE(Stmt, 1);
     stmt->type = STMT_INCLUDE;
     stmt->line = line;
     stmt->column = col;
     stmt->as.include.module_name = module_name;
+    stmt->as.include.alias = alias;
     stmt->as.include.is_import = is_import;
     return stmt;
 }
@@ -739,6 +740,7 @@ void free_stmt(Stmt* stmt) {
             break;
         case STMT_INCLUDE:
             free(stmt->as.include.module_name);
+            free(stmt->as.include.alias);
             break;
         case STMT_BREAK:
         case STMT_CONTINUE:
@@ -765,6 +767,7 @@ void free_stmt(Stmt* stmt) {
             // Free methods
             for (int i = 0; i < stmt->as.class_stmt.method_count; i++) {
                 free(stmt->as.class_stmt.methods[i].name);
+                free(stmt->as.class_stmt.methods[i].return_class_name);
                 for (int j = 0; j < stmt->as.class_stmt.methods[i].param_count; j++) {
                     free(stmt->as.class_stmt.methods[i].parameters[j].name);
                     if (stmt->as.class_stmt.methods[i].parameters[j].class_name) {
@@ -871,6 +874,7 @@ void free_stmt(Stmt* stmt) {
             MatchStmt* ms = &stmt->as.match_stmt;
             for (int i = 0; i < ms->arm_count; i++) {
                 free_expr(ms->arms[i].pattern);
+                if (ms->arms[i].variant_name) free(ms->arms[i].variant_name);
                 free_stmt(ms->arms[i].body);
             }
             if (ms->arms) free(ms->arms);

@@ -7,25 +7,15 @@
 #ifndef LLM_TRAINING_H
 #define LLM_TRAINING_H
 
-#include "tensor.h"
+#include "../core/tensor.h"
+#include "../training/optimizer.h"
 #include "transformer.h"
 #include "tokenizer.h"
 
 // ===== ADAM OPTIMIZER =====
 
-typedef struct AdamOptimizer {
-    f32 learning_rate;
-    f32 beta1;           // First moment decay
-    f32 beta2;           // Second moment decay
-    f32 epsilon;         // Numerical stability
-    f32 weight_decay;    // L2 regularization
-    i32 t;               // Timestep
-    
-    // Optimizer states (one per parameter)
-    Tensor** m;          // First moment estimates
-    Tensor** v;          // Second moment estimates
-    i32 num_params;
-} AdamOptimizer;
+/* Legacy transformer ABI; implementation delegates to the shared optimizer. */
+typedef AiOptimizer AdamOptimizer;
 
 // Create Adam optimizer
 AdamOptimizer* adam_create(i32 num_params, f32 lr, f32 beta1, f32 beta2);
@@ -51,9 +41,11 @@ f32 lr_schedule_warmup_cosine(i32 step, i32 warmup_steps, i32 max_steps,
 
 // Full backward pass using autograd tape.
 // Re-runs forward on tape, computes all gradients via reverse-mode AD.
-// param_grads ordering matches collect_parameters() in train_tinystories.c.
+// param_grads follows the transformer parameter layout documented by
+// transformer_backward().
 void transformer_backward(TransformerModel* model, const Tensor* logits,
-                          const i32* targets, i32 batch, i32 seq_len,
+                          const i32* token_ids, const i32* targets,
+                          i32 batch, i32 seq_len,
                           Tensor** param_grads, MemoryPools* mem);
 
 // ===== GRADIENT CHECKPOINTING =====

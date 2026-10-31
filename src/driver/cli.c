@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef CASPRIX_VERSION
+#define CASPRIX_VERSION "development"
+#endif
+
 /* ============================================================================
  * Global configuration instance (zero-initialised, then set by cli_parse_args)
  * ========================================================================== */
@@ -16,6 +20,7 @@ CompilerConfig g_config = {
     .keep_asm_file                = false,
     .optimize                     = true,
     .output_name                  = NULL,
+    .c_entry_symbol               = NULL,
     .dump_tokens                  = false,
     .dump_ast                     = false,
     .dump_symbols                 = false,
@@ -46,7 +51,7 @@ CompilerConfig g_config = {
 
 void cli_print_usage(const char* program_name) {
     printf("Casprix \xF0\x9F\x91\xBB - High Performance Ghost Language\n");
-    printf("Version 1.0.0 | Generates x86-64 assembly from .cpx source\n\n");
+    printf("Version %s | Casprix compiler toolchain\n\n", CASPRIX_VERSION);
 
     printf("Usage: %s [options] <input.cpx>\n\n", program_name);
 
@@ -56,6 +61,7 @@ void cli_print_usage(const char* program_name) {
     printf("  -k, --keep-asm        Keep intermediate assembly file\n");
     printf("  -O0                   Disable optimizations\n");
     printf("  -h, --help            Show this help message\n");
+    printf("  -V, --version         Show compiler version\n");
 
     printf("\nDebug/Academic Options:\n");
     printf("  --dump-tokens         Display lexer output (token stream)\n");
@@ -74,6 +80,7 @@ void cli_print_usage(const char* program_name) {
     printf("  --vm                  Emit VM bytecode via MIR backend\n");
     printf("  --jit                 Emit a JIT package via MIR backend\n");
     printf("  --emit-c              Emit C source via MIR backend\n");
+    printf("  --c-entry <symbol>    Emit a library entry instead of main() (C backend)\n");
     printf("  --execute             Run the program in-process via the CVM (implies --mir);\n");
     printf("                        main()'s return value becomes the process exit code\n");
     printf("  --opt-level=N         Optimization level 0-3 (default: 2)\n");
@@ -105,6 +112,11 @@ int cli_parse_args(int argc, char* argv[], const char** input_file) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             cli_print_usage(argv[0]);
+            return 1; /* early exit, not an error */
+        }
+        else if (strcmp(argv[i], "-V") == 0 ||
+                 strcmp(argv[i], "--version") == 0) {
+            printf("casprix %s\n", CASPRIX_VERSION);
             return 1; /* early exit, not an error */
         }
         else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
@@ -159,6 +171,16 @@ int cli_parse_args(int argc, char* argv[], const char** input_file) {
         else if (strcmp(argv[i], "--emit-c") == 0) {
             g_config.output_kind = OUTPUT_C;
             g_config.use_mir     = true;
+        }
+        else if (strcmp(argv[i], "--c-entry") == 0) {
+            if (i + 1 < argc) {
+                g_config.c_entry_symbol = argv[++i];
+                g_config.output_kind = OUTPUT_C;
+                g_config.use_mir = true;
+            } else {
+                fprintf(stderr, "Error: --c-entry requires a C symbol name.\n");
+                return 64;
+            }
         }
         else if (strcmp(argv[i], "--execute") == 0) {
             /* Run the program in-process via the CVM. Standalone (no --vm

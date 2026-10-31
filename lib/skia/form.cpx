@@ -55,7 +55,7 @@ class Field {
     mut touched: bool;
     mut force_errors: bool;
 
-    func new(label_text: string, placeholder: string, font: i64) -> void {
+    func Field(label_text: string, placeholder: string, font: i64) -> void {
         ui_require_handle(font, "Field font")
 
         this.column = new Column(6.0)
@@ -195,7 +195,7 @@ class Form {
     mut f6: Field;
     mut f7: Field;
 
-    func new(spacing: float) -> void {
+    func Form(spacing: float) -> void {
         this.column = new Column(spacing)
         this.handle = this.column.handle
         this.count = 0

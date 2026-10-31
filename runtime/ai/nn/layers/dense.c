@@ -3,7 +3,7 @@
  */
 
 #include "dense.h"
-#include "../../llm/ops.h"
+#include "../../kernels/cpu_ops.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -45,7 +45,7 @@ void dense_init_weights(DenseLayer* layer, const char* init_type) {
         float std = sqrtf(2.0f / (layer->in_features + layer->out_features));
         for (int i = 0; i < n; i++) {
             /* Box-Muller transform for normal distribution */
-            float u1 = (float)rand() / RAND_MAX;
+            float u1 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
             float u2 = (float)rand() / RAND_MAX;
             w[i] = std * sqrtf(-2.0f * logf(u1)) * cosf(2.0f * 3.14159265f * u2);
         }
@@ -54,7 +54,7 @@ void dense_init_weights(DenseLayer* layer, const char* init_type) {
         /* He initialization: std = sqrt(2 / in) */
         float std = sqrtf(2.0f / layer->in_features);
         for (int i = 0; i < n; i++) {
-            float u1 = (float)rand() / RAND_MAX;
+            float u1 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
             float u2 = (float)rand() / RAND_MAX;
             w[i] = std * sqrtf(-2.0f * logf(u1)) * cosf(2.0f * 3.14159265f * u2);
         }

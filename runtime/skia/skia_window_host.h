@@ -1,5 +1,5 @@
 /*
- * Platform Window Host Interface for Casperix/Casprix UI
+ * Platform Window Host Interface for Casprix UI
  *
  * This header defines the generic window + event host contract used by
  * SGApp/frame_loop. Platform backends (Win32 today, X11/Wayland later)

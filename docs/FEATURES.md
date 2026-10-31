@@ -41,6 +41,7 @@ The driver binary is **`casprix`** (not `casprixc`). Build it with CMake (`scrip
 casprix program.cpx -o out
 casprix program.cpx -o out --opt-level=2
 casprix program.cpx --check-only
+casprix --version
 casprix --help
 ```
 

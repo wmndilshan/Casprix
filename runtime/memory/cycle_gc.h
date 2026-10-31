@@ -1,4 +1,4 @@
-// Casperix Runtime - Cycle Collector
+// Casprix Runtime - Cycle Collector
 // Lightweight cycle detection for ARC-managed objects
 //
 // Uses the Bacon-Rajan synchronous cycle collection algorithm:

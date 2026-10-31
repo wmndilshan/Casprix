@@ -1,4 +1,4 @@
-// Casperix Runtime - Object System
+// Casprix Runtime - Object System
 // Unified object layout: [ArcHeader][ObjectHeader][fields...]
 //
 // Every class instance has:

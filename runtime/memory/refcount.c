@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Rc<T> / Batch Release Implementation
+ * Casprix Runtime - Rc<T> / Batch Release Implementation
  *
  * Non-atomic single-threaded reference counting and deferred release queues.
  */

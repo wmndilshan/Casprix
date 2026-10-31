@@ -1,0 +1,11 @@
+func main() -> int {
+    let values: Array<int> = [1, 2, 3, 4]
+    mut total: int = 0
+    for item in values {
+        if item == 2 {
+            continue
+        }
+        total += item
+    }
+    return total - 8
+}

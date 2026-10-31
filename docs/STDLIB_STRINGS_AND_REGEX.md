@@ -10,14 +10,12 @@ Shipped Casprix sources are rooted at `lib/`. Typical entry points:
 
 | Area | Path | Notes |
 |------|------|--------|
-| Core collections / generics | `lib/stdlib/Collections.cpx`, `Generics.cpx`, `Collections_Simple.cpx` | Lists, maps, patterns (evolving) |
-| Interfaces & lambdas | `lib/stdlib/Interfaces.cpx`, `Lambdas.cpx` | Shared protocols and helpers |
-| Concurrency | `lib/stdlib/Thread.cpx`, `AsyncThread.cpx` | Maps to runtime thread / async APIs |
-| Networking | `lib/stdlib/Network.cpx`, `AsyncNetwork.cpx` | HTTP / socket-oriented wrappers |
-| GUI (Skia) | `lib/stdlib/GUI.cpx`, `ModernGUI.cpx` | Optional; needs `ENABLE_SKIA_GUI` build |
-| LLM | `lib/llm/` | Tokenizer and related `.cpx` |
+| AI | `lib/std/ai/` | Tensor, autograd, token streams, and decoder APIs |
+| Synchronization | `lib/std/sync/` | Atomic operations |
+| Networking | `lib/net/` | Socket-oriented wrappers |
+| GUI (Skia) | `lib/skia/` | UI bindings; needs `ENABLE_SKIA_GUI` for the full backend |
 
-Imports use quoted paths, e.g. `import "lib/stdlib/Collections.cpx"` (exact style depends on your project layout).
+Imports use quoted paths, for example `import "lib/std/ai/tensor.cpx"`.
 
 The **`stdlib/`** directory holds the bootstrap package index and small modules used before the full tree is available; see `docs/PROJECT_STRUCTURE.md`.
 

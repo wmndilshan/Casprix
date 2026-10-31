@@ -230,6 +230,27 @@ MirValueId mir_build_shr(MirBuilder* b, MirValueId lhs, MirValueId rhs) {
     return build_binary(b, MIR_SHR, lhs, rhs);
 }
 
+MirValueId mir_build_logic_and(MirBuilder* b, MirValueId lhs, MirValueId rhs) {
+    MirInst* inst = alloc_inst(b, MIR_LOGIC_AND, mir_type_bool(b->module));
+    inst->as.binary.lhs = lhs;
+    inst->as.binary.rhs = rhs;
+    return emit(b, inst);
+}
+
+MirValueId mir_build_logic_or(MirBuilder* b, MirValueId lhs, MirValueId rhs) {
+    MirInst* inst = alloc_inst(b, MIR_LOGIC_OR, mir_type_bool(b->module));
+    inst->as.binary.lhs = lhs;
+    inst->as.binary.rhs = rhs;
+    return emit(b, inst);
+}
+
+MirValueId mir_build_logic_not(MirBuilder* b, MirValueId operand) {
+    MirInst* inst = alloc_inst(b, MIR_LOGIC_NOT, mir_type_bool(b->module));
+    inst->as.unary.operand = operand;
+    inst->as.unary.target_type = NULL;
+    return emit(b, inst);
+}
+
 MirValueId mir_build_not(MirBuilder* b, MirValueId operand) {
     MirType* type = mir_function_value_type(b->func, operand);
     MirInst* inst = alloc_inst(b, MIR_BNOT, type);

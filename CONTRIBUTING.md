@@ -1,56 +1,63 @@
 # Contributing to Casprix
 
-Welcome to the Casprix project! This document provides guidelines for contributing to the compiler, runtime, and standard library.
+Casprix welcomes focused bug fixes, tests, documentation, and design proposals.
+Before implementing a large language feature, open a discussion describing its
+grammar, type-system impact, lowering strategy, compatibility, and tests.
 
-## Git Workflow
+Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Report
+security issues according to [SECURITY.md](SECURITY.md).
 
-The project follows a standardized development workflow:
+## Development setup
 
-1.  **Branching**: Create a descriptive branch for your work.
-    ```bash
-    git checkout -b feature/your-feature-name
-    ```
-2.  **Committing**: We recommend [Conventional Commits](https://www.conventionalcommits.org/):
-    - `feat: add new ghost-call optimization`
-    - `fix: resolve memory leak in parser`
-    - `docs: update architecture diagram`
-3.  **Pull Requests**: Open a PR against the `main` branch with a clear description of the problem and your solution.
+Required tools are CMake 3.20+, Ninja, a C11 compiler, and NASM.
 
-## Commit Guidelines
-
-- Use the present tense ("add" not "added").
-- Use the imperative mood ("move" not "moves").
-- Limit the subject line to 72 characters.
-- Reference issues and pull requests liberally.
-
-## Running Tests
-
-All contributions must pass the automated test suite before merging.
-
-### 1. Build Verification
 ```bash
-cmake -B build -DBUILD_TESTS=ON
-cmake --build build
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
 ```
 
-### 2. CTest Suite
+Use the release preset before submitting changes that affect optimization,
+code generation, runtime behavior, or packaging:
+
 ```bash
-cd build
-ctest --output-on-failure
+cmake --preset release
+cmake --build --preset release
+ctest --test-dir build/release --output-on-failure
 ```
 
-### 3. Manual Compiler Tests
-```bash
-# Run the standalone C test runner
-./build/tests/compiler_suite_runner
-```
+The `Makefile` is a compiler-only fast path. CMake is authoritative for the
+complete compiler, runtime, tools, install layout, and tests.
 
-## Development Standards
+## Change requirements
 
-1.  **Code Style**: Follow the existing C style in the codebase (2-space indentation, descriptive naming).
-2.  **Documentation**: Update relevant `.md` files and header comments for any new functionality.
-3.  **Portability**: Ensure changes are compatible with Windows (MinGW/MSVC), Linux, and macOS.
+- Add positive and negative tests for language semantics.
+- Add runtime tests for public C behavior and ownership boundaries.
+- Keep diagnostics actionable and deterministic.
+- Update the syntax EBNF and conformance matrix for language changes.
+- Update `CHANGELOG.md` under `Unreleased` for user-visible changes.
+- Preserve Windows and Linux behavior; avoid platform-specific assumptions in
+  shared code.
+- Do not commit build outputs, downloaded SDKs, datasets, model checkpoints, or
+  generated logs.
+- Keep public modules in `lib/`, public C headers in `include/casprix/`, and
+  implementation details in `src/` or `runtime/`.
 
-## License
+## Style
 
-By contributing to Casprix, you agree that your contributions will be licensed under the project's MIT License.
+- C/C++ and Casprix use four-space indentation and a 100-column target.
+- C symbols use `snake_case`; types use the established project convention.
+- Casprix types use `PascalCase` and functions use `camelCase` or the
+  surrounding module's established convention.
+- Run `git diff --check` before submitting.
+- `.clang-format`, `.editorconfig`, and `.gitattributes` define mechanical
+  formatting and line-ending policy. Avoid unrelated bulk reformatting.
+
+## Commits and pull requests
+
+Use a descriptive branch and Conventional Commit-style subjects where useful,
+for example `fix(parser): reject duplicate constructor labels`. Keep commits
+reviewable and explain user-visible behavior, tests, compatibility, and known
+limitations in the pull request.
+
+All contributions are licensed under the project's MIT License.

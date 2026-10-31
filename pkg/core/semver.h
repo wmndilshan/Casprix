@@ -1,5 +1,5 @@
 /**
- * Semantic Versioning Parser for Casperix Package Manager
+ * Semantic Versioning Parser for Casprix Package Manager
  * 
  * Implements semver 2.0.0 specification with constraint matching
  */

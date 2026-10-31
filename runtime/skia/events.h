@@ -1,5 +1,5 @@
 /*
- * Event System — Mouse, keyboard, focus dispatch for Casperix UI
+ * Event System — Mouse, keyboard, focus dispatch for Casprix UI
  *
  * Pipeline: OS Event → Window → Hit Test → Capture Phase → Bubble Phase
  *

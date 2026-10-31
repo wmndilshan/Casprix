@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Async/Await Lowering
+ * Casprix Compiler - Async/Await Lowering
  * Transforms async functions into state machine code
  */
 

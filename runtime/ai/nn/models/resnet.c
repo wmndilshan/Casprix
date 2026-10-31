@@ -3,8 +3,8 @@
  */
 
 #include "resnet.h"
-#include "../activations/activations.h"
-#include "../../llm/ops.h"
+#include "../../ops/activations.h"
+#include "../../kernels/cpu_ops.h"
 #include <stdlib.h>
 
 ResNetBasicBlock* resnet_basic_create(int in_channels, int out_channels, int stride) {

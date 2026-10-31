@@ -1,161 +1,158 @@
 # Casprix
 
-Casprix is a statically-typed, compiled programming language that targets x86-64.
-The compiler is written in C. It has a hand-written lexer and parser, a semantic
-analysis pass with ownership and escape analysis, an SSA-form mid-level IR (MIR)
-with a small optimization pipeline, and two code paths: an AST-based native
-backend (the default) and an MIR-based backend that can emit native code, C, VM
-bytecode, or run a program in-process through a bytecode interpreter (CVM) with
-an experimental JIT.
+Casprix is an experimental, statically typed compiled language and toolchain
+written primarily in C. The repository contains the compiler, runtime,
+standard-library modules, package manager, language server, VS Code extension,
+and Android tooling.
 
-This is an early-stage project developed by a single author with the assistance
-of AI coding agents. It is not a finished language and is not production-ready.
-The sections below describe what the compiler does today, not what is planned.
+Casprix is under active development and is not yet a stable production
+language. Language semantics, the standard library, package format, and
+generated ABI may change before a stable release.
 
-## Building
+## Toolchain
 
-Two build systems are provided.
+| Component | Purpose | Maturity |
+|---|---|---|
+| `casprix` | Parser, type checker, MIR pipeline, native/C/VM/JIT backends | Active development |
+| `libcasprix_runtime` | Memory, async, networking, GUI, math, and CPU AI runtime | Active development |
+| `casprix-pkg` | Package manifests, resolution, cache, and registry client | Experimental |
+| `casprix-lsp` | Diagnostics, symbols, and go-to-definition | Experimental |
+| `ide/vscode` | Syntax support and language-server integration | Experimental |
+| Android tooling | ARM64 NativeActivity APK build, install, and launch | Experimental |
 
-### Make (compiler only)
+The native compiler backend targets x86-64 Windows and Linux. The Android
+runtime targets ARM64 through the NDK. macOS and other architectures are
+best-effort and are not release-gated.
 
+## Requirements
+
+- CMake 3.20 or newer
+- Ninja
+- A C11 compiler (GCC/MinGW is the regularly tested toolchain)
+- NASM for AVX2 assembly kernels
+- Optional: Android SDK/NDK, Java, and ADB for Android builds
+
+## Build and test
+
+The checked-in presets provide consistent local and CI configurations:
+
+```bash
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
 ```
-make
+
+For an optimized build:
+
+```bash
+cmake --preset release
+cmake --build --preset release
+ctest --test-dir build/release --output-on-failure
 ```
 
-Produces `bin/casprix`. This path builds only the compiler driver plus the small
-runtime files it needs for the `--execute` mode. It is the fast path for working
-on the compiler itself. `make test-all` runs the compiler over the `.cpx`
-fixtures in `tests/compiler/` in `--parse-only` mode.
+Without presets:
 
-### CMake (full toolchain)
-
-```
-cmake -S . -B build
-cmake --build build
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-Produces, under `build/`:
+The root `Makefile` remains a fast compiler-only development path. CMake is
+the authoritative full-toolchain build.
 
-- `casprix` — the compiler driver
-- `libcasprix_runtime.a` — the C runtime (memory, async, networking, math,
-  stdlib, and ML subsystems)
-- `casprix-pkg` — a package-manager utility
-- `casprix-lsp` — a language server (diagnostics, document symbols,
-  go-to-definition)
-- the C test executables, registered with CTest
+## Language example
 
-Optional components are controlled by CMake options, including `ENABLE_AVX2`
-(on by default) and `ENABLE_SKIA_GUI` (off by default).
+```cpx
+class Point {
+    public mut x: i32
+    public mut y: i32
 
-## Example
-
-```
-class Counter {
-    mut value: int
-
-    func bump() {
-        this.value = this.value + 1
+    public func Point(x: i32, y: i32) -> void {
+        this.x = x
+        this.y = y
     }
 }
 
-func sum(items: Array<Int>) -> Int {
-    total: Int = 0
-    for item in items {
-        total += item
+func classify(value: i32) -> i32 {
+    if value < 0 {
+        return -1
+    } else if value == 0 {
+        return 0
     }
-    return total
+    return 1
 }
 
-func main() -> Int {
-    c: Counter = new Counter()
-    c.bump()
-    c.bump()
-    c.bump()
-
-    nums: Array<Int> = [10, 20, 30]
-    print(sum(nums))   // 60
-    print(c.value)     // 3
-
-    return 0
+func main() -> i32 {
+    let point = new Point(3, 4)
+    return classify(point.x - 3)
 }
 ```
 
-```
-bin/casprix example.cpx -o example
-./example
-```
+Compile or type-check it:
 
-Output:
-
-```
-60
-3
+```bash
+casprix --version
+casprix --check-only example.cpx
+casprix example.cpx -o example
 ```
 
-More examples are in `examples/`; every file there compiles with the current
-compiler (verified with `--check-only`).
+## Implemented language surface
 
-## What works
-
-- Functions, classes with single inheritance and virtual dispatch, traits with
-  `impl` blocks, structs, enums, and unions.
+- Functions, expression-bodied functions, classes, constructor overloads,
+  inheritance, virtual dispatch, structs, enums, unions, traits, and `impl`
+  blocks.
 - Generics with monomorphization.
-- Pattern matching with literal, range, and wildcard arms.
-- Fixed-width integer and float types (`i8`..`i128`, `u8`..`u128`, `f32`, `f64`).
-- Closures: non-capturing lambdas and closures with read-only captures work as
-  values and as calls. Closures that capture a mutable variable work when they
-  do not escape the enclosing function (bound to a local, called in place,
-  passed to a function parameter typed as a plain function).
-- `async` / `await`: `async func` bodies are lowered to state machines. `await`
-  is valid only inside an `async func`.
-- Ownership and escape analysis; a borrow checker over MIR, enabled with
-  `--safe-mode`.
-- Optimization passes over MIR: constant folding and evaluation, mem2reg,
-  inlining, dead-code elimination, and loop and SIMD passes.
-- Backends: default AST native backend (x86-64, via an assembler and linker);
-  MIR backends selected with `--native`/`--aot` (experimental), `--emit-c`,
-  `--vm`, and `--jit`.
-- `--execute`: runs a program in-process through the CVM without writing an
-  executable. This works for functions, recursion, and conditionals; some
-  constructs (for example certain loop shapes) currently fail MIR validation and
-  are not yet supported on this path.
-- Package manager (`casprix-pkg`): project init, dependency declaration in a
-  `casper.json` manifest, and semantic-version constraints.
-- Language server (`casprix-lsp`) and a VS Code extension under `ide/vscode/`.
+- Pattern matching with literals, ranges, wildcards, and enum exhaustiveness.
+- Fixed-width numeric types, fixed arrays, ranges, slices, and `for-in`.
+- `Result<T, E>` and postfix `?`.
+- Non-capturing lambdas and bounded support for captured closures.
+- `async func` and `await` lowering to state machines.
+- Aliased imports and qualified imported function calls.
+- Ownership and escape analysis, plus MIR borrow checking under `--safe-mode`.
+- Native x86-64, C emission, CVM bytecode/interpreter, and experimental JIT
+  paths.
+
+The normative syntax references are
+[CASPRIX_SYNTAX_EBNF.md](docs/CASPRIX_SYNTAX_EBNF.md) and
+[CASPRIX_SYNTAX_CONFORMANCE_MATRIX.md](docs/CASPRIX_SYNTAX_CONFORMANCE_MATRIX.md).
+
+## Android
+
+```powershell
+tools/android/casprix-android.ps1 doctor
+tools/android/casprix-android.ps1 build -KeepBuild
+tools/android/casprix-android.ps1 install
+tools/android/casprix-android.ps1 launch
+tools/android/casprix-android.ps1 logs
+```
+
+The default application is `examples/android/hello_android.cpx`. Prepare the
+ARM64 Skia archive with `tools/android/build_skia_arm64.ps1`. Downloaded
+source and intermediate toolchains are stored under ignored `build-tools/`;
+the resulting local static library is also ignored.
 
 ## Known limitations
 
-- The JIT tiers up a bounded set of functions (covered by tests such as
-  `CVM_JIT_tierup`, `JIT_self_recursive_call`, and `JIT_register_allocator`).
-  General function calls through the JIT are not supported yet.
-- Returning a closure that captures variables is rejected by the compiler.
-- Passing a closure that captures variables as a function argument is rejected;
-  plain functions and non-capturing lambdas can be passed.
-- The MIR native backend (`--native`) is experimental and not on par with the
-  default backend.
-- `spawn` is parsed but rejected with a "not implemented yet" diagnostic;
-  `where` clauses and `scope` blocks are not implemented.
-- ARM64 is not a supported target.
-- The networking layer (`runtime/net/`, `runtime/net2/`) has known correctness
-  gaps in its task/scheduler bookkeeping.
-- The GUI framework (`runtime/skia/`) has no accessibility bridge.
-- The design documents under `docs/design/` describe proposed systems that are
-  largely unbuilt; they are marked as such.
+- The MIR native backend and JIT are experimental and do not support every
+  language construct.
+- Escaping captured closures and captured closures passed as plain function
+  values are rejected.
+- `spawn`, `where` clauses, and `scope` blocks are not implemented.
+- The HTTP server currently focuses on bounded HTTP/1 request handling; TLS,
+  persistent connections, and a stable production server API are not provided.
+- Package registry and model-loading paths must not be treated as hardened
+  untrusted-input boundaries.
+- Some GUI syntax fixtures remain disabled while the UI API is being migrated.
 
-## Tests
+## Repository guidance
 
-```
-make test-all          # compiler over tests/compiler/*.cpx (parse-only)
+- [Architecture](ARCHITECTURE.md)
+- [Feature status](docs/FEATURES.md)
+- [Project structure](docs/PROJECT_STRUCTURE.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Support policy](SUPPORT.md)
+- [Changelog](CHANGELOG.md)
 
-cmake -S . -B build && cmake --build build
-ctest --test-dir build # full suite: runtime, compiler, MIR, JIT
-```
-
-`make test-all` currently reports 41 passed, 0 failed. The CTest suite has a
-small number of known failures unrelated to the compiler core (a runtime stdlib
-test with drifted signatures, a SIMD virtualization test, and two compiler
-fixtures that exercise unimplemented library or syntax features).
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Casprix is available under the [MIT License](LICENSE).

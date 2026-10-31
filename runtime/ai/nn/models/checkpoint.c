@@ -17,7 +17,7 @@ typedef struct {
     uint32_t metadata_len;
 } CheckpointHeader;
 
-bool checkpoint_save(const char* filepath, Tensor** params, int num_params,
+bool nn_checkpoint_save(const char* filepath, Tensor** params, int num_params,
                     const char* metadata) {
     FILE* fp = fopen(filepath, "wb");
     if (!fp) {
@@ -55,7 +55,7 @@ bool checkpoint_save(const char* filepath, Tensor** params, int num_params,
     return true;
 }
 
-bool checkpoint_load(const char* filepath, Tensor** params, int num_params) {
+bool nn_checkpoint_load(const char* filepath, Tensor** params, int num_params) {
     FILE* fp = fopen(filepath, "rb");
     if (!fp) {
         return false;
@@ -108,7 +108,7 @@ bool checkpoint_load(const char* filepath, Tensor** params, int num_params) {
     return true;
 }
 
-bool checkpoint_get_metadata(const char* filepath, char** metadata_out) {
+bool nn_checkpoint_get_metadata(const char* filepath, char** metadata_out) {
     FILE* fp = fopen(filepath, "rb");
     if (!fp) {
         return false;

@@ -1,0 +1,12 @@
+func sum_array(values: Array<int>, count: int) -> int {
+    mut total: int = 0
+    for (i: int = 0; i < count; i = i + 1) {
+        total = total + values[i]
+    }
+    return total
+}
+
+func main() -> int {
+    let values: Array<int> = [1, 2, 3, 4]
+    return sum_array(values, 4) - 10
+}

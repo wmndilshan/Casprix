@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Virtual Dispatch Optimization
+ * Casprix Runtime - Virtual Dispatch Optimization
  *
  * Compressed vtables + inline method caching.
  */

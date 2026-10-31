@@ -8,12 +8,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Added CMake developer, release, and CI presets.
+- Added compiler version reporting, install/package metadata, and a version
+  regression test.
+- Added security, support, community conduct, and formatting policies.
+
 ### Fixed
+- Standalone AI tests now link the AVX2 kernel assembly when AVX2 is enabled.
+- CI now performs clean build, test, install, and installed-binary smoke checks
+  on Linux and Windows.
+- Release-mode test binaries now explicitly retain C assertions, preventing
+  `NDEBUG` from silently removing runtime and compiler checks in CI.
 - Skia GUI: buttons no longer resize on hover/click. `widget_button` and the
   base box widget set `flex_shrink = 0.0f` so state changes mark paint dirty
   without triggering a layout resize.
 
 ### Removed
+- Removed task-specific TinyStories tooling, dead archived networking code,
+  obsolete AI compatibility wrappers, and placeholder standard-library modules.
 - Deleted stale/aspirational documentation and root-level scratch clutter:
   four large design blueprints moved under `docs/design/` with a
   "not implemented" banner; session-debugging notes
@@ -22,6 +35,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   current compiler.
 
 ### Changed
+- `VERSION` is now the canonical machine-readable toolchain version.
+- Downloaded Android Skia sources live under the ignored `build-tools/` tree.
+- Reworked repository and release documentation around the current pre-stable
+  maturity level.
 - `docs/CASPRIX_SYNTAX_EBNF.md` and
   `docs/CASPRIX_SYNTAX_CONFORMANCE_MATRIX.md` corrected: `async`/`await` are
   implemented, not planned.

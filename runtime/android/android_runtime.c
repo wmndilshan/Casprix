@@ -13,12 +13,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
+#include <limits.h>
 
 #ifdef __ANDROID__
 #include "android_renderer.h"
 #endif
 
 static AndroidApp* g_bound_android_app = NULL;
+
+static void android_activity_pause_if_needed(AndroidActivity* activity);
+static void android_activity_resume_if_needed(AndroidActivity* activity);
+static void android_activity_destroy_if_needed(AndroidActivity* activity);
 
 static void android_configure_nav_container(AndroidApp* app) {
     if (!app || !app->nav || !app->nav->container) return;
@@ -60,6 +66,13 @@ AndroidIntent* android_intent_create(const char* target) {
 
 void android_intent_put(AndroidIntent* intent, const char* key, const char* value) {
     if (!intent || !key || !value) return;
+
+    for (int i = 0; i < intent->count; i++) {
+        if (strcmp(intent->keys[i], key) == 0) {
+            snprintf(intent->values[i], sizeof(intent->values[i]), "%s", value);
+            return;
+        }
+    }
     if (intent->count >= ANDROID_MAX_INTENT_KEYS) return;
 
     int idx = intent->count;
@@ -129,8 +142,15 @@ void android_viewmodel_set_int(AndroidViewModel* vm, const char* key, int value)
 
 int android_viewmodel_get_int(AndroidViewModel* vm, const char* key, int default_val) {
     const char* v = android_viewmodel_get(vm, key);
+    char* end = NULL;
+    long parsed;
     if (!v) return default_val;
-    return atoi(v);
+    errno = 0;
+    parsed = strtol(v, &end, 10);
+    if (errno == ERANGE || end == v || *end != '\0' || parsed < INT_MIN || parsed > INT_MAX) {
+        return default_val;
+    }
+    return (int)parsed;
 }
 
 /* ========================================================================
@@ -148,8 +168,7 @@ AndroidActivity* android_activity_create(const char* name) {
 
 void android_activity_destroy(AndroidActivity* activity) {
     if (!activity) return;
-    if (activity->on_destroy)
-        activity->on_destroy(activity);
+    android_activity_destroy_if_needed(activity);
     if (activity->viewmodel)
         android_viewmodel_destroy(activity->viewmodel);
     /* Note: activity->root is owned by the scene graph; caller destroys SGApp */
@@ -214,6 +233,25 @@ static void _swap_screen(AndroidActivityManager* mgr, SGNode* new_root) {
     sg_app_invalidate(mgr->app);
 }
 
+static void android_activity_pause_if_needed(AndroidActivity* activity) {
+    if (!activity || !activity->resumed) return;
+    if (activity->on_pause) activity->on_pause(activity);
+    activity->resumed = 0;
+}
+
+static void android_activity_resume_if_needed(AndroidActivity* activity) {
+    if (!activity || activity->resumed) return;
+    if (activity->on_resume) activity->on_resume(activity);
+    activity->resumed = 1;
+}
+
+static void android_activity_destroy_if_needed(AndroidActivity* activity) {
+    if (!activity || !activity->created) return;
+    android_activity_pause_if_needed(activity);
+    if (activity->on_destroy) activity->on_destroy(activity);
+    activity->created = 0;
+}
+
 void android_push_activity(AndroidActivityManager* mgr,
                             AndroidActivity* activity,
                             AndroidIntent* intent) {
@@ -227,8 +265,7 @@ void android_push_activity(AndroidActivityManager* mgr,
     /* Pause current */
     if (mgr->top >= 0) {
         AndroidActivity* current = mgr->stack[mgr->top];
-        if (current && current->on_pause)
-            current->on_pause(current);
+        android_activity_pause_if_needed(current);
     }
 
     /* Push new */
@@ -241,8 +278,7 @@ void android_push_activity(AndroidActivityManager* mgr,
             activity->on_create(activity, intent);
         activity->created = 1;
     }
-    if (activity->on_resume)
-        activity->on_resume(activity);
+    android_activity_resume_if_needed(activity);
 
     _swap_screen(mgr, activity->root);
 }
@@ -252,11 +288,7 @@ int android_pop_activity(AndroidActivityManager* mgr) {
 
     /* Pause + destroy current */
     AndroidActivity* current = mgr->stack[mgr->top];
-    if (current) {
-        if (current->on_pause)   current->on_pause(current);
-        if (current->on_destroy) current->on_destroy(current);
-        current->created = 0;
-    }
+    android_activity_destroy_if_needed(current);
     mgr->stack[mgr->top] = NULL;
     mgr->top--;
 
@@ -270,7 +302,7 @@ int android_pop_activity(AndroidActivityManager* mgr) {
     /* Resume previous */
     AndroidActivity* prev = mgr->stack[mgr->top];
     if (prev) {
-        if (prev->on_resume) prev->on_resume(prev);
+        android_activity_resume_if_needed(prev);
         _swap_screen(mgr, prev->root);
     }
     return 1;
@@ -281,6 +313,20 @@ AndroidActivity* android_current_activity(AndroidActivityManager* mgr) {
     return mgr->stack[mgr->top];
 }
 
+int android_activity_stack_depth(AndroidActivityManager* mgr) {
+    return mgr ? mgr->top + 1 : 0;
+}
+
+int android_can_pop_activity(AndroidActivityManager* mgr) {
+    return android_activity_stack_depth(mgr) > 1;
+}
+
+int android_handle_back(AndroidActivityManager* mgr) {
+    if (!android_can_pop_activity(mgr)) return 0;
+    android_pop_activity(mgr);
+    return 1;
+}
+
 void android_replace_activity(AndroidActivityManager* mgr,
                                AndroidActivity* activity,
                                AndroidIntent* intent) {
@@ -288,11 +334,7 @@ void android_replace_activity(AndroidActivityManager* mgr,
     /* Pop current without resuming previous, then push new */
     if (mgr->top >= 0) {
         AndroidActivity* current = mgr->stack[mgr->top];
-        if (current) {
-            if (current->on_pause)   current->on_pause(current);
-            if (current->on_destroy) current->on_destroy(current);
-            current->created = 0;
-        }
+        android_activity_destroy_if_needed(current);
         mgr->stack[mgr->top] = NULL;
         mgr->top--;
     }
@@ -612,14 +654,25 @@ void android_app_dispatch_event(AndroidApp* app, SGEvent* event) {
 void android_app_lifecycle(AndroidApp* app, AndroidLifecycleEvent event) {
     if (!app || !app->sg_app) return;
 
+    AndroidActivity* current = android_current_activity(app->nav);
+    if (app->lifecycle_state == (int)event + 1) return;
+    app->lifecycle_state = (int)event + 1;
+
     switch (event) {
         case ANDROID_LIFECYCLE_RESUME:
             app->sg_app->running = 1;
+            android_activity_resume_if_needed(current);
             break;
         case ANDROID_LIFECYCLE_PAUSE:
         case ANDROID_LIFECYCLE_STOP:
+            android_activity_pause_if_needed(current);
             break;
         case ANDROID_LIFECYCLE_DESTROY:
+            if (app->nav) {
+                for (int i = app->nav->top; i >= 0; --i) {
+                    android_activity_destroy_if_needed(app->nav->stack[i]);
+                }
+            }
             sg_app_quit(app->sg_app);
             break;
     }

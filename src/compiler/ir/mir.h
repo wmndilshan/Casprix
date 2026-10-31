@@ -578,6 +578,11 @@ MirValueId mir_build_not(MirBuilder* b, MirValueId operand);
 MirValueId mir_build_shl(MirBuilder* b, MirValueId lhs, MirValueId rhs);
 MirValueId mir_build_shr(MirBuilder* b, MirValueId lhs, MirValueId rhs);
 
+/* Logical */
+MirValueId mir_build_logic_and(MirBuilder* b, MirValueId lhs, MirValueId rhs);
+MirValueId mir_build_logic_or(MirBuilder* b, MirValueId lhs, MirValueId rhs);
+MirValueId mir_build_logic_not(MirBuilder* b, MirValueId operand);
+
 /* Memory */
 MirValueId mir_build_alloca(MirBuilder* b, MirType* type);
 MirValueId mir_build_load(MirBuilder* b, MirValueId ptr, MirType* type);

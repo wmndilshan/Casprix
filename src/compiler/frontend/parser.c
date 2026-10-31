@@ -286,7 +286,7 @@ static bool token_text_equals(Token* token, const char* text) {
 
 static bool is_constructor_name(const char* class_name, const char* method_name) {
     if (!class_name || !method_name) return false;
-    return strcmp(method_name, "new") == 0 || strcmp(method_name, class_name) == 0;
+    return strcmp(method_name, class_name) == 0;
 }
 
 static Expr** parse_call_arguments(Parser* parser, int* out_count, const char* closing_message) {
@@ -342,6 +342,20 @@ static void init_class_field_decl(FieldDecl* field, Token* name_token, DataType 
 
 // Forward declare parse_type_with_class for recursive use
 static DataType parse_type_with_class(Parser* parser, char** out_class_name);
+
+static DataType parse_result_success_type(Parser* parser) {
+    advance(parser); /* Result */
+    consume(parser, TOKEN_LESS, "Expected '<' after Result");
+    char* success_class = NULL;
+    DataType success = parse_type_with_class(parser, &success_class);
+    free(success_class);
+    consume(parser, TOKEN_COMMA, "Expected ',' between Result success and error types");
+    char* error_class = NULL;
+    (void)parse_type_with_class(parser, &error_class);
+    free(error_class);
+    consume_generic_close(parser, "Expected '>' after Result type arguments");
+    return success;
+}
 
 /* Set whenever the type just parsed was a `lambda(...) -> R` function type, so
  * the caller (parameter/variable-decl parsing) can retain the inner arity for
@@ -445,15 +459,21 @@ static DataType parse_type(Parser* parser) {
         }
     }
 
-    // Static array: [T; N]
+    // Static array: [T; N], or slice: [T]
     if (match(parser, TOKEN_LBRACKET)) {
         // Parse element type
         DataType elem = parse_type(parser);
         (void)elem;
-        consume(parser, TOKEN_SEMICOLON, "Expected ';' in static array type [T; N]");
+        if (match(parser, TOKEN_RBRACKET)) {
+            return TYPE_SLICE;
+        }
+        consume(parser, TOKEN_SEMICOLON, "Expected ';' or ']' in array type");
         // Parse size
         consume(parser, TOKEN_INTEGER, "Expected array size");
+        int static_size = (int)parser->previous.literal.int_value;
         consume(parser, TOKEN_RBRACKET, "Expected ']' after array type");
+        g_pending_fn_type_info = create_static_array_type(
+            create_type_info(elem), static_size);
         return TYPE_STATIC_ARRAY;
     }
 
@@ -461,6 +481,10 @@ static DataType parse_type(Parser* parser) {
     if (check(parser, TOKEN_IDENTIFIER)) {
         const char* name = parser->current.start;
         int len = parser->current.length;
+
+        if (token_text_equals(&parser->current, "Result")) {
+            return parse_result_success_type(parser);
+        }
 
         if (token_text_equals(&parser->current, "dyn")) {
             advance(parser);
@@ -600,13 +624,19 @@ static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
         }
     }
 
-    // Static array: [T; N]
+    // Static array: [T; N], or slice: [T]
     if (match(parser, TOKEN_LBRACKET)) {
         DataType elem = parse_type(parser);
         (void)elem;
-        consume(parser, TOKEN_SEMICOLON, "Expected ';' in static array type [T; N]");
+        if (match(parser, TOKEN_RBRACKET)) {
+            return TYPE_SLICE;
+        }
+        consume(parser, TOKEN_SEMICOLON, "Expected ';' or ']' in array type");
         consume(parser, TOKEN_INTEGER, "Expected array size");
+        int static_size = (int)parser->previous.literal.int_value;
         consume(parser, TOKEN_RBRACKET, "Expected ']' after array type");
+        g_pending_fn_type_info = create_static_array_type(
+            create_type_info(elem), static_size);
         return TYPE_STATIC_ARRAY;
     }
 
@@ -614,6 +644,10 @@ static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
     if (check(parser, TOKEN_IDENTIFIER)) {
         const char* name = parser->current.start;
         int len = parser->current.length;
+
+        if (token_text_equals(&parser->current, "Result")) {
+            return parse_result_success_type(parser);
+        }
 
         if (token_text_equals(&parser->current, "dyn")) {
             advance(parser);
@@ -707,6 +741,16 @@ static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
 
     error_at_current(parser, "Expected type name");
     return TYPE_ERROR;
+}
+
+static DataType parse_parameter_type(Parser* parser, char** out_class_name,
+                                     OwnershipMode* out_ownership) {
+    *out_ownership = OWNERSHIP_OWNED;
+    if (match(parser, TOKEN_BITAND)) {
+        *out_ownership = match(parser, TOKEN_MUT)
+            ? OWNERSHIP_BORROW_MUT : OWNERSHIP_BORROW;
+    }
+    return parse_type_with_class(parser, out_class_name);
 }
 
 static char* copy_identifier(Token* token) {
@@ -818,12 +862,12 @@ static Expr* lambda_expression(Parser* parser) {
 
             consume(parser, TOKEN_COLON, "Expected ':' after parameter name");
             char* param_class_name = NULL;
-            params[param_count].type = parse_type_with_class(parser, &param_class_name);
+            params[param_count].type = parse_parameter_type(
+                parser, &param_class_name, &params[param_count].ownership);
             params[param_count].class_name = param_class_name;
             /* Retain a `lambda(...) -> R` signature so calls through this
              * parameter can be arity-checked (see semantic.c). */
             params[param_count].type_info = take_pending_fn_type_info();
-            params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
         } while (match(parser, TOKEN_COMMA));
@@ -903,22 +947,39 @@ static Expr* lambda_expression(Parser* parser) {
 }
 
 // Expression parsing (precedence climbing)
+static bool token_ends_with(const Token* token, const char* suffix) {
+    int suffix_len = (int)strlen(suffix);
+    return token->length >= suffix_len &&
+           memcmp(token->start + token->length - suffix_len,
+                  suffix, (size_t)suffix_len) == 0;
+}
+
+static DataType integer_literal_type(const Token* token) {
+    if (token_ends_with(token, "i8")) return TYPE_I8;
+    if (token_ends_with(token, "i16")) return TYPE_I16;
+    if (token_ends_with(token, "i32")) return TYPE_I32;
+    if (token_ends_with(token, "i64")) return TYPE_I64;
+    if (token_ends_with(token, "i128")) return TYPE_I128;
+    if (token_ends_with(token, "u8")) return TYPE_U8;
+    if (token_ends_with(token, "u16")) return TYPE_U16;
+    if (token_ends_with(token, "u32")) return TYPE_U32;
+    if (token_ends_with(token, "u64")) return TYPE_U64;
+    if (token_ends_with(token, "u128")) return TYPE_U128;
+    return token->literal.int_value < INT32_MIN ||
+           token->literal.int_value > INT32_MAX ? TYPE_I64 : TYPE_INT;
+}
+
 static Expr* primary(Parser* parser) {
     if (match(parser, TOKEN_INTEGER)) {
         LiteralExpr lit;
-        if (parser->previous.literal.int_value < INT32_MIN ||
-            parser->previous.literal.int_value > INT32_MAX) {
-            lit.type = TYPE_I64;
-        } else {
-            lit.type = TYPE_INT;
-        }
+        lit.type = integer_literal_type(&parser->previous);
         lit.value.int_value = parser->previous.literal.int_value;
         return create_literal_expr(lit, parser->previous.line, parser->previous.column);
     }
     
     if (match(parser, TOKEN_FLOAT)) {
         LiteralExpr lit;
-        lit.type = TYPE_FLOAT;
+        lit.type = token_ends_with(&parser->previous, "f32") ? TYPE_F32 : TYPE_F64;
         lit.value.float_value = parser->previous.literal.float_value;
         return create_literal_expr(lit, parser->previous.line, parser->previous.column);
     }
@@ -1216,6 +1277,12 @@ static Expr* primary(Parser* parser) {
 }
 
 static Expr* unary(Parser* parser) {
+    if (match(parser, TOKEN_BITAND)) {
+        Token op = parser->previous;
+        match(parser, TOKEN_MUT);
+        Expr* operand = unary(parser);
+        return create_unary_expr(op.type, operand, op.line, op.column);
+    }
     if (match(parser, TOKEN_NOT) || match(parser, TOKEN_MINUS) ||
         match(parser, TOKEN_BITNOT)) {
         Token op = parser->previous;
@@ -1230,7 +1297,13 @@ static Expr* unary(Parser* parser) {
 static Expr* postfix(Parser* parser) {
     Expr* expr = primary(parser);
 
-    while (match(parser, TOKEN_DOT) || match(parser, TOKEN_LBRACKET) || match(parser, TOKEN_LPAREN)) {
+    while (match(parser, TOKEN_DOT) || match(parser, TOKEN_LBRACKET) ||
+           match(parser, TOKEN_LPAREN) || match(parser, TOKEN_QUESTION)) {
+        if (parser->previous.type == TOKEN_QUESTION) {
+            Token op = parser->previous;
+            expr = create_unary_expr(op.type, expr, op.line, op.column);
+            continue;
+        }
         if (parser->previous.type == TOKEN_LPAREN) {
             int line = parser->previous.line;
             int col = parser->previous.column;
@@ -1304,7 +1377,13 @@ static Expr* postfix(Parser* parser) {
 
 // Helper for postfix parsing when we already have the base expression
 static Expr* postfix_with_expr(Parser* parser, Expr* expr) {
-    while (match(parser, TOKEN_DOT) || match(parser, TOKEN_LBRACKET) || match(parser, TOKEN_LPAREN)) {
+    while (match(parser, TOKEN_DOT) || match(parser, TOKEN_LBRACKET) ||
+           match(parser, TOKEN_LPAREN) || match(parser, TOKEN_QUESTION)) {
+        if (parser->previous.type == TOKEN_QUESTION) {
+            Token op = parser->previous;
+            expr = create_unary_expr(op.type, expr, op.line, op.column);
+            continue;
+        }
         if (parser->previous.type == TOKEN_LPAREN) {
             int line = parser->previous.line;
             int col = parser->previous.column;
@@ -1510,7 +1589,13 @@ static Expr* logical_or(Parser* parser) {
 }
 
 static Expr* expression(Parser* parser) {
-    return logical_or(parser);
+    Expr* expr = logical_or(parser);
+    if (match(parser, TOKEN_RANGE) || match(parser, TOKEN_RANGE_INCLUSIVE)) {
+        Token op = parser->previous;
+        Expr* right = logical_or(parser);
+        expr = create_binary_expr(expr, op.type, right, op.line, op.column);
+    }
+    return expr;
 }
 
 // Statement parsing
@@ -1588,8 +1673,14 @@ static Stmt* if_statement(Parser* parser) {
         else_branch = if_statement(parser);
     }
     else if (match(parser, TOKEN_ELSE)) {
-        consume(parser, TOKEN_LBRACE, "Expected '{' after else");
-        else_branch = block_statement(parser);
+        /* Accept both the native `elif` spelling and the TypeScript,
+         * Swift, and Rust-style `else if` spelling. */
+        if (match(parser, TOKEN_IF)) {
+            else_branch = if_statement(parser);
+        } else {
+            consume(parser, TOKEN_LBRACE, "Expected '{' or 'if' after else");
+            else_branch = block_statement(parser);
+        }
     }
 
     return create_if_stmt(condition, then_branch, else_branch, line, col);
@@ -1736,14 +1827,20 @@ static Stmt* match_statement(Parser* parser) {
         memset(arm, 0, sizeof(MatchArm));
 
         // Wildcard: _ => body
-        if (match(parser, TOKEN_IDENTIFIER) &&
-            parser->previous.length == 1 && *parser->previous.start == '_') {
+        if (check(parser, TOKEN_IDENTIFIER) && parser->current.length == 1 &&
+            *parser->current.start == '_') {
+            advance(parser);
             arm->pattern = NULL;  // wildcard
         } else {
-            // Step back and parse as expression pattern
-            // (we consumed TOKEN_IDENTIFIER in the check above if it matched)
-            // Re-parse the pattern as a full expression:
+            if (check(parser, TOKEN_IDENTIFIER)) {
+                arm->variant_name = copy_identifier(&parser->current);
+            }
             arm->pattern = expression(parser);
+            if (arm->pattern && arm->pattern->type == EXPR_MEMBER_ACCESS &&
+                arm->pattern->as.member.member_name) {
+                free(arm->variant_name);
+                arm->variant_name = strdup(arm->pattern->as.member.member_name);
+            }
         }
 
         consume(parser, TOKEN_FAT_ARROW, "Expected '=>' after match pattern");
@@ -1916,6 +2013,7 @@ static Stmt* var_declaration(Parser* parser) {
     consume(parser, TOKEN_COLON, "Expected ':' after variable name");
     char* class_name = NULL;
     DataType type = parse_type_with_class(parser, &class_name);
+    TypeInfo* type_info = take_pending_fn_type_info();
 
     Expr* initializer = NULL;
     if (match(parser, TOKEN_ASSIGN)) {
@@ -1926,6 +2024,7 @@ static Stmt* var_declaration(Parser* parser) {
     match(parser, TOKEN_SEMICOLON);
     Stmt* stmt = create_declaration_stmt(name, type, initializer, name_token.line, name_token.column);
     stmt->as.declaration.class_name = class_name;  // Set class name if applicable
+    stmt->as.declaration.type_info = type_info;
     return stmt;
 }
 
@@ -1962,12 +2061,12 @@ static Stmt* function_declaration(Parser* parser) {
 
             consume(parser, TOKEN_COLON, "Expected ':' after parameter name");
             char* param_class_name = NULL;
-            params[param_count].type = parse_type_with_class(parser, &param_class_name);
+            params[param_count].type = parse_parameter_type(
+                parser, &param_class_name, &params[param_count].ownership);
             params[param_count].class_name = param_class_name;
             /* Retain a `lambda(...) -> R` signature so calls through this
              * parameter can be arity-checked (see semantic.c). */
             params[param_count].type_info = take_pending_fn_type_info();
-            params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
         } while (match(parser, TOKEN_COMMA));
@@ -1981,15 +2080,29 @@ static Stmt* function_declaration(Parser* parser) {
     if (match(parser, TOKEN_ARROW)) {
         char* return_class_name = NULL;
         return_type = parse_type_with_class(parser, &return_class_name);
-        free(return_class_name);
         /* Retain a `-> lambda(...) -> R` signature for arity checking of calls
          * made on this function's result. */
         return_type_info = take_pending_fn_type_info();
+        if (return_class_name) {
+            if (!return_type_info) return_type_info = create_type_info(return_type);
+            return_type_info->type_name = return_class_name;
+        }
     }
 
     Stmt* body;
     if (match(parser, TOKEN_LBRACE)) {
         body = block_statement(parser);
+    } else if (match(parser, TOKEN_FAT_ARROW)) {
+        /* Expression-bodied function:
+         *     func add(a: int, b: int) -> int => a + b;
+         * Desugar it immediately to the same one-return block used by the
+         * normal semantic analysis and lowering paths. */
+        Expr* result = expression(parser);
+        Stmt* ret = create_return_stmt(result, line, col);
+        Stmt** statements = ALLOCATE(Stmt*, 1);
+        statements[0] = ret;
+        body = create_block_stmt(statements, 1, line, col);
+        match(parser, TOKEN_SEMICOLON);
     } else {
         body = implicit_block_statement(parser, line, col);
     }
@@ -2140,16 +2253,19 @@ static Stmt* class_declaration(Parser* parser) {
             advance(parser);
 
             // Method declaration
-            // Allow TOKEN_IDENTIFIER or TOKEN_NEW for method names. TOKEN_PRINT
-            // and TOKEN_UNION_KW are also accepted contextually: `print` is a
+            // TOKEN_PRINT and TOKEN_UNION_KW are accepted contextually: `print` is a
             // statement keyword and `union` is a top-level declaration keyword,
             // but both are unambiguous as a method name here (a class body after
             // `func` expects a name), and postfix member-access parsing already
             // treats `.print()` / `.union()` as ordinary calls.
-            if (!match(parser, TOKEN_IDENTIFIER) &&
-                !match(parser, TOKEN_NEW) &&
-                !match(parser, TOKEN_PRINT) &&
-                !match(parser, TOKEN_UNION_KW)) {
+            bool rejected_legacy_constructor = false;
+            if (match(parser, TOKEN_NEW)) {
+                error_at(parser, &parser->previous,
+                    "Constructor declarations must use the class name; 'new' is only for allocation expressions");
+                rejected_legacy_constructor = true;
+            } else if (!match(parser, TOKEN_IDENTIFIER) &&
+                       !match(parser, TOKEN_PRINT) &&
+                       !match(parser, TOKEN_UNION_KW)) {
                 error_at_current(parser, "Expected method name");
                 continue;
             }
@@ -2161,14 +2277,11 @@ static Stmt* class_declaration(Parser* parser) {
 
             Token method_name_token = parser->previous;
 
-            // For TOKEN_NEW, we need to manually create the name "new"
-            if (method_name_token.type == TOKEN_NEW) {
-                methods[method_count].name = strdup("new");
-            } else {
-                // copy_identifier lifts the lexeme text verbatim, so contextual
-                // keywords (print, union) yield their own spelling as the name.
-                methods[method_count].name = copy_identifier(&method_name_token);
-            }
+            // Keep parsing after the targeted legacy-syntax diagnostic so one
+            // bad constructor does not cascade into unrelated parse errors.
+            methods[method_count].name = rejected_legacy_constructor
+                ? strdup(class_name)
+                : copy_identifier(&method_name_token);
 
             methods[method_count].is_constructor =
                 is_constructor_name(class_name, methods[method_count].name);
@@ -2192,10 +2305,10 @@ static Stmt* class_declaration(Parser* parser) {
 
                     consume(parser, TOKEN_COLON, "Expected ':' after parameter name");
                     char* param_class_name = NULL;
-                    params[param_count].type = parse_type_with_class(parser, &param_class_name);
+                    params[param_count].type = parse_parameter_type(
+                        parser, &param_class_name, &params[param_count].ownership);
                     params[param_count].class_name = param_class_name;
                     params[param_count].type_info = take_pending_fn_type_info();
-                    params[param_count].ownership = OWNERSHIP_OWNED;
 
                     param_count++;
                 } while (match(parser, TOKEN_COMMA));
@@ -2204,10 +2317,11 @@ static Stmt* class_declaration(Parser* parser) {
             consume(parser, TOKEN_RPAREN, "Expected ')' after parameters");
 
             methods[method_count].return_type = TYPE_VOID;
+            methods[method_count].return_class_name = NULL;
             if (match(parser, TOKEN_ARROW)) {
                 char* method_return_class = NULL;
                 methods[method_count].return_type = parse_type_with_class(parser, &method_return_class);
-                free(method_return_class);
+                methods[method_count].return_class_name = method_return_class;
             }
             methods[method_count].parameters = params;
             methods[method_count].param_count = param_count;
@@ -2383,9 +2497,18 @@ static Stmt* include_statement(Parser* parser) {
         *dot = '\0';
     }
 
+    // Imports may optionally bind the module to a local alias:
+    //     import "math/linear" as ml;
+    // Includes retain their legacy path-only syntax.
+    char* alias = NULL;
+    if (is_import && match(parser, TOKEN_AS)) {
+        consume(parser, TOKEN_IDENTIFIER, "Expected alias name after 'as'");
+        alias = copy_identifier(&parser->previous);
+    }
+
     // Semicolons are optional
     match(parser, TOKEN_SEMICOLON);
-    return create_include_stmt(module_name, is_import, line, col);
+    return create_include_stmt(module_name, alias, is_import, line, col);
 }
 
 // Forward declarations for struct/enum/union parsing
@@ -2628,12 +2751,12 @@ static Stmt* extern_declaration(Parser* parser) {
 
             consume(parser, TOKEN_COLON, "Expected ':' after parameter name");
             char* param_class_name = NULL;
-            params[param_count].type = parse_type_with_class(parser, &param_class_name);
+            params[param_count].type = parse_parameter_type(
+                parser, &param_class_name, &params[param_count].ownership);
             params[param_count].class_name = param_class_name;
             /* Retain a `lambda(...) -> R` signature so calls through this
              * parameter can be arity-checked (see semantic.c). */
             params[param_count].type_info = take_pending_fn_type_info();
-            params[param_count].ownership = OWNERSHIP_OWNED;
 
             param_count++;
         } while (match(parser, TOKEN_COMMA));
@@ -2699,7 +2822,9 @@ static Stmt* trait_statement(Parser* parser) {
                 params[pcnt].type_info = NULL;
                 params[pcnt].ownership = OWNERSHIP_OWNED;
                 if (match(parser, TOKEN_COLON)) {
-                    params[pcnt].type = parse_type(parser);
+                    params[pcnt].type = parse_parameter_type(
+                        parser, &params[pcnt].class_name,
+                        &params[pcnt].ownership);
                     params[pcnt].type_info = take_pending_fn_type_info();
                 }
                 pcnt++;
@@ -2928,10 +3053,12 @@ static Stmt* const_declaration(Parser* parser) {
 
     DataType type = TYPE_ERROR;
     char* class_name = NULL;
+    TypeInfo* type_info = NULL;
 
     if (match(parser, TOKEN_COLON)) {
         // Explicit type: const NAME: Type = value
         type = parse_type_with_class(parser, &class_name);
+        type_info = take_pending_fn_type_info();
     }
 
     // const declarations MUST have an initializer
@@ -2943,6 +3070,7 @@ static Stmt* const_declaration(Parser* parser) {
     Stmt* stmt = create_declaration_stmt(name, type, initializer, line, col);
     stmt->type = STMT_CONST_DECL;
     stmt->as.declaration.class_name = class_name;
+    stmt->as.declaration.type_info = type_info;
     stmt->as.declaration.is_const = true;
     stmt->as.declaration.is_mutable = false;
     return stmt;
@@ -3019,10 +3147,12 @@ static Stmt* let_declaration(Parser* parser) {
 
     DataType type = TYPE_ERROR;
     char* class_name = NULL;
+    TypeInfo* type_info = NULL;
 
     if (match(parser, TOKEN_COLON)) {
         // Explicit type: let name: type = value
         type = parse_type_with_class(parser, &class_name);
+        type_info = take_pending_fn_type_info();
     }
 
     Expr* initializer = NULL;
@@ -3036,6 +3166,7 @@ static Stmt* let_declaration(Parser* parser) {
 
     Stmt* stmt = create_declaration_stmt(name, type, initializer, line, col);
     stmt->as.declaration.class_name = class_name;
+    stmt->as.declaration.type_info = type_info;
     stmt->as.declaration.is_mutable = false;
     return stmt;
 }
@@ -3051,9 +3182,11 @@ static Stmt* mut_declaration(Parser* parser) {
         char* class_name = NULL;
         Expr* initializer = NULL;
         DataType type;
+        TypeInfo* type_info = NULL;
 
         consume(parser, TOKEN_COLON, "Expected ':' after mutable variable name");
         type = parse_type_with_class(parser, &class_name);
+        type_info = take_pending_fn_type_info();
 
         if (match(parser, TOKEN_ASSIGN)) {
             initializer = expression(parser);
@@ -3064,6 +3197,7 @@ static Stmt* mut_declaration(Parser* parser) {
         {
             Stmt* stmt = create_declaration_stmt(name, type, initializer, line, col);
             stmt->as.declaration.class_name = class_name;
+            stmt->as.declaration.type_info = type_info;
             stmt->as.declaration.is_mutable = true;
             return stmt;
         }

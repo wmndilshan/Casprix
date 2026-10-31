@@ -1,0 +1,16 @@
+// Isolate trait implementation lowering from borrow annotations.
+struct Point { x: int }
+
+trait Printable {
+    func to_string(self: Point) -> string;
+}
+
+impl Printable for Point {
+    func to_string(self: Point) -> string {
+        return "Point";
+    }
+}
+
+func main() -> int {
+    return 0;
+}

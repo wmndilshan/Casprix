@@ -18,6 +18,8 @@
 #include "include/gpu/GrBackendSurface.h"
 #include "include/gpu/GrDirectContext.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "include/gpu/ganesh/gl/GrGLBackendSurface.h"
+#include "include/gpu/ganesh/gl/GrGLDirectContext.h"
 #include "include/gpu/gl/GrGLAssembleInterface.h"
 #include "include/gpu/gl/GrGLInterface.h"
 
@@ -55,7 +57,8 @@ static sk_sp<SkSurface> make_surface(GrDirectContext* ctx, int w, int h) {
     fb_info.fFBOID = static_cast<GrGLuint>(framebuffer);
     fb_info.fFormat = GL_RGBA8;
 
-    GrBackendRenderTarget backend_rt(w, h, 0, stencil_bits, fb_info);
+    GrBackendRenderTarget backend_rt = GrBackendRenderTargets::MakeGL(
+        w, h, 0, stencil_bits, fb_info);
     return SkSurfaces::WrapBackendRenderTarget(
         ctx,
         backend_rt,
@@ -78,7 +81,7 @@ AndroidRenderer* android_renderer_create(AndroidEGL* egl) {
         return nullptr;
     }
 
-    r->gr_context = GrDirectContext::MakeGL(gl_iface);
+    r->gr_context = GrDirectContexts::MakeGL(gl_iface);
     if (!r->gr_context) {
         LOGE("GrDirectContexts::MakeGL failed");
         delete r;
@@ -116,7 +119,7 @@ void* android_renderer_begin_frame(AndroidRenderer* r) {
 
 void android_renderer_end_frame(AndroidRenderer* r) {
     if (!r || !r->surface || !r->gr_context) return;
-    r->gr_context->flushAndSubmit(r->surface, false);
+    r->gr_context->flushAndSubmit(r->surface.get(), GrSyncCpu::kNo);
     android_egl_swap_buffers(r->egl);
 }
 

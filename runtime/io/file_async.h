@@ -1,5 +1,5 @@
 /**
- * Casperix Runtime - Async File I/O
+ * Casprix Runtime - Async File I/O
  * Non-blocking file operations using event loop
  */
 

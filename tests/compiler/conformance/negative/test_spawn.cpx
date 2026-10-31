@@ -1,0 +1,7 @@
+// Expected diagnostic: spawn is reserved but not implemented.
+func worker() -> int { return 0; }
+
+func main() -> int {
+    spawn worker();
+    return 0;
+}

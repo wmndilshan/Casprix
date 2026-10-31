@@ -193,6 +193,33 @@ static int is_bin_digit(char c) {
     return c == '0' || c == '1';
 }
 
+static bool is_identifier_continue(char c) {
+    return (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z') || c == '_' || is_digit(c);
+}
+
+/* Consume a width suffix only when it forms the complete tail of the token.
+ * Keeping the suffix in the token lexeme lets the parser select the precise
+ * DataType without multiplying the lexer token kinds. */
+static void numeric_suffix(Lexer* lexer, bool is_float) {
+    static const char* float_suffixes[] = { "f32", "f64" };
+    static const char* int_suffixes[] = {
+        "i128", "u128", "i64", "u64", "i32", "u32",
+        "i16", "u16", "i8", "u8"
+    };
+    const char** suffixes = is_float ? float_suffixes : int_suffixes;
+    int count = is_float ? 2 : 10;
+
+    for (int i = 0; i < count; i++) {
+        size_t len = strlen(suffixes[i]);
+        if (strncmp(lexer->current, suffixes[i], len) == 0 &&
+            !is_identifier_continue(lexer->current[len])) {
+            for (size_t j = 0; j < len; j++) advance(lexer);
+            return;
+        }
+    }
+}
+
 static Token number(Lexer* lexer) {
     // Check for hex literal: 0x... or 0X...
     // At this point, the first digit has already been consumed by advance() in scan_token
@@ -203,6 +230,8 @@ static Token number(Lexer* lexer) {
         while (is_hex_digit(peek(lexer))) {
             advance(lexer);
         }
+
+        numeric_suffix(lexer, false);
 
         Token token = make_token(lexer, TOKEN_INTEGER);
         char* str = ALLOCATE(char, token.length + 1);
@@ -221,6 +250,8 @@ static Token number(Lexer* lexer) {
         while (is_bin_digit(peek(lexer))) {
             advance(lexer);
         }
+
+        numeric_suffix(lexer, false);
 
         Token token = make_token(lexer, TOKEN_INTEGER);
         char* str = ALLOCATE(char, token.length + 1);
@@ -243,6 +274,7 @@ static Token number(Lexer* lexer) {
             advance(lexer);
         }
 
+        numeric_suffix(lexer, true);
         Token token = make_token(lexer, TOKEN_FLOAT);
 
         // Parse float value
@@ -254,6 +286,7 @@ static Token number(Lexer* lexer) {
 
         return token;
     } else {
+        numeric_suffix(lexer, false);
         Token token = make_token(lexer, TOKEN_INTEGER);
 
         // Parse integer value
@@ -292,6 +325,7 @@ static CpxTokenType identifier_type(Lexer* lexer) {
     switch (start[0]) {
         case 'a':
             if (length == 8) return check_keyword(start, length, "abstract", TOKEN_ABSTRACT);
+            if (length == 2) return check_keyword(start, length, "as", TOKEN_AS);
             if (length == 5) {
                 if (memcmp(start, "array", 5) == 0) return TOKEN_ARRAY_TYPE;
                 if (memcmp(start, "async", 5) == 0) return TOKEN_ASYNC;
@@ -489,6 +523,10 @@ Token scan_token(Lexer* lexer) {
             }
         case ',': return make_token(lexer, TOKEN_COMMA);
         case '.':
+            if (match(lexer, '.')) {
+                return make_token(lexer,
+                    match(lexer, '=') ? TOKEN_RANGE_INCLUSIVE : TOKEN_RANGE);
+            }
             // Only a dot if not followed by a digit (avoid confusion with floats)
             if (!is_digit(peek(lexer))) {
                 return make_token(lexer, TOKEN_DOT);

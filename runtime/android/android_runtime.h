@@ -2,7 +2,7 @@
  * Android Runtime — Activity, Navigation, ViewModel, Intent
  *
  * Provides Android-like application architecture concepts on top of the
- * existing Casperix/Skia scene graph. Works on both:
+ * existing Casprix/Skia scene graph. Works on both:
  *   - Desktop (Windows) via the existing SGApp/SkiaWindow stack
  *   - Android (ARM64) via the NDK ANativeActivity backend
  *
@@ -95,6 +95,7 @@ struct AndroidActivity {
 
     void* user_data;                        /* Arbitrary user pointer */
     int   created;                          /* 1 after on_create fired */
+    int   resumed;                          /* 1 while this screen is active */
 };
 
 AndroidActivity* android_activity_create(const char* name);
@@ -111,7 +112,7 @@ const char*      android_activity_get_name(AndroidActivity* activity);
 typedef struct {
     AndroidActivity* stack[ANDROID_MAX_ACTIVITIES];
     int              top;            /* Index of current top screen (-1 = empty) */
-    SGApp*           app;            /* The underlying Casperix app */
+    SGApp*           app;            /* The underlying Casprix app */
     SGNode*          container;      /* Root node — replaced on each push/pop */
 } AndroidActivityManager;
 
@@ -132,6 +133,9 @@ int  android_pop_activity(AndroidActivityManager* mgr);
 
 /* Get the current top activity */
 AndroidActivity* android_current_activity(AndroidActivityManager* mgr);
+int              android_activity_stack_depth(AndroidActivityManager* mgr);
+int              android_can_pop_activity(AndroidActivityManager* mgr);
+int              android_handle_back(AndroidActivityManager* mgr);
 
 /* Replace current activity without touching history (like startActivity with FLAG_CLEAR_TOP) */
 void android_replace_activity(AndroidActivityManager* mgr,
@@ -152,6 +156,7 @@ typedef struct {
     int                     safe_inset_bottom;
     int                     safe_inset_left;
     int                     native_mode;     /* 1 when driven by ANativeActivity */
+    int                     lifecycle_state; /* Last AndroidLifecycleEvent + 1 */
     void*                   native_assets;   /* AAssetManager* on Android */
     void*                   native_renderer; /* AndroidRenderer* on Android */
 } AndroidApp;

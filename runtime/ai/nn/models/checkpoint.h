@@ -7,7 +7,7 @@
 #ifndef NN_CHECKPOINT_H
 #define NN_CHECKPOINT_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -22,7 +22,7 @@ extern "C" {
  * @param metadata Optional metadata string
  * @return true on success
  */
-bool checkpoint_save(const char* filepath, Tensor** params, int num_params,
+bool nn_checkpoint_save(const char* filepath, Tensor** params, int num_params,
                     const char* metadata);
 
 /**
@@ -32,7 +32,7 @@ bool checkpoint_save(const char* filepath, Tensor** params, int num_params,
  * @param num_params Number of parameters
  * @return true on success
  */
-bool checkpoint_load(const char* filepath, Tensor** params, int num_params);
+bool nn_checkpoint_load(const char* filepath, Tensor** params, int num_params);
 
 /**
  * Get metadata from checkpoint
@@ -40,7 +40,7 @@ bool checkpoint_load(const char* filepath, Tensor** params, int num_params);
  * @param metadata_out Output buffer for metadata (caller must free)
  * @return true on success
  */
-bool checkpoint_get_metadata(const char* filepath, char** metadata_out);
+bool nn_checkpoint_get_metadata(const char* filepath, char** metadata_out);
 
 #ifdef __cplusplus
 }

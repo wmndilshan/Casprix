@@ -1,0 +1,9 @@
+// Conformance probe: Result return type and try propagation.
+func parse_value() -> Result<int, Error> {
+    return 1;
+}
+
+func main() -> int {
+    let value = parse_value()?;
+    return 0;
+}

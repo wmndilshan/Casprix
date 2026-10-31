@@ -3,7 +3,7 @@
  */
 
 #include "sequential.h"
-#include "../activations/activations.h"
+#include "../../ops/activations.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

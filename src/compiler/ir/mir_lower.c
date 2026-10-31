@@ -419,7 +419,11 @@ static MirValueId lower_binary(MirLowerCtx* ctx, Expr* expr) {
     MirValueId lhs = lower_expr(ctx, bin->left);
     MirValueId rhs = lower_expr(ctx, bin->right);
 
-    bool is_float = (bin->left->data_type == TYPE_F32 || bin->left->data_type == TYPE_F64);
+    MirType* lhs_type = mir_function_value_type(ctx->builder.func, lhs);
+    MirType* rhs_type = mir_function_value_type(ctx->builder.func, rhs);
+    bool is_float = mir_type_is_float(lhs_type) || mir_type_is_float(rhs_type) ||
+                    bin->left->data_type == TYPE_F32 || bin->left->data_type == TYPE_F64 ||
+                    bin->right->data_type == TYPE_F32 || bin->right->data_type == TYPE_F64;
 
     switch (bin->operator) {
         case TOKEN_PLUS:  return is_float ? mir_build_fadd(&ctx->builder, lhs, rhs)
@@ -442,6 +446,8 @@ static MirValueId lower_binary(MirLowerCtx* ctx, Expr* expr) {
         case TOKEN_BITAND:    return mir_build_and(&ctx->builder, lhs, rhs);
         case TOKEN_PIPE:      return mir_build_or(&ctx->builder, lhs, rhs);
         case TOKEN_BITXOR:    return mir_build_xor(&ctx->builder, lhs, rhs);
+        case TOKEN_AND:       return mir_build_logic_and(&ctx->builder, lhs, rhs);
+        case TOKEN_OR:        return mir_build_logic_or(&ctx->builder, lhs, rhs);
 
         default:
             return mir_build_add(&ctx->builder, lhs, rhs); /* fallback */
@@ -460,7 +466,7 @@ static MirValueId lower_unary(MirLowerCtx* ctx, Expr* expr) {
                             : mir_build_neg(&ctx->builder, operand);
         }
         case TOKEN_NOT:
-            return mir_build_not(&ctx->builder, operand);
+            return mir_build_logic_not(&ctx->builder, operand);
         case TOKEN_BITAND:
             return mir_build_borrow(&ctx->builder, operand);
         default:
@@ -715,7 +721,8 @@ static MirValueId lower_member_access(MirLowerCtx* ctx, Expr* expr) {
 
         /* Generate a mangled name: ClassName_methodName */
         char mangled[256];
-        const char* class_name = ma->object->class_name ? ma->object->class_name : "Object";
+        const char* resolved_class = lower_object_class_name(ma->object);
+        const char* class_name = resolved_class ? resolved_class : "Object";
         snprintf(mangled, sizeof(mangled), "%s_%s", class_name, ma->member_name);
 
         MirType* ret_type = lower_type(ctx, expr->data_type);
@@ -731,10 +738,43 @@ static MirValueId lower_member_access(MirLowerCtx* ctx, Expr* expr) {
 static MirValueId lower_index(MirLowerCtx* ctx, Expr* expr) {
     IndexExpr* idx = &expr->as.index;
     MirValueId base = lower_expr(ctx, idx->array);
+    MirType* int_type = mir_type_i64(ctx->module);
+    if (idx->index && idx->index->type == EXPR_BINARY &&
+        (idx->index->as.binary.operator == TOKEN_RANGE ||
+         idx->index->as.binary.operator == TOKEN_RANGE_INCLUSIVE)) {
+        /* MIR represents slices as a pointer to their first element. The
+         * source array owns the backing storage for the expression lifetime. */
+        MirValueId start = lower_expr(ctx, idx->index->as.binary.left);
+        MirValueId one = mir_build_const_int(&ctx->builder, 1, int_type);
+        start = mir_build_add(&ctx->builder, start, one);
+        return mir_build_get_elem_ptr(&ctx->builder, base, start);
+    }
     MirValueId index = lower_expr(ctx, idx->index);
+    if (idx->array->data_type != TYPE_SLICE) {
+        MirValueId one = mir_build_const_int(&ctx->builder, 1, int_type);
+        index = mir_build_add(&ctx->builder, index, one);
+    }
     MirValueId elem_ptr = mir_build_get_elem_ptr(&ctx->builder, base, index);
     MirType* elem_type = lower_type(ctx, expr->data_type);
     return mir_build_load(&ctx->builder, elem_ptr, elem_type);
+}
+
+static MirValueId lower_array_literal(MirLowerCtx* ctx, Expr* expr) {
+    ArrayLiteralExpr* array = &expr->as.array_literal;
+    int bytes = (array->element_count + 1) * 8;
+    MirValueId storage = mir_build_obj_alloc(&ctx->builder, "__array", bytes);
+    MirType* int_type = mir_type_i64(ctx->module);
+    MirValueId zero = mir_build_const_int(&ctx->builder, 0, int_type);
+    MirValueId length_ptr = mir_build_get_elem_ptr(&ctx->builder, storage, zero);
+    MirValueId length = mir_build_const_int(&ctx->builder,
+                                             array->element_count, int_type);
+    mir_build_store(&ctx->builder, length_ptr, length);
+    for (int i = 0; i < array->element_count; i++) {
+        MirValueId index = mir_build_const_int(&ctx->builder, i + 1, int_type);
+        MirValueId ptr = mir_build_get_elem_ptr(&ctx->builder, storage, index);
+        mir_build_store(&ctx->builder, ptr, lower_expr(ctx, array->elements[i]));
+    }
+    return storage;
 }
 
 static const char* find_constructor_method_name(MirLowerCtx* ctx, const char* class_name) {
@@ -759,6 +799,19 @@ static const char* find_constructor_method_name(MirLowerCtx* ctx, const char* cl
     }
 
     return NULL;
+}
+
+static int constructor_count(MirLowerCtx* ctx, const char* class_name) {
+    ClassSymbol* class_sym;
+    int count = 0;
+
+    if (!ctx || !ctx->symtable || !class_name) return 0;
+    class_sym = lookup_class(ctx->symtable, class_name);
+    if (!class_sym) return 0;
+    for (int i = 0; i < class_sym->method_count; i++) {
+        if (class_sym->methods[i].is_constructor) count++;
+    }
+    return count;
 }
 
 static MirValueId lower_new(MirLowerCtx* ctx, Expr* expr) {
@@ -788,7 +841,13 @@ static MirValueId lower_new(MirLowerCtx* ctx, Expr* expr) {
             args[i + 1] = lower_expr(ctx, ne->arguments[i]);
         }
         char ctor_name[256];
-        snprintf(ctor_name, sizeof(ctor_name), "%s_%s", ne->class_name, ctor_method_name);
+        if (constructor_count(ctx, ne->class_name) > 1) {
+            int ctor_index = ne->ctor_index >= 0 ? ne->ctor_index : 0;
+            snprintf(ctor_name, sizeof(ctor_name), "%s_%s__ctor%d",
+                     ne->class_name, ctor_method_name, ctor_index);
+        } else {
+            snprintf(ctor_name, sizeof(ctor_name), "%s_%s", ne->class_name, ctor_method_name);
+        }
         mir_build_call(&ctx->builder, ctor_name, args, ne->arg_count + 1,
                        mir_type_void(ctx->module));
     }
@@ -913,6 +972,7 @@ static MirValueId lower_expr(MirLowerCtx* ctx, Expr* expr) {
         case EXPR_INDEX:         return lower_index(ctx, expr);
         case EXPR_NEW:           return lower_new(ctx, expr);
         case EXPR_LAMBDA:        return lower_lambda(ctx, expr);
+        case EXPR_ARRAY_LITERAL: return lower_array_literal(ctx, expr);
         case EXPR_THIS: {
             MirType* this_type = NULL;
             MirValueId this_alloca = var_map_get(ctx, "this", &this_type);
@@ -1020,6 +1080,11 @@ static void lower_assignment(MirLowerCtx* ctx, Stmt* stmt) {
         /* Array element assignment: arr[i] = value */
         MirValueId base = lower_expr(ctx, assign->target->as.index.array);
         MirValueId idx = lower_expr(ctx, assign->target->as.index.index);
+        if (assign->target->as.index.array->data_type != TYPE_SLICE) {
+            MirValueId one = mir_build_const_int(&ctx->builder, 1,
+                                                 mir_type_i64(ctx->module));
+            idx = mir_build_add(&ctx->builder, idx, one);
+        }
         MirValueId elem_ptr = mir_build_get_elem_ptr(&ctx->builder, base, idx);
         MirValueId value = lower_expr(ctx, assign->value);
         mir_build_store(&ctx->builder, elem_ptr, value);
@@ -1142,6 +1207,103 @@ static void lower_for(MirLowerCtx* ctx, Stmt* stmt) {
     mir_builder_set_block(&ctx->builder, exit_bb);
 }
 
+static void lower_for_in(MirLowerCtx* ctx, Stmt* stmt) {
+    ForInStmt* f = &stmt->as.for_in_stmt;
+    if (!f->iterable) return;
+
+    bool is_range = f->iterable->type == EXPR_BINARY &&
+        (f->iterable->as.binary.operator == TOKEN_RANGE ||
+         f->iterable->as.binary.operator == TOKEN_RANGE_INCLUSIVE);
+
+    if (!is_range) {
+        MirType* int_type = mir_type_i64(ctx->module);
+        MirValueId array = lower_expr(ctx, f->iterable);
+        MirValueId zero = mir_build_const_int(&ctx->builder, 0, int_type);
+        MirValueId one = mir_build_const_int(&ctx->builder, 1, int_type);
+        MirValueId length_ptr = mir_build_get_elem_ptr(&ctx->builder, array, zero);
+        MirValueId length = mir_build_load(&ctx->builder, length_ptr, int_type);
+        MirValueId idx_ptr = mir_build_alloca(&ctx->builder, int_type);
+        MirValueId var_ptr = mir_build_alloca(&ctx->builder, int_type);
+        mir_build_store(&ctx->builder, idx_ptr, zero);
+        var_map_set(ctx, f->var_name, var_ptr, int_type);
+
+        MirBlock* cond_bb = mir_function_add_block(ctx->builder.func, "foreach.cond");
+        MirBlock* body_bb = mir_function_add_block(ctx->builder.func, "foreach.body");
+        MirBlock* incr_bb = mir_function_add_block(ctx->builder.func, "foreach.incr");
+        MirBlock* exit_bb = mir_function_add_block(ctx->builder.func, "foreach.exit");
+        ctx->loop_stack[ctx->loop_depth].break_bb = exit_bb;
+        ctx->loop_stack[ctx->loop_depth].continue_bb = incr_bb;
+        ctx->loop_depth++;
+        mir_build_br(&ctx->builder, cond_bb);
+
+        mir_builder_set_block(&ctx->builder, cond_bb);
+        MirValueId idx = mir_build_load(&ctx->builder, idx_ptr, int_type);
+        mir_build_condbr(&ctx->builder,
+                         mir_build_cmp_lt(&ctx->builder, idx, length),
+                         body_bb, exit_bb);
+
+        mir_builder_set_block(&ctx->builder, body_bb);
+        MirValueId data_idx = mir_build_add(&ctx->builder, idx, one);
+        MirValueId elem_ptr = mir_build_get_elem_ptr(&ctx->builder, array, data_idx);
+        mir_build_store(&ctx->builder, var_ptr,
+                        mir_build_load(&ctx->builder, elem_ptr, int_type));
+        lower_stmt(ctx, f->body);
+        if (!mir_block_is_terminated(ctx->builder.current_block))
+            mir_build_br(&ctx->builder, incr_bb);
+
+        mir_builder_set_block(&ctx->builder, incr_bb);
+        idx = mir_build_load(&ctx->builder, idx_ptr, int_type);
+        mir_build_store(&ctx->builder, idx_ptr,
+                        mir_build_add(&ctx->builder, idx, one));
+        mir_build_br(&ctx->builder, cond_bb);
+
+        ctx->loop_depth--;
+        mir_builder_set_block(&ctx->builder, exit_bb);
+        return;
+    }
+
+    BinaryExpr* range = &f->iterable->as.binary;
+    MirType* int_type = mir_type_i64(ctx->module);
+    MirValueId var_ptr = mir_build_alloca(&ctx->builder, int_type);
+    MirValueId end_ptr = mir_build_alloca(&ctx->builder, int_type);
+    var_map_set(ctx, f->var_name, var_ptr, int_type);
+    mir_build_store(&ctx->builder, var_ptr, lower_expr(ctx, range->left));
+    mir_build_store(&ctx->builder, end_ptr, lower_expr(ctx, range->right));
+
+    MirBlock* cond_bb = mir_function_add_block(ctx->builder.func, "range.cond");
+    MirBlock* body_bb = mir_function_add_block(ctx->builder.func, "range.body");
+    MirBlock* incr_bb = mir_function_add_block(ctx->builder.func, "range.incr");
+    MirBlock* exit_bb = mir_function_add_block(ctx->builder.func, "range.exit");
+
+    ctx->loop_stack[ctx->loop_depth].break_bb = exit_bb;
+    ctx->loop_stack[ctx->loop_depth].continue_bb = incr_bb;
+    ctx->loop_depth++;
+    mir_build_br(&ctx->builder, cond_bb);
+
+    mir_builder_set_block(&ctx->builder, cond_bb);
+    MirValueId current = mir_build_load(&ctx->builder, var_ptr, int_type);
+    MirValueId end = mir_build_load(&ctx->builder, end_ptr, int_type);
+    MirValueId cond = range->operator == TOKEN_RANGE_INCLUSIVE
+        ? mir_build_cmp_le(&ctx->builder, current, end)
+        : mir_build_cmp_lt(&ctx->builder, current, end);
+    mir_build_condbr(&ctx->builder, cond, body_bb, exit_bb);
+
+    mir_builder_set_block(&ctx->builder, body_bb);
+    lower_stmt(ctx, f->body);
+    if (!mir_block_is_terminated(ctx->builder.current_block))
+        mir_build_br(&ctx->builder, incr_bb);
+
+    mir_builder_set_block(&ctx->builder, incr_bb);
+    current = mir_build_load(&ctx->builder, var_ptr, int_type);
+    MirValueId one = mir_build_const_int(&ctx->builder, 1, int_type);
+    mir_build_store(&ctx->builder, var_ptr,
+                    mir_build_add(&ctx->builder, current, one));
+    mir_build_br(&ctx->builder, cond_bb);
+
+    ctx->loop_depth--;
+    mir_builder_set_block(&ctx->builder, exit_bb);
+}
+
 static void lower_match(MirLowerCtx* ctx, Stmt* stmt) {
     MatchStmt* m = &stmt->as.match_stmt;
     MirValueId subject = lower_expr(ctx, m->subject);
@@ -1160,9 +1322,26 @@ static void lower_match(MirLowerCtx* ctx, Stmt* stmt) {
             next_test = (i + 1 < m->arm_count)
                         ? mir_function_add_block(ctx->builder.func, "match.test")
                         : merge_bb;
-            MirValueId pat_val = lower_expr(ctx, arm->pattern);
-            MirValueId cond = mir_build_cmp_eq(&ctx->builder, subject, pat_val);
-            mir_build_condbr(&ctx->builder, cond, arm_bb, next_test);
+            if (arm->pattern->type == EXPR_BINARY &&
+                (arm->pattern->as.binary.operator == TOKEN_RANGE ||
+                 arm->pattern->as.binary.operator == TOKEN_RANGE_INCLUSIVE)) {
+                BinaryExpr* range = &arm->pattern->as.binary;
+                MirValueId lower = lower_expr(ctx, range->left);
+                MirValueId above_lower = mir_build_cmp_ge(&ctx->builder, subject, lower);
+                MirBlock* upper_test = mir_function_add_block(
+                    ctx->builder.func, "match.range.upper");
+                mir_build_condbr(&ctx->builder, above_lower, upper_test, next_test);
+                mir_builder_set_block(&ctx->builder, upper_test);
+                MirValueId upper = lower_expr(ctx, range->right);
+                MirValueId below_upper = range->operator == TOKEN_RANGE_INCLUSIVE
+                    ? mir_build_cmp_le(&ctx->builder, subject, upper)
+                    : mir_build_cmp_lt(&ctx->builder, subject, upper);
+                mir_build_condbr(&ctx->builder, below_upper, arm_bb, next_test);
+            } else {
+                MirValueId pat_val = lower_expr(ctx, arm->pattern);
+                MirValueId cond = mir_build_cmp_eq(&ctx->builder, subject, pat_val);
+                mir_build_condbr(&ctx->builder, cond, arm_bb, next_test);
+            }
         }
 
         mir_builder_set_block(&ctx->builder, arm_bb);
@@ -1233,6 +1412,9 @@ static void lower_stmt(MirLowerCtx* ctx, Stmt* stmt) {
         case STMT_FOR:
             lower_for(ctx, stmt);
             break;
+        case STMT_FOR_IN:
+            lower_for_in(ctx, stmt);
+            break;
         case STMT_MATCH:
             lower_match(ctx, stmt);
             break;
@@ -1262,7 +1444,6 @@ static void lower_stmt(MirLowerCtx* ctx, Stmt* stmt) {
             /* Nested function — lower as separate MIR function */
             mir_lower_function(ctx, stmt);
             break;
-        case STMT_FOR_IN:
         case STMT_TRY:
         case STMT_THROW:
         case STMT_INCLUDE:
@@ -1349,6 +1530,12 @@ MirFunction* mir_lower_function(MirLowerCtx* ctx, Stmt* func_stmt) {
 
 static void lower_class(MirLowerCtx* ctx, Stmt* stmt) {
     ClassStmt* cls = &stmt->as.class_stmt;
+    int ctor_count = 0;
+    int ctor_ordinal = 0;
+
+    for (int i = 0; i < cls->method_count; i++) {
+        if (cls->methods[i].is_constructor) ctor_count++;
+    }
 
     /* Lower each method as a standalone function with mangled name */
     for (int i = 0; i < cls->method_count; i++) {
@@ -1356,7 +1543,13 @@ static void lower_class(MirLowerCtx* ctx, Stmt* stmt) {
         if (!m->body && !m->is_constructor) continue;
 
         char mangled[256];
-        snprintf(mangled, sizeof(mangled), "%s_%s", cls->name, m->name);
+        if (m->is_constructor && ctor_count > 1) {
+            snprintf(mangled, sizeof(mangled), "%s_%s__ctor%d",
+                     cls->name, m->name, ctor_ordinal);
+        } else {
+            snprintf(mangled, sizeof(mangled), "%s_%s", cls->name, m->name);
+        }
+        if (m->is_constructor) ctor_ordinal++;
 
         /* Build param list: self + method params */
         int total_params = m->param_count + 1;

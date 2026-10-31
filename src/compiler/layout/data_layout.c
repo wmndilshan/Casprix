@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Data Layout Optimization
+ * Casprix Compiler - Data Layout Optimization
  *
  * Implements:
  *   1. Alignment-descending field reordering (minimal padding)

@@ -1,16 +1,16 @@
 /**
- * Neural Network Library for Casperix
+ * Neural Network Library for Casprix
  * 
  * Complete CPU-efficient ML/DL library with SIMD optimizations
- * Building on runtime/llm tensor and autograd infrastructure
+ * All models use the shared Tensor ABI and dependency-derived autograd graph.
  */
 
 #ifndef NN_H
 #define NN_H
 
-#include "../llm/tensor.h"
-#include "../llm/ops.h"
-#include "../llm/autograd.h"
+#include "../core/tensor.h"
+#include "../kernels/cpu_ops.h"
+#include "../core/autograd.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,22 +33,21 @@ extern "C" {
  * ACTIVATIONS
  * ======================================================================== */
 
-#include "activations/activations.h"
+#include "../ops/activations.h"
 
 /* ========================================================================
  * OPTIMIZERS
  * ======================================================================== */
 
-#include "optimizers/sgd.h"
-#include "optimizers/adam.h"
-#include "optimizers/rmsprop.h"
-#include "optimizers/scheduler.h"
+#include "../training/optimizer.h"
+#include "../training/training.h"
+#include "../training/scheduler.h"
 
 /* ========================================================================
  * LOSS FUNCTIONS
  * ======================================================================== */
 
-#include "loss/loss.h"
+#include "../ops/losses.h"
 
 /* ========================================================================
  * DATA LOADING
@@ -68,7 +67,7 @@ extern "C" {
  * METRICS
  * ======================================================================== */
 
-#include "metrics/metrics.h"
+#include "../evaluation/metrics.h"
 
 /* ========================================================================
  * VERSION INFO

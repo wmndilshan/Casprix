@@ -42,6 +42,9 @@ int android_egl_swap_buffers(AndroidEGL* egl);
 /* Recreate the window surface after a resize or resume */
 int android_egl_surface_changed(AndroidEGL* egl, ANativeWindow* window);
 
+/* Detach and destroy the current window surface while retaining the context. */
+void android_egl_surface_destroy(AndroidEGL* egl);
+
 /* Query current drawable size */
 void android_egl_get_size(AndroidEGL* egl, int* width, int* height);
 

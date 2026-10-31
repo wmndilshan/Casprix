@@ -1,5 +1,5 @@
 /*
- * Layout Engine — Flexbox-like layout computation for Casperix UI
+ * Layout Engine — Flexbox-like layout computation for Casprix UI
  *
  * Two-pass algorithm:
  *   1. Measure pass (bottom-up): determine intrinsic sizes

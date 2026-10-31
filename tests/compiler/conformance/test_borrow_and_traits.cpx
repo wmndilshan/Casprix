@@ -1,0 +1,21 @@
+// Conformance probe: borrow syntax and a trait implementation.
+class Point { public let x: int = 0; }
+
+trait Printable {
+    func to_string(self: &Point) -> string;
+}
+
+impl Printable for Point {
+    func to_string(self: &Point) -> string {
+        return "Point";
+    }
+}
+
+func read_point(point: &Point) -> int {
+    return point.x;
+}
+
+func main() -> int {
+    let point: Point = new Point();
+    return read_point(&point);
+}

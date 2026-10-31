@@ -1,4 +1,4 @@
-﻿// Working Task Management System
+// Working Task Management System
 // Demonstrates: OOP, elif, Multiple Classes
 // WORKS AROUND: Empty parameter list bug by adding dummy parameters
 
@@ -12,12 +12,12 @@ class Task {
     priority: int;
     status: int;
 
-    func new(taskId: int, taskTitle: string, taskPriority: int) -> Task {
+    func Task(taskId: int, taskTitle: string, taskPriority: int) -> void {
         this.id = taskId;
         this.title = taskTitle;
         this.priority = taskPriority;
         this.status = 0;
-        return this;
+
     }
 
     func startTask(dummy: int) -> void {
@@ -59,10 +59,10 @@ class TaskManager {
     totalTasks: int;
     completedTasks: int;
 
-    func new() -> TaskManager {
+    func TaskManager() -> void {
         this.totalTasks = 0;
         this.completedTasks = 0;
-        return this;
+
     }
 
     func addTask(task: Task) -> void {

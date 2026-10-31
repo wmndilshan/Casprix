@@ -5,7 +5,7 @@
 #ifndef NN_SEQUENTIAL_H
 #define NN_SEQUENTIAL_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include "../layers/dense.h"
 #include <stdbool.h>
 

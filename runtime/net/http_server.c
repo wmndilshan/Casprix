@@ -1,5 +1,5 @@
 /**
- * Casperix HTTP Server Implementation
+ * Casprix HTTP Server Implementation
  *
  * Production-grade request handler with:
  *   - Full request line + header + body parsing
@@ -12,11 +12,16 @@
  */
 
 #include "http_server.h"
-#include "../async/scheduler.h"
-#include "../async/coroutine.h"
+#include "../async/async_runtime.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <time.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 /* MinGW printf doesn't support %zu — use %llu with cast */
 #ifdef __MINGW32__
@@ -65,29 +70,104 @@ static bool recv_exact(Socket* sock, char* buf, size_t have_off, size_t need) {
     return true;
 }
 
+static uint64_t counter_increment(volatile uint64_t* value) {
+#ifdef _WIN32
+    return (uint64_t)InterlockedIncrement64((volatile LONG64*)value);
+#else
+    return __atomic_add_fetch(value, 1, __ATOMIC_RELAXED);
+#endif
+}
+
+static uint64_t counter_decrement(volatile uint64_t* value) {
+#ifdef _WIN32
+    return (uint64_t)InterlockedDecrement64((volatile LONG64*)value);
+#else
+    return __atomic_sub_fetch(value, 1, __ATOMIC_RELAXED);
+#endif
+}
+
+static uint64_t counter_load(const volatile uint64_t* value) {
+#ifdef _WIN32
+    return (uint64_t)InterlockedCompareExchange64((volatile LONG64*)value, 0, 0);
+#else
+    return __atomic_load_n(value, __ATOMIC_RELAXED);
+#endif
+}
+
+static bool running_load(const volatile long* value) {
+#ifdef _WIN32
+    return InterlockedCompareExchange((volatile LONG*)value, 0, 0) != 0;
+#else
+    return __atomic_load_n(value, __ATOMIC_ACQUIRE) != 0;
+#endif
+}
+
+static void running_store(volatile long* value, bool running) {
+#ifdef _WIN32
+    InterlockedExchange((volatile LONG*)value, running ? 1 : 0);
+#else
+    __atomic_store_n(value, running ? 1 : 0, __ATOMIC_RELEASE);
+#endif
+}
+
 /* ========================================================================
  * Server lifecycle
  * ======================================================================== */
 
-HttpServer* http_server_create(const char* bind_addr, uint16_t port) {
+HttpServerConfig http_server_default_config(void) {
+    HttpServerConfig config;
+    config.worker_count = 0;
+    config.backlog = 1024;
+    config.io_timeout_ms = 5000;
+    config.max_request_body = 1024u * 1024u;
+    return config;
+}
+
+HttpServer* http_server_create_with_config(const char* bind_addr, uint16_t port,
+                                           const HttpServerConfig* config) {
+    if (!bind_addr) return NULL;
     HttpServer* server = (HttpServer*)calloc(1, sizeof(HttpServer));
     if (!server) return NULL;
 
     server->bind_addr = strdup(bind_addr);
+    if (!server->bind_addr) {
+        free(server);
+        return NULL;
+    }
     server->port = port;
     server->routes = NULL;
     server->middlewares = NULL;
     server->middleware_count = 0;
-    server->running = false;
-    
-    // Create a worker pool with thread count equal to CPU cores
-    server->pool = pool_create(0); 
+    running_store(&server->running, false);
+    server->config = config ? *config : http_server_default_config();
+    if (server->config.backlog <= 0) server->config.backlog = 1024;
+    if (server->config.io_timeout_ms <= 0) server->config.io_timeout_ms = 5000;
+    if (server->config.max_request_body == 0) {
+        server->config.max_request_body = 1024u * 1024u;
+    }
+
+    server->async_runtime = async_runtime_create(server->config.worker_count);
+    if (!server->async_runtime) {
+        free(server->bind_addr);
+        free(server);
+        return NULL;
+    }
 
     return server;
 }
 
+HttpServer* http_server_create(const char* bind_addr, uint16_t port) {
+    return http_server_create_with_config(bind_addr, port, NULL);
+}
+
 void http_server_destroy(HttpServer* server) {
     if (!server) return;
+
+    http_server_stop(server);
+    if (server->async_runtime) {
+        async_runtime_destroy((AsyncRuntime*)server->async_runtime);
+        server->async_runtime = NULL;
+    }
 
     free(server->bind_addr);
 
@@ -105,6 +185,12 @@ void http_server_destroy(HttpServer* server) {
 
     if (server->listener) {
         socket_destroy(server->listener);
+        server->listener = NULL;
+    }
+
+    if (server->socket_initialized) {
+        socket_system_cleanup();
+        server->socket_initialized = false;
     }
 
     free(server);
@@ -119,12 +205,36 @@ bool http_server_route(HttpServer* server, HttpMethod method, const char* path,
     if (!server || !path || !handler) return false;
 
     HttpRoute* route = (HttpRoute*)calloc(1, sizeof(HttpRoute));
+    if (!route) return false;
     route->method = method;
     route->path = strdup(path);
+    if (!route->path) {
+        free(route);
+        return false;
+    }
     route->handler = handler;
+    route->sync_handler = NULL;
     route->user_data = user_data;
     route->next = server->routes;
 
+    server->routes = route;
+    return true;
+}
+
+bool http_server_route_sync(HttpServer* server, HttpMethod method, const char* path,
+                            SyncRouteHandler handler, void* user_data) {
+    if (!server || !path || !handler) return false;
+    HttpRoute* route = (HttpRoute*)calloc(1, sizeof(HttpRoute));
+    if (!route) return false;
+    route->path = strdup(path);
+    if (!route->path) {
+        free(route);
+        return false;
+    }
+    route->method = method;
+    route->sync_handler = handler;
+    route->user_data = user_data;
+    route->next = server->routes;
     server->routes = route;
     return true;
 }
@@ -155,21 +265,13 @@ bool http_server_use(HttpServer* server, Middleware middleware, void* user_data)
  * ======================================================================== */
 
 static HttpRoute* find_route(HttpServer* server, HttpMethod method, const char* path) {
-    /* Strip query string for matching */
-    char clean_path[512];
     const char* q = strchr(path, '?');
-    if (q) {
-        size_t len = (size_t)(q - path);
-        if (len >= sizeof(clean_path)) len = sizeof(clean_path) - 1;
-        memcpy(clean_path, path, len);
-        clean_path[len] = '\0';
-    } else {
-        snprintf(clean_path, sizeof(clean_path), "%s", path);
-    }
+    size_t path_length = q ? (size_t)(q - path) : strlen(path);
 
     HttpRoute* route = server->routes;
     while (route) {
-        if (route->method == method && strcmp(route->path, clean_path) == 0) {
+        if (route->method == method && strlen(route->path) == path_length &&
+            memcmp(route->path, path, path_length) == 0) {
             return route;
         }
         route = route->next;
@@ -181,17 +283,21 @@ static HttpRoute* find_route(HttpServer* server, HttpMethod method, const char* 
  * Request parsing
  * ======================================================================== */
 
-static HttpMethod parse_method(const char* str) {
-    if (strcmp(str, "GET") == 0)    return HTTP_GET;
-    if (strcmp(str, "POST") == 0)   return HTTP_POST;
-    if (strcmp(str, "PUT") == 0)    return HTTP_PUT;
-    if (strcmp(str, "DELETE") == 0) return HTTP_DELETE;
-    if (strcmp(str, "HEAD") == 0)   return HTTP_HEAD;
-    return HTTP_GET;
+static bool parse_method(const char* str, HttpMethod* method) {
+    if (strcmp(str, "GET") == 0)    *method = HTTP_GET;
+    else if (strcmp(str, "POST") == 0)   *method = HTTP_POST;
+    else if (strcmp(str, "PUT") == 0)    *method = HTTP_PUT;
+    else if (strcmp(str, "DELETE") == 0) *method = HTTP_DELETE;
+    else if (strcmp(str, "HEAD") == 0)   *method = HTTP_HEAD;
+    else return false;
+    return true;
 }
 
 /* Return the value of the Content-Length header from a parsed request, or 0. */
-static size_t request_content_length(const HttpRequest* req) {
+static bool request_content_length(const HttpRequest* req, size_t maximum,
+                                   size_t* content_length) {
+    *content_length = 0;
+    bool found = false;
     for (int i = 0; i < req->header_count; i++) {
         const char* h = req->headers[i];
         if (!h) continue;
@@ -205,21 +311,22 @@ static size_t request_content_length(const HttpRequest* req) {
             if (c != name[j]) { match = false; break; }
         }
         if (!match) continue;
+        if (found) return false; /* Ambiguous framing enables request smuggling. */
+        found = true;
         const char* v = h + n;
         while (*v == ' ' || *v == '\t') v++;
-        if (*v < '0' || *v > '9') return 0;
-        /* Hard cap the declared body size so a bogus/huge Content-Length can't
-         * drive a giant malloc in parse_request. 64 MiB is well beyond any
-         * legitimate request this server handles. */
-        const unsigned long long CAP = 64ULL * 1024 * 1024;
+        if (*v < '0' || *v > '9') return false;
         unsigned long long parsed = 0;
         for (; *v >= '0' && *v <= '9'; v++) {
+            if (parsed > (18446744073709551615ULL - 9ULL) / 10ULL) return false;
             parsed = parsed * 10 + (unsigned)(*v - '0');
-            if (parsed > CAP) { parsed = CAP; break; }
+            if (parsed > maximum) return false;
         }
-        return (size_t)parsed;
+        while (*v == ' ' || *v == '\t') v++;
+        if (*v != '\0') return false;
+        *content_length = (size_t)parsed;
     }
-    return 0;
+    return true;
 }
 
 /*
@@ -231,7 +338,8 @@ static size_t request_content_length(const HttpRequest* req) {
  * caller is responsible for reading the remaining (want - have) bytes.
  */
 static bool parse_request(const char* raw, int raw_len, HttpRequest* req,
-                          size_t* body_have, size_t* body_want) {
+                          size_t max_body_size, size_t* body_have,
+                          size_t* body_want) {
     memset(req, 0, sizeof(*req));
     if (body_have) *body_have = 0;
     if (body_want) *body_want = 0;
@@ -243,11 +351,20 @@ static bool parse_request(const char* raw, int raw_len, HttpRequest* req,
     /* Parse request line: METHOD PATH HTTP/1.x */
     char method_str[16] = {0};
     char path_buf[1024] = {0};
-    if (sscanf(raw, "%15s %1023s", method_str, path_buf) != 2) return false;
+    char version_buf[16] = {0};
+    if (sscanf(raw, "%15s %1023s %15s", method_str, path_buf, version_buf) != 3) return false;
+    if (strcmp(version_buf, "HTTP/1.1") != 0 && strcmp(version_buf, "HTTP/1.0") != 0) return false;
+    if (path_buf[0] != '/') return false;
 
-    req->method = parse_method(method_str);
+    if (!parse_method(method_str, &req->method)) return false;
     req->path = strdup(path_buf);
     req->url = strdup(path_buf);
+    if (!req->path || !req->url) {
+        free(req->path);
+        free(req->url);
+        memset(req, 0, sizeof(*req));
+        return false;
+    }
 
     /* Parse headers */
     const char* hdr = line_end + 2;
@@ -258,9 +375,12 @@ static bool parse_request(const char* raw, int raw_len, HttpRequest* req,
         if (req->header_count < 32) {
             size_t hdr_len = (size_t)(hdr_end - hdr);
             char* header_copy = (char*)malloc(hdr_len + 1);
+            if (!header_copy) return false;
             memcpy(header_copy, hdr, hdr_len);
             header_copy[hdr_len] = '\0';
             req->headers[req->header_count++] = header_copy;
+        } else {
+            return false;
         }
         hdr = hdr_end + 2;
     }
@@ -270,9 +390,10 @@ static bool parse_request(const char* raw, int raw_len, HttpRequest* req,
     if (body_start) {
         body_start += 4;
         size_t have = (size_t)(raw_len - (body_start - raw));
-        size_t want = request_content_length(req);
-        /* If Content-Length is absent/zero, fall back to "whatever arrived". */
-        size_t alloc = (want > have) ? want : have;
+        size_t want = 0;
+        if (!request_content_length(req, max_body_size, &want)) return false;
+        if (have > want) have = want;
+        size_t alloc = want;
 
         if (alloc > 0) {
             req->body = (char*)malloc(alloc + 1);
@@ -297,6 +418,18 @@ static void free_parsed_request(HttpRequest* req) {
     }
 }
 
+static bool append_response_header(char* buffer, size_t capacity, size_t* used,
+                                   const char* format, ...) {
+    if (*used >= capacity) return false;
+    va_list args;
+    va_start(args, format);
+    int written = vsnprintf(buffer + *used, capacity - *used, format, args);
+    va_end(args);
+    if (written < 0 || (size_t)written >= capacity - *used) return false;
+    *used += (size_t)written;
+    return true;
+}
+
 /* ========================================================================
  * Client handler
  * ======================================================================== */
@@ -314,6 +447,11 @@ typedef struct {
  * listener/threadpool.
  */
 void http_server_handle_connection(HttpServer* server, Socket* client) {
+    if (!server || !client) {
+        socket_destroy(client);
+        return;
+    }
+    counter_increment(&server->active_connections);
     /*
      * Bound every blocking recv()/send() on this accepted connection so a
      * client that opens a socket and then stalls (Slowloris — trickling
@@ -321,7 +459,7 @@ void http_server_handle_connection(HttpServer* server, Socket* client) {
      * worker forever. Applied to server-accepted connections only; the
      * listener and client-side sockets elsewhere keep their own policy.
      */
-    socket_set_timeout(client, SOCKET_DEFAULT_IO_TIMEOUT_MS);
+    socket_set_timeout(client, server->config.io_timeout_ms);
 
     char buffer[8192];
     int total = 0;
@@ -338,17 +476,34 @@ void http_server_handle_connection(HttpServer* server, Socket* client) {
 
     if (total <= 0) {
         socket_destroy(client);
+        counter_decrement(&server->active_connections);
+        counter_increment(&server->completed_connections);
+        return;
+    }
+
+    if (!strstr(buffer, "\r\n\r\n")) {
+        const char* too_large = "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        send_all(client, too_large, strlen(too_large));
+        socket_destroy(client);
+        counter_increment(&server->malformed_requests);
+        counter_decrement(&server->active_connections);
+        counter_increment(&server->completed_connections);
         return;
     }
 
     /* Parse the request */
     HttpRequest request;
     size_t body_have = 0, body_want = 0;
-    if (!parse_request(buffer, total, &request, &body_have, &body_want)) {
+    if (!parse_request(buffer, total, &request, server->config.max_request_body,
+                       &body_have, &body_want)) {
         /* Malformed request — 400 */
         const char* bad = "HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad Request";
         send_all(client, bad, strlen(bad));
+        free_parsed_request(&request);
         socket_destroy(client);
+        counter_increment(&server->malformed_requests);
+        counter_decrement(&server->active_connections);
+        counter_increment(&server->completed_connections);
         return;
     }
 
@@ -365,6 +520,9 @@ void http_server_handle_connection(HttpServer* server, Socket* client) {
             const char* bad = "HTTP/1.1 400 Bad Request\r\nContent-Length: 23\r\nConnection: close\r\n\r\nIncomplete request body";
             send_all(client, bad, strlen(bad));
             socket_destroy(client);
+            counter_increment(&server->malformed_requests);
+            counter_decrement(&server->active_connections);
+            counter_increment(&server->completed_connections);
             return;
         }
         request.body_length = body_want;
@@ -396,13 +554,16 @@ void http_server_handle_connection(HttpServer* server, Socket* client) {
         HttpRoute* route = find_route(server, request.method, request.path);
 
         if (route) {
-            Future* future = route->handler(&request, route->user_data);
-            if (future) {
-                response = (HttpResponse*)future_wait(future);
-                future_destroy(future);
+            if (route->sync_handler) {
+                response = route->sync_handler(&request, route->user_data);
             } else {
-                response = http_response_error(500, "Handler returned NULL");
+                Future* future = route->handler(&request, route->user_data);
+                if (future) {
+                    response = (HttpResponse*)future_wait(future);
+                    future_destroy(future);
+                }
             }
+            if (!response) response = http_response_error(500, "Handler returned NULL");
         } else {
             response = http_response_error(404, "Not Found");
         }
@@ -411,41 +572,38 @@ void http_server_handle_connection(HttpServer* server, Socket* client) {
     /* Build and send HTTP response */
     if (response) {
         char resp_buf[16384];
-        int off = 0;
+        size_t off = 0;
+        bool header_ok = true;
 
         /* Status line */
-        off += snprintf(resp_buf + off, sizeof(resp_buf) - off,
-                        "HTTP/1.1 %d %s\r\n",
-                        response->status_code,
-                        response->status_text ? response->status_text : "OK");
+        header_ok = append_response_header(resp_buf, sizeof(resp_buf), &off,
+                                           "HTTP/1.1 %d %s\r\n",
+                                           response->status_code,
+                                           response->status_text ? response->status_text : "OK");
 
         /* Content-Length */
-        off += snprintf(resp_buf + off, sizeof(resp_buf) - off,
-                        "Content-Length: " FMT_ZU "\r\n",
-                        CAST_ZU(response->body_length));
+        if (header_ok) header_ok = append_response_header(
+            resp_buf, sizeof(resp_buf), &off, "Content-Length: " FMT_ZU "\r\n",
+            CAST_ZU(response->body_length));
 
         /* User-set headers (Content-Type, etc.) */
         for (int i = 0; i < response->header_count; i++) {
-            if (response->headers[i]) {
-                off += snprintf(resp_buf + off, sizeof(resp_buf) - off,
-                                "%s\r\n", response->headers[i]);
+            if (header_ok && response->headers[i]) {
+                header_ok = append_response_header(resp_buf, sizeof(resp_buf), &off,
+                                                   "%s\r\n", response->headers[i]);
             }
         }
 
         /* Connection header */
-        off += snprintf(resp_buf + off, sizeof(resp_buf) - off,
-                        "Connection: close\r\n");
+        if (header_ok) header_ok = append_response_header(
+            resp_buf, sizeof(resp_buf), &off, "Connection: close\r\n");
 
         /* End of headers */
-        off += snprintf(resp_buf + off, sizeof(resp_buf) - off, "\r\n");
-
-        /* snprintf returns the would-be length; if the header block was
-         * truncated, clamp so send_all() doesn't read past resp_buf. */
-        if (off < 0) off = 0;
-        if (off > (int)sizeof(resp_buf)) off = (int)sizeof(resp_buf);
+        if (header_ok) header_ok = append_response_header(
+            resp_buf, sizeof(resp_buf), &off, "\r\n");
 
         /* Send headers — loop over partial writes, don't discard the count */
-        if (send_all(client, resp_buf, (size_t)off)) {
+        if (header_ok && send_all(client, resp_buf, off)) {
             /* Send body (skip for HEAD) */
             if (request.method != HTTP_HEAD && response->body && response->body_length > 0) {
                 send_all(client, response->body, response->body_length);
@@ -457,6 +615,8 @@ void http_server_handle_connection(HttpServer* server, Socket* client) {
 
     free_parsed_request(&request);
     socket_destroy(client);
+    counter_decrement(&server->active_connections);
+    counter_increment(&server->completed_connections);
 }
 
 static void* handle_client_task(void* arg) {
@@ -477,17 +637,60 @@ static void* handle_client_task(void* arg) {
     return NULL;
 }
 
+static bool submit_client(HttpServer* server, Socket* client) {
+    ClientContext* ctx = (ClientContext*)malloc(sizeof(ClientContext));
+    if (!ctx) return false;
+    ctx->server = server;
+    ctx->client = client;
+    if (!async_runtime_submit_detached((AsyncRuntime*)server->async_runtime,
+                                       handle_client_task, ctx)) {
+        free(ctx);
+        return false;
+    }
+    return true;
+}
+
+/* The listener is readiness-driven. Drain accept() until the non-blocking
+   socket reports EWOULDBLOCK, then return immediately to the shared loop. */
+static void accept_ready(EventWatcher* watcher, int events, void* user_data) {
+    (void)watcher;
+    HttpServer* server = (HttpServer*)user_data;
+    if (!server || !running_load(&server->running) || !(events & EVENT_READ)) return;
+    for (;;) {
+        Socket* client = socket_accept(server->listener);
+        if (!client) break;
+        counter_increment(&server->accepted_connections);
+        /* Listener readiness is non-blocking; the compatibility request
+           handler uses bounded blocking I/O on workers. Windows can inherit
+           FIONBIO from the listener, so normalize every accepted socket. */
+        if (!socket_set_nonblocking(client, false)) {
+            counter_increment(&server->rejected_connections);
+            socket_destroy(client);
+            continue;
+        }
+        if (!submit_client(server, client)) {
+            counter_increment(&server->rejected_connections);
+            socket_destroy(client);
+        }
+    }
+}
+
 /* ========================================================================
  * Server listen loop
  * ======================================================================== */
 
 bool http_server_listen(HttpServer* server) {
-    if (!server) return false;
+    if (!server || running_load(&server->running) || server->listener) return false;
 
-    socket_system_init();
+    if (!socket_system_init()) return false;
+    server->socket_initialized = true;
 
     server->listener = socket_create(SOCKET_TYPE_TCP);
-    if (!server->listener) return false;
+    if (!server->listener) {
+        socket_system_cleanup();
+        server->socket_initialized = false;
+        return false;
+    }
 
     /* Allow port reuse for fast server restarts */
     int reuse = 1;
@@ -498,41 +701,73 @@ bool http_server_listen(HttpServer* server) {
         fprintf(stderr, "Failed to bind to %s:%d\n", server->bind_addr, server->port);
         socket_destroy(server->listener);
         server->listener = NULL;
+        socket_system_cleanup();
+        server->socket_initialized = false;
         return false;
     }
 
-    if (!socket_listen(server->listener, 128)) {
+    if (!socket_listen(server->listener, server->config.backlog)) {
         fprintf(stderr, "Failed to listen\n");
         socket_destroy(server->listener);
         server->listener = NULL;
+        socket_system_cleanup();
+        server->socket_initialized = false;
         return false;
     }
 
-    printf("HTTP Server listening on %s:%d (Concurrent)\n", server->bind_addr, server->port);
-    server->running = true;
-
-    while (server->running) {
-        Socket* client = socket_accept(server->listener);
-        if (client) {
-            ClientContext* ctx = malloc(sizeof(ClientContext));
-            ctx->server = server;
-            ctx->client = client;
-            
-            // Dispatch to worker pool
-            if (!pool_submit(server->pool, handle_client_task, ctx)) {
-                socket_destroy(client);
-                free(ctx);
-            }
-        }
+    if (!socket_set_nonblocking(server->listener, true)) {
+        socket_destroy(server->listener);
+        server->listener = NULL;
+        socket_system_cleanup();
+        server->socket_initialized = false;
+        return false;
     }
 
-    socket_system_cleanup();
+    EventLoop* loop = async_runtime_event_loop((AsyncRuntime*)server->async_runtime);
+    running_store(&server->running, true);
+    if (!event_loop_add_watcher(loop, (EventHandle)server->listener->handle,
+                                EVENT_READ, accept_ready, server)) {
+        running_store(&server->running, false);
+        socket_destroy(server->listener);
+        server->listener = NULL;
+        socket_system_cleanup();
+        server->socket_initialized = false;
+        return false;
+    }
+    printf("HTTP Server listening on %s:%d (non-blocking accept, async workers)\n",
+           server->bind_addr, server->port);
+
+    while (running_load(&server->running)) {
+#ifdef _WIN32
+        Sleep(10);
+#else
+        struct timespec wait_time = {0, 10 * 1000 * 1000};
+        nanosleep(&wait_time, NULL);
+#endif
+    }
+    event_loop_remove_watcher(loop, (EventHandle)server->listener->handle);
+
     return true;
 }
 
 void http_server_stop(HttpServer* server) {
     if (!server) return;
-    server->running = false;
+    running_store(&server->running, false);
+}
+
+bool http_server_is_running(const HttpServer* server) {
+    return server && running_load(&server->running);
+}
+
+HttpServerStats http_server_get_stats(const HttpServer* server) {
+    HttpServerStats stats = {0};
+    if (!server) return stats;
+    stats.accepted_connections = counter_load(&server->accepted_connections);
+    stats.completed_connections = counter_load(&server->completed_connections);
+    stats.rejected_connections = counter_load(&server->rejected_connections);
+    stats.malformed_requests = counter_load(&server->malformed_requests);
+    stats.active_connections = counter_load(&server->active_connections);
+    return stats;
 }
 
 /* ========================================================================
@@ -541,6 +776,7 @@ void http_server_stop(HttpServer* server) {
 
 HttpResponse* http_response_ok(const char* body) {
     HttpResponse* response = (HttpResponse*)calloc(1, sizeof(HttpResponse));
+    if (!response) return NULL;
     response->status_code = 200;
     response->status_text = strdup("OK");
     if (body) {
@@ -560,6 +796,7 @@ HttpResponse* http_response_json(const char* json) {
 
 HttpResponse* http_response_error(int status_code, const char* message) {
     HttpResponse* response = (HttpResponse*)calloc(1, sizeof(HttpResponse));
+    if (!response) return NULL;
     response->status_code = status_code;
 
     switch (status_code) {

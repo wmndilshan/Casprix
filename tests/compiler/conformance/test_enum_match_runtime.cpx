@@ -1,0 +1,14 @@
+enum Color { Red, Green, Blue }
+
+func classify(color: Color) -> int {
+    match color {
+        Color.Red => { return 10; }
+        Color.Green => { return 20; }
+        Color.Blue => { return 30; }
+    }
+}
+
+func main() -> int {
+    let color: Color = Color.Green;
+    return classify(color) - 20;
+}

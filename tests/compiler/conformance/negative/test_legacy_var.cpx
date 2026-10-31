@@ -1,0 +1,5 @@
+// Expected parse failure: var is not part of the normalized surface syntax.
+func main() -> int {
+    var value = 1;
+    return value;
+}

@@ -1,18 +1,39 @@
 # Casprix Test Suite
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
+
+if(TARGET casprix)
+    add_test(NAME compiler_version COMMAND $<TARGET_FILE:casprix> --version)
+    set_tests_properties(compiler_version PROPERTIES
+        PASS_REGULAR_EXPRESSION "casprix [0-9]+\\.[0-9]+\\.[0-9]+")
+endif()
 
 # ── Runtime unit tests ──────────────────────────────────────────────────────
 set(RUNTIME_TEST_SRCS
     runtime/test_stdlib.c
     runtime/test_scheduler.c
     runtime/test_networking.c
-    runtime/test_net_hardening.c
     runtime/test_arc_gc.c
     runtime/benchmark.c
 )
 
+# This fixture intentionally drives raw POSIX descriptors and pthreads. The
+# portable socket API is covered by test_networking on Windows.
+if(UNIX)
+    list(APPEND RUNTIME_TEST_SRCS runtime/test_net_hardening.c)
+endif()
+
 if(WIN32)
     list(APPEND RUNTIME_TEST_SRCS runtime/test_coroutine.c)
+endif()
+
+set(AI_CPU_KERNEL_TEST_SRCS
+    ${CMAKE_SOURCE_DIR}/runtime/ai/kernels/cpu_ops.c
+)
+if(NASM_AVAILABLE AND
+   EXISTS "${CMAKE_SOURCE_DIR}/runtime/ai/kernels/cpu_avx2.asm")
+    list(APPEND AI_CPU_KERNEL_TEST_SRCS
+        ${CMAKE_SOURCE_DIR}/runtime/ai/kernels/cpu_avx2.asm
+    )
 endif()
 
 foreach(test_src ${RUNTIME_TEST_SRCS})
@@ -27,6 +48,61 @@ foreach(test_src ${RUNTIME_TEST_SRCS})
         add_test(NAME ${test_name} COMMAND ${test_name})
     endif()
 endforeach()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_ai_autograd.c")
+    add_executable(test_ai_autograd
+        runtime/test_ai_autograd.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/core/tensor.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/core/autograd.c
+        ${AI_CPU_KERNEL_TEST_SRCS}
+    )
+    target_include_directories(test_ai_autograd PRIVATE
+        ${CMAKE_SOURCE_DIR}/runtime/ai/core
+    )
+    target_link_libraries(test_ai_autograd PRIVATE
+        casprix_compile_options
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    add_test(NAME test_ai_autograd COMMAND test_ai_autograd)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_ai_ml.c")
+    add_executable(test_ai_ml
+        runtime/test_ai_ml.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/core/tensor.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/distributed/cpu_collective.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/training/training.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/training/optimizer.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/evaluation/metrics.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/classical/algorithms.c
+    )
+    target_include_directories(test_ai_ml PRIVATE ${CMAKE_SOURCE_DIR}/runtime/ai)
+    target_link_libraries(test_ai_ml PRIVATE
+        casprix_compile_options
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    add_test(NAME test_ai_ml COMMAND test_ai_ml)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_ai_nn.c")
+    add_executable(test_ai_nn
+        runtime/test_ai_nn.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/core/tensor.c
+        ${AI_CPU_KERNEL_TEST_SRCS}
+        ${CMAKE_SOURCE_DIR}/runtime/ai/ops/activations.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/ops/losses.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/training/training.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/training/optimizer.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/nn/nn.c
+        ${CMAKE_SOURCE_DIR}/runtime/ai/nn/layers/dense.c
+    )
+    target_include_directories(test_ai_nn PRIVATE ${CMAKE_SOURCE_DIR}/runtime/ai)
+    target_link_libraries(test_ai_nn PRIVATE
+        casprix_compile_options
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+    )
+    add_test(NAME test_ai_nn COMMAND test_ai_nn)
+endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_mir_validation.c")
     add_executable(test_mir_validation
@@ -111,6 +187,28 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/test_text_input_states.c" AND
     add_test(NAME android_test_text_input_states COMMAND android_test_text_input_states)
 endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/test_android_runtime.c")
+    add_executable(android_test_runtime
+        android/test_android_runtime.c
+        ${CMAKE_SOURCE_DIR}/runtime/android/android_runtime.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/scene_graph.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/layout.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/events.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/widgets.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/style.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/animation.c
+        ${CMAKE_SOURCE_DIR}/runtime/skia/text.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/android/a11y_skia_stub.c
+    )
+    target_include_directories(android_test_runtime PRIVATE
+        ${CMAKE_SOURCE_DIR}/runtime/skia
+        ${CMAKE_SOURCE_DIR}/runtime/android
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(android_test_runtime PRIVATE m)
+    add_test(NAME android_test_runtime COMMAND android_test_runtime)
+endif()
+
 foreach(_android_zip_test test_apk_pack test_zip_writer)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/${_android_zip_test}.c")
         add_executable(android_${_android_zip_test}
@@ -139,6 +237,77 @@ foreach(_bench bench_simd)
         )
     endif()
 endforeach()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/bench_http_concurrency.c")
+    add_executable(bench_http_concurrency
+        runtime/bench_http_concurrency.c
+        ${CMAKE_SOURCE_DIR}/examples/ecommerce/backend.c
+        ${CMAKE_SOURCE_DIR}/runtime/net/socket.c
+        ${CMAKE_SOURCE_DIR}/runtime/net/http.c
+        ${CMAKE_SOURCE_DIR}/runtime/net/http_server.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/future.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/async_runtime.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/scheduler.c
+        ${CMAKE_SOURCE_DIR}/runtime/sync/lockfree_deque.c
+        $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/runtime/io/iocp.c>
+        $<$<BOOL:${UNIX}>:${CMAKE_SOURCE_DIR}/runtime/io/epoll.c>
+    )
+    target_link_libraries(bench_http_concurrency PRIVATE
+        casprix_compile_options
+        $<$<BOOL:${WIN32}>:ws2_32>
+        $<$<BOOL:${UNIX}>:pthread>
+    )
+    target_include_directories(bench_http_concurrency PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_async_runtime.c")
+    add_executable(test_async_runtime
+        runtime/test_async_runtime.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/async_runtime.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/future.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/scheduler.c
+        ${CMAKE_SOURCE_DIR}/runtime/concurrent/channel.c
+        ${CMAKE_SOURCE_DIR}/runtime/sync/lockfree_deque.c
+        $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/runtime/io/iocp.c>
+        $<$<BOOL:${UNIX}>:${CMAKE_SOURCE_DIR}/runtime/io/epoll.c>
+    )
+    target_link_libraries(test_async_runtime PRIVATE
+        casprix_compile_options
+        $<$<BOOL:${WIN32}>:ws2_32>
+        $<$<BOOL:${UNIX}>:pthread>
+    )
+    target_include_directories(test_async_runtime PRIVATE ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_async_runtime COMMAND test_async_runtime)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/test_ecommerce_backend.c")
+    add_executable(test_ecommerce_backend
+        runtime/test_ecommerce_backend.c
+        ${CMAKE_SOURCE_DIR}/examples/ecommerce/backend.c
+        ${CMAKE_SOURCE_DIR}/runtime/net/socket.c
+        ${CMAKE_SOURCE_DIR}/runtime/net/http.c
+        ${CMAKE_SOURCE_DIR}/runtime/net/http_server.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/future.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/async_runtime.c
+        ${CMAKE_SOURCE_DIR}/runtime/async/scheduler.c
+        ${CMAKE_SOURCE_DIR}/runtime/sync/lockfree_deque.c
+        $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/runtime/io/iocp.c>
+        $<$<BOOL:${UNIX}>:${CMAKE_SOURCE_DIR}/runtime/io/epoll.c>
+    )
+    target_link_libraries(test_ecommerce_backend PRIVATE
+        casprix_compile_options
+        $<$<BOOL:${WIN32}>:ws2_32>
+        $<$<BOOL:${UNIX}>:pthread>
+    )
+    target_include_directories(test_ecommerce_backend PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    add_test(NAME test_ecommerce_backend COMMAND test_ecommerce_backend)
+endif()
 
 # ── Demos (built but not CTest cases) ────────────────────────────────────────
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/runtime/demo_http_server.c")
@@ -396,28 +565,13 @@ endif()
 if(BUILD_COMPILER AND TARGET casprix)
     file(GLOB CPX_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_*.cpx")
 
-    # Semantic-only fixtures: these import a lib/ module that binds to an
-    # external C runtime not shipped in this repo (e.g. lib/nn/nn.cpx -> the
-    # NUWAN LLM runtime). A full compile passes semantic analysis but cannot
-    # link, so verify them with --check-only, matching the compiler_suite
-    # runner (runner.c) which already uses --check-only for every fixture.
-    set(CPX_CHECK_ONLY_TESTS test_nn_syntax)
-
     foreach(cpx_test ${CPX_TESTS})
         get_filename_component(test_name ${cpx_test} NAME_WE)
-        if(test_name IN_LIST CPX_CHECK_ONLY_TESTS)
-            add_test(
-                NAME compiler_${test_name}
-                COMMAND $<TARGET_FILE:casprix> --check-only ${cpx_test}
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            )
-        else()
-            add_test(
-                NAME compiler_${test_name}
-                COMMAND $<TARGET_FILE:casprix> ${cpx_test} -o ${CMAKE_BINARY_DIR}/ctest/${test_name}
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            )
-        endif()
+        add_test(
+            NAME compiler_${test_name}
+            COMMAND $<TARGET_FILE:casprix> ${cpx_test} -o ${CMAKE_BINARY_DIR}/ctest/${test_name}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
         if(BUILD_RUNTIME AND TARGET casprix_runtime)
             set_tests_properties(compiler_${test_name} PROPERTIES
                 ENVIRONMENT "CASPRIX_RUNTIME_LIB=$<TARGET_FILE:casprix_runtime>;CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR}")
@@ -426,6 +580,25 @@ if(BUILD_COMPILER AND TARGET casprix)
                 ENVIRONMENT "CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR}")
         endif()
     endforeach()
+
+    add_test(
+        NAME compiler_c_entrypoint_linkage
+        COMMAND ${CMAKE_COMMAND}
+            -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+            -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_c_entrypoint.cpx
+            -DOUTPUT_BASE=${CMAKE_BINARY_DIR}/ctest/c_entrypoint
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_c_entrypoint.cmake
+    )
+
+    add_test(
+        NAME compiler_c_backend_high_level
+        COMMAND ${CMAKE_COMMAND}
+            -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+            -DC_COMPILER=${CMAKE_C_COMPILER}
+            -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_c_backend_high_level.cpx
+            -DOUTPUT_BASE=${CMAKE_BINARY_DIR}/ctest/c_backend_high_level
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_c_backend_high_level.cmake
+    )
 
     # Disable tests that require the Skia GUI framework when it is not built
     if(NOT ENABLE_SKIA_GUI)
@@ -442,6 +615,17 @@ if(BUILD_COMPILER AND TARGET casprix)
 endif()
 
 # ── CTest configuration ───────────────────────────────────────────────────────
+# Release builds define NDEBUG globally. Unit tests depend on assert(), so
+# explicitly keep assertions active for every executable created here.
+get_property(CASPRIX_TEST_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_test_target IN LISTS CASPRIX_TEST_TARGETS)
+    if(MSVC)
+        target_compile_options(${_test_target} PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(${_test_target} PRIVATE -UNDEBUG)
+    endif()
+endforeach()
+
 set_property(DIRECTORY PROPERTY TEST_LAUNCH_DIR "${CMAKE_SOURCE_DIR}")
 
 message(STATUS "  Test suite:    ${CMAKE_CURRENT_SOURCE_DIR}")

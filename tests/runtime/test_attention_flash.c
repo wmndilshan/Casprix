@@ -7,7 +7,7 @@
  * Build:
  *   gcc -O2 -I runtime/ai/llm \
  *       tests/runtime/test_attention_flash.c \
- *       runtime/ai/llm/attention.c runtime/ai/llm/tensor.c runtime/ai/llm/ops.c \
+ *       runtime/ai/llm/attention.c runtime/ai/core/tensor.c runtime/ai/kernels/cpu_ops.c \
  *       -lm -o test_attention_flash
  */
 

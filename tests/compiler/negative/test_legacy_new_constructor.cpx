@@ -1,0 +1,4 @@
+// `new` is reserved for allocation expressions, not constructor declarations.
+class Legacy {
+    func new(value: i32) -> void {}
+}

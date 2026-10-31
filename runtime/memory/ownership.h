@@ -1,4 +1,4 @@
-// Casperix Runtime - Ownership & Move Semantics
+// Casprix Runtime - Ownership & Move Semantics
 // Compile-time ownership annotations and runtime move helpers
 //
 // Ownership model:

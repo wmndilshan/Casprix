@@ -4,7 +4,7 @@
  */
 
 #include "conv2d.h"
-#include "../../llm/ops.h"
+#include "../../kernels/cpu_ops.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>

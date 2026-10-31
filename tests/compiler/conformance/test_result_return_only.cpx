@@ -1,0 +1,8 @@
+// Conformance probe: Result as a named generic return type, without '?'.
+func parse_value() -> Result<int, Error> {
+    return 1;
+}
+
+func main() -> int {
+    return 0;
+}

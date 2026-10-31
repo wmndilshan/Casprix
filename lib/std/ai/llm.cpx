@@ -69,7 +69,7 @@ extern func cpx_generate(
 class Tokenizer {
     public mut handle: rawptr
 
-    public func new(vocab_size: i32) -> void {
+    public func Tokenizer(vocab_size: i32) -> void {
         this.handle = cpx_tokenizer_create(vocab_size)
     }
 
@@ -106,7 +106,7 @@ class Tokenizer {
 class Dataset {
     public mut handle: rawptr
 
-    public func new(num_seqs: i32, seq_len: i32, vocab: i32) -> void {
+    public func Dataset(num_seqs: i32, seq_len: i32, vocab: i32) -> void {
         this.handle = cpx_dataset_create(num_seqs, seq_len, vocab)
     }
 
@@ -128,7 +128,7 @@ class Dataset {
 class DataLoader {
     public mut handle: rawptr
 
-    public func new(ds: Dataset, batch_size: i32, shuffle: bool) -> void {
+    public func DataLoader(ds: Dataset, batch_size: i32, shuffle: bool) -> void {
         mut s: i32 = 0
         if (shuffle) { s = 1 }
         this.handle = cpx_dataloader_create(ds.handle, batch_size, s)
@@ -150,7 +150,7 @@ class DataLoader {
 class Transformer {
     public mut handle: rawptr
 
-    public func new(v: i32, h: i32, l: i32, heads: i32, ffn: i32, seq: i32) -> void {
+    public func Transformer(v: i32, h: i32, l: i32, heads: i32, ffn: i32, seq: i32) -> void {
         this.handle = cpx_transformer_create(v, h, l, heads, ffn, seq)
     }
 
@@ -191,7 +191,7 @@ class Transformer {
 class Optimizer {
     public mut handle: rawptr
 
-    public func new(params: i32, lr: f32, b1: f32, b2: f32) -> void {
+    public func Optimizer(params: i32, lr: f32, b1: f32, b2: f32) -> void {
         this.handle = cpx_adam_create(params, lr, b1, b2)
     }
 

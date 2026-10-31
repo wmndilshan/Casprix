@@ -7,7 +7,7 @@
 #ifndef NN_RESNET_H
 #define NN_RESNET_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include "../layers/conv2d.h"
 #include "../layers/batchnorm.h"
 

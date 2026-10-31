@@ -43,6 +43,8 @@ RANLIB  = ranlib
 # ============================================================================
 
 CFLAGS_BASE = -Wall -Wextra -Wno-unused-parameter -std=c11 -D_POSIX_C_SOURCE=200809L
+CASPRIX_VERSION := $(shell sed -n '1p' VERSION)
+CFLAGS_BASE += -DCASPRIX_VERSION=\"$(CASPRIX_VERSION)\"
 
 ifdef DEBUG
     CFLAGS = $(CFLAGS_BASE) -g -O0 -DDEBUG
@@ -55,7 +57,7 @@ HAS_AVX2 ?= 1
 ifeq ($(HAS_AVX2),1)
     CFLAGS       += -mavx2 -mfma -DHAS_AVX2
     SIMD_ASM      = $(RUNTIME_DIR)/math/simd_kernels.asm \
-                    $(RUNTIME_DIR)/ai/llm/ops_avx2.asm \
+                    $(RUNTIME_DIR)/ai/kernels/cpu_avx2.asm \
                     $(RUNTIME_DIR)/async/coro_context.asm
     SIMD_OBJ      = $(OBJ_DIR)/simd_math_kernels.o \
                     $(OBJ_DIR)/simd_llm_avx2.o \
@@ -329,7 +331,7 @@ $(OBJ_DIR)/simd_math_kernels.o: $(RUNTIME_DIR)/math/simd_kernels.asm | $(OBJ_DIR
 	@echo "[ASM]  $<"
 	$(ASM) $(ASMFLAGS) $< -o $@
 
-$(OBJ_DIR)/simd_llm_avx2.o: $(RUNTIME_DIR)/ai/llm/ops_avx2.asm | $(OBJ_DIR)
+$(OBJ_DIR)/simd_llm_avx2.o: $(RUNTIME_DIR)/ai/kernels/cpu_avx2.asm | $(OBJ_DIR)
 	@echo "[ASM]  $<"
 	$(ASM) $(ASMFLAGS) $< -o $@
 

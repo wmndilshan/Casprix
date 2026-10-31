@@ -8,7 +8,7 @@
 #ifndef NN_DENSE_H
 #define NN_DENSE_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus

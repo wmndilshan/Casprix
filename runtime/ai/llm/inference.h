@@ -11,7 +11,7 @@
 #ifndef LLM_INFERENCE_H
 #define LLM_INFERENCE_H
 
-#include "tensor.h"
+#include "../core/tensor.h"
 #include <stdint.h>
 #include <stddef.h>
 

@@ -20,10 +20,10 @@ class Vector {
     private size: int;
     
     // Constructor
-    func new(size: int) -> Vector {
+    func Vector(size: int) -> void {
         this.size = size;
         this.handle = nuwan_vector_create(size);
-        return this;
+
     }
     
     // Element access

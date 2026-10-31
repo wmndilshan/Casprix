@@ -18,6 +18,7 @@ void* cpx_tokenizer_create(i32 vocab_size);
 
 // Train tokenizer
 void cpx_tokenizer_train(void* handle, const char* text, i32 min_freq);
+void* cpx_tokenizer_train_new(const char* text, i32 vocab_size, i32 min_freq);
 
 // Encode text (returns array, caller must free)
 i32* cpx_tokenizer_encode(void* handle, const char* text, i32* out_len);
@@ -90,6 +91,7 @@ f32 cpx_cross_entropy_loss(const f32* logits, const i32* targets,
 
 // Create Adam optimizer
 void* cpx_adam_create(i32 num_params, f32 lr, f32 beta1, f32 beta2);
+void* cpx_adam_create_for_model(void* model, f32 lr, f32 beta1, f32 beta2);
 
 // Set optimizer weight decay
 void cpx_adam_set_weight_decay(void* handle, f32 weight_decay);

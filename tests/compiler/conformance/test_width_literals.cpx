@@ -1,0 +1,6 @@
+// Conformance probe: width-explicit numeric literals.
+func main() -> int {
+    let a = 42u64;
+    let b = 1.0f32;
+    return 0;
+}

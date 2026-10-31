@@ -27,6 +27,14 @@ import android.view.ViewGroup;
  */
 public final class CasprixNativeActivity extends NativeActivity {
 
+    /* NativeActivity loads this library internally for ANativeActivity, but
+     * that path does not register the library with this Java class loader on
+     * every Android implementation. Explicit loading makes normal JNI method
+     * resolution reliable; the later NativeActivity load reuses the handle. */
+    static {
+        System.loadLibrary("MainActivity");
+    }
+
     private A11yHostView a11yHost;
 
     @Override

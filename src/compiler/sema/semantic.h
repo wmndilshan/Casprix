@@ -16,6 +16,8 @@ typedef struct {
     MethodSymbol* current_method;  // NULL when not in a method
     int loop_depth;  // Track loop nesting for break/continue validation
     int alloc_scope_depth;  // Track nested alloc { ... } regions
+    char** module_aliases;  // Import aliases available for qualified calls
+    int module_alias_count;
 } SemanticAnalyzer;
 
 void init_semantic_analyzer(SemanticAnalyzer* analyzer);

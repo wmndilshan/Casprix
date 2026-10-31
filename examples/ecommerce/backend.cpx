@@ -1,0 +1,19 @@
+// Casprix entry point for the concurrent store backend implemented on the
+// stabilized runtime/net HTTP server. The C bridge only maps the native HTTP
+// ABI; startup and deployment configuration remain ordinary Casprix code.
+
+extern func ecommerce_backend_run(port: i32, worker_count: i32) -> i32
+
+func main() -> i32 {
+    let port: i32 = 8080
+    let workers: i32 = 0 // runtime selects up to 64 workers from CPU count
+
+    print("Starting Casprix Store API on port 8080")
+    print("GET  /health")
+    print("GET  /api/products")
+    print("GET  /api/cart")
+    print("POST /api/cart?product=1&quantity=2")
+    print("POST /api/orders")
+
+    return ecommerce_backend_run(port, workers)
+}

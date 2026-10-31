@@ -3,8 +3,8 @@
  */
 
 #include "gru.h"
-#include "../activations/activations.h"
-#include "../../llm/ops.h"
+#include "../../ops/activations.h"
+#include "../../kernels/cpu_ops.h"
 #include <stdlib.h>
 
 GRUCell* gru_create(int input_size, int hidden_size) {

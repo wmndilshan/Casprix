@@ -7,7 +7,7 @@
 #ifndef NN_DROPOUT_H
 #define NN_DROPOUT_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus

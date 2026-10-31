@@ -182,6 +182,22 @@ TEST(statistics_tracking) {
     pool_destroy(pool);
 }
 
+// Test 7: Explicit shutdown must drain queued work before workers exit.
+TEST(graceful_shutdown_drains_tasks) {
+    atomic_store(&many_counter, 0);
+    WorkerPool* pool = pool_create(4);
+    for (int i = 0; i < 1000; i++) {
+        assert(pool_submit(pool, counting_task, NULL));
+    }
+    pool_shutdown(pool);
+    PoolStats stats = pool_get_stats(pool);
+    assert(stats.tasks_submitted == 1000);
+    assert(stats.tasks_completed == 1000);
+    assert(atomic_load(&many_counter) == 1000);
+    assert(!pool_submit(pool, noop_task, NULL));
+    pool_destroy(pool);
+}
+
 // --- Test Runner ---
 
 int main(void) {
@@ -195,6 +211,7 @@ int main(void) {
     run_test_nested_task_submission();
     run_test_auto_cpu_detection();
     run_test_statistics_tracking();
+    run_test_graceful_shutdown_drains_tasks();
     
     printf("\n=================================\n");
     printf("Results: %d/%d tests passed\n", test_passed, test_count);

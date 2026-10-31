@@ -36,7 +36,7 @@ class BackendApp {
     route4Path: string;
     route4Handler: string;
 
-    func new(serverPort: int) -> BackendApp {
+    func BackendApp(serverPort: int) -> void {
         this.port = serverPort;
         this.routeCount = 0;
         this.route1Method = "";
@@ -51,7 +51,7 @@ class BackendApp {
         this.route4Method = "";
         this.route4Path = "";
         this.route4Handler = "";
-        return this;
+
     }
 
     func get(path: string, handlerName: string) -> void {

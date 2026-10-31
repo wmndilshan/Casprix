@@ -1,5 +1,5 @@
 /**
- * Casperix Compiler - Escape Analysis Implementation
+ * Casprix Compiler - Escape Analysis Implementation
  *
  * Walks function-level AST to classify each local variable as
  * escaping or non-escaping.  Non-escaping values can be promoted

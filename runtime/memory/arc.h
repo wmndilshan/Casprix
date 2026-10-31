@@ -1,4 +1,4 @@
-// Casperix Runtime - Automatic Reference Counting (ARC)
+// Casprix Runtime - Automatic Reference Counting (ARC)
 // Thread-safe reference counting with weak reference support
 //
 // Object layout: [ArcHeader][user data...]

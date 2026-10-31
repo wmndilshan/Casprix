@@ -1,4 +1,4 @@
-// Casperix Runtime - Work-Stealing Scheduler
+// Casprix Runtime - Work-Stealing Scheduler
 // Multi-threaded task scheduler with work stealing
 //
 // Architecture:

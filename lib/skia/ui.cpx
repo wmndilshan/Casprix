@@ -8,10 +8,9 @@ class Alignment {
     value: i64;
     label: string;
 
-    func new(raw: i64, name: string) -> Alignment {
+    func Alignment(raw: i64, name: string) -> void {
         this.value = raw
         this.label = name
-        return this
     }
 }
 
@@ -19,10 +18,9 @@ class ImageFit {
     value: i64;
     label: string;
 
-    func new(raw: i64, name: string) -> ImageFit {
+    func ImageFit(raw: i64, name: string) -> void {
         this.value = raw
         this.label = name
-        return this
     }
 }
 
@@ -227,7 +225,7 @@ class App {
     root_handle: i64;
     font_handle: i64;
 
-    func new(title: string, width: i64, height: i64) -> void {
+    func App(title: string, width: i64, height: i64) -> void {
         ui_require_non_empty(title, "App title")
         ui_require_positive_i64(width, "App width")
         ui_require_positive_i64(height, "App height")
@@ -317,7 +315,7 @@ class App {
 class Column {
     handle: i64;
 
-    func new(spacing: float) -> void {
+    func Column(spacing: float) -> void {
         ui_require_non_negative(spacing, "Column spacing")
         this.handle = widget_column(spacing)
         ui_require_state(this.handle != 0, "Failed to create Column")
@@ -393,7 +391,7 @@ class Column {
 class Row {
     handle: i64;
 
-    func new(spacing: float) -> void {
+    func Row(spacing: float) -> void {
         ui_require_non_negative(spacing, "Row spacing")
         this.handle = widget_row(spacing)
         ui_require_state(this.handle != 0, "Failed to create Row")
@@ -468,7 +466,7 @@ class Row {
 class Stack {
     handle: i64;
 
-    func new() -> void {
+    func Stack() -> void {
         this.handle = widget_stack()
         ui_require_state(this.handle != 0, "Failed to create Stack")
     }
@@ -541,7 +539,7 @@ class Stack {
 class Text {
     handle: i64;
 
-    func new(content: string, font: i64, color: i64) -> void {
+    func Text(content: string, font: i64, color: i64) -> void {
         ui_require_handle(font, "Text font")
         this.handle = widget_text(content, font, color)
         ui_require_state(this.handle != 0, "Failed to create Text node")
@@ -590,7 +588,7 @@ class Text {
 class Button {
     handle: i64;
 
-    func new(label: string, font: i64) -> void {
+    func Button(label: string, font: i64) -> void {
         ui_require_handle(font, "Button font")
         this.handle = widget_button(label, font, 0, 0)
         ui_require_state(this.handle != 0, "Failed to create Button")
@@ -661,7 +659,7 @@ class Button {
 class TextInput {
     handle: i64;
 
-    func new(placeholder: string, font: i64) -> void {
+    func TextInput(placeholder: string, font: i64) -> void {
         ui_require_handle(font, "TextInput font")
         this.handle = widget_text_input(placeholder, font)
         ui_require_state(this.handle != 0, "Failed to create TextInput")
@@ -763,7 +761,7 @@ class TextInput {
 class Checkbox {
     handle: i64;
 
-    func new(label: string, font: i64, initial: bool) -> void {
+    func Checkbox(label: string, font: i64, initial: bool) -> void {
         ui_require_handle(font, "Checkbox font")
         this.handle = widget_checkbox(label, font, ui_bool_to_i64(initial))
         ui_require_state(this.handle != 0, "Failed to create Checkbox")
@@ -798,7 +796,7 @@ class Slider {
     min_value: float;
     max_value: float;
 
-    func new(min_val: float, max_val: float, initial: float) -> void {
+    func Slider(min_val: float, max_val: float, initial: float) -> void {
         ui_require_range(min_val, max_val, "Slider range")
         ui_require_value_in_range(initial, min_val, max_val, "Slider initial value")
         this.min_value = min_val
@@ -835,7 +833,7 @@ class Slider {
 class ImageView {
     handle: i64;
 
-    func new(path: string, fit: ImageFit) -> void {
+    func ImageView(path: string, fit: ImageFit) -> void {
         ui_require_non_empty(path, "Image path")
         this.handle = widget_image(path, fit.value)
         ui_require_state(this.handle != 0, "Failed to create ImageView")
@@ -852,7 +850,7 @@ class ImageView {
 class Separator {
     handle: i64;
 
-    func new(horizontal: bool, color: i64, thickness: float) -> void {
+    func Separator(horizontal: bool, color: i64, thickness: float) -> void {
         ui_require_non_negative(thickness, "Separator thickness")
         this.handle = widget_separator(ui_bool_to_i64(horizontal), color, thickness)
         ui_require_state(this.handle != 0, "Failed to create Separator")
@@ -869,7 +867,7 @@ class Separator {
 class Spacer {
     handle: i64;
 
-    func new(grow: float) -> void {
+    func Spacer(grow: float) -> void {
         ui_require_non_negative(grow, "Spacer grow")
         this.handle = widget_spacer(grow)
         ui_require_state(this.handle != 0, "Failed to create Spacer")
@@ -890,7 +888,7 @@ class Spacer {
 class Card {
     handle: i64;
 
-    func new() -> void {
+    func Card() -> void {
         this.handle = widget_container()
         ui_require_state(this.handle != 0, "Failed to create Card")
         sg_style_card(this.handle)
@@ -960,7 +958,7 @@ class Card {
 class ScrollView {
     handle: i64;
 
-    func new() -> void {
+    func ScrollView() -> void {
         this.handle = widget_scroll_view()
         ui_require_state(this.handle != 0, "Failed to create ScrollView")
     }
@@ -1018,7 +1016,7 @@ class ProgressBar {
     min_value: float;
     max_value: float;
 
-    func new(min_val: float, max_val: float, value: float) -> void {
+    func ProgressBar(min_val: float, max_val: float, value: float) -> void {
         ui_require_range(min_val, max_val, "ProgressBar range")
         ui_require_value_in_range(value, min_val, max_val, "ProgressBar initial value")
         this.min_value = min_val
@@ -1059,12 +1057,12 @@ class TabPanel {
     handle: i64;
     tab_count: i64;
 
-    func new() -> void {
+    func TabPanel() -> void {
         this.handle = 0
         this.tab_count = 0
     }
 
-    func new2(l1: string, c1: i64, l2: string, c2: i64) -> void {
+    func TabPanel(l1: string, c1: i64, l2: string, c2: i64) -> void {
         ui_require_non_empty(l1, "Tab 1 label")
         ui_require_non_empty(l2, "Tab 2 label")
         ui_require_handle(c1, "Tab 1 content")
@@ -1074,7 +1072,7 @@ class TabPanel {
         ui_require_state(this.handle != 0, "Failed to create TabPanel")
     }
 
-    func new3(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64) -> void {
+    func TabPanel(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64) -> void {
         ui_require_non_empty(l1, "Tab 1 label")
         ui_require_non_empty(l2, "Tab 2 label")
         ui_require_non_empty(l3, "Tab 3 label")
@@ -1086,7 +1084,7 @@ class TabPanel {
         ui_require_state(this.handle != 0, "Failed to create TabPanel")
     }
 
-    func new4(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64, l4: string, c4: i64) -> void {
+    func TabPanel(l1: string, c1: i64, l2: string, c2: i64, l3: string, c3: i64, l4: string, c4: i64) -> void {
         ui_require_non_empty(l1, "Tab 1 label")
         ui_require_non_empty(l2, "Tab 2 label")
         ui_require_non_empty(l3, "Tab 3 label")

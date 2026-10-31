@@ -8,7 +8,7 @@
 #ifndef LLM_ATTENTION_H
 #define LLM_ATTENTION_H
 
-#include "tensor.h"
+#include "../core/tensor.h"
 
 /* Flash Attention 2: tiled attention, avoids materializing NxN score matrix.
  * Q/K/V: [batch, heads, seq_len, head_dim] — row-major

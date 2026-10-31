@@ -4,7 +4,8 @@
 
 #include "bindings.h"
 #include "training.h"
-#include "backward.h"
+#include "checkpoint.h"
+#include "../kernels/grad_kernels.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -16,11 +17,22 @@ void* cpx_tokenizer_create(i32 vocab_size) {
 }
 
 void cpx_tokenizer_train(void* handle, const char* text, i32 min_freq) {
-    // For now, simplified training
-    // Full implementation would call tokenizer_train
-    Tokenizer* tok = (Tokenizer*)handle;
-    (void)tok;
-    // Training logic already in tokenizer_train
+    /* Kept for ABI compatibility. Training replaces the merge table, so new
+       code should use cpx_tokenizer_train_new and own the returned handle. */
+    Tokenizer* old = (Tokenizer*)handle;
+    if (!old || !text) return;
+    Tokenizer* trained = tokenizer_train(text, old->vocab->size + old->num_merges, min_freq);
+    if (!trained) return;
+    free(old->merges);
+    old->merges = trained->merges;
+    old->num_merges = trained->num_merges;
+    old->vocab->size = trained->vocab->size;
+    trained->merges = NULL;
+    tokenizer_destroy(trained);
+}
+
+void* cpx_tokenizer_train_new(const char* text, i32 vocab_size, i32 min_freq) {
+    return (void*)tokenizer_train(text, vocab_size, min_freq);
 }
 
 i32* cpx_tokenizer_encode(void* handle, const char* text, i32* out_len) {
@@ -128,14 +140,11 @@ f32* cpx_transformer_forward(void* model, const i32* token_ids,
 }
 
 bool cpx_transformer_save(void* model, const char* path) {
-    // TODO: Implement checkpoint saving
-    // Would save all weights to file
-    return false;
+    return checkpoint_save_weights_only((TransformerModel*)model, path);
 }
 
 void* cpx_transformer_load(const char* path) {
-    // TODO: Implement checkpoint loading
-    return NULL;
+    return (void*)checkpoint_load(path, NULL);
 }
 
 void cpx_transformer_destroy(void* model) {
@@ -156,29 +165,67 @@ void* cpx_adam_create(i32 num_params, f32 lr, f32 beta1, f32 beta2) {
     return (void*)adam_create(num_params, lr, beta1, beta2);
 }
 
+static i32 parameter_tensor_count(const TransformerModel* model) {
+    return model ? 2 + model->num_layers * 12 + 3 : 0;
+}
+
+static bool collect_model_parameters(TransformerModel* model, Tensor** params, i32 count) {
+    if (!model || !params || count != parameter_tensor_count(model)) return false;
+    i32 index = 0;
+    params[index++] = model->embeddings->token_embedding;
+    params[index++] = model->embeddings->pos_embedding;
+    for (i32 i = 0; i < model->num_layers; ++i) {
+        TransformerBlock* block = model->blocks[i];
+        params[index++] = block->attn->Wq; params[index++] = block->attn->Wk;
+        params[index++] = block->attn->Wv; params[index++] = block->attn->Wo;
+        params[index++] = block->ffn->W1; params[index++] = block->ffn->b1;
+        params[index++] = block->ffn->W2; params[index++] = block->ffn->b2;
+        params[index++] = block->ln1_gamma; params[index++] = block->ln1_beta;
+        params[index++] = block->ln2_gamma; params[index++] = block->ln2_beta;
+    }
+    params[index++] = model->ln_final_gamma;
+    params[index++] = model->ln_final_beta;
+    params[index++] = model->lm_head;
+    return index == count;
+}
+
+void* cpx_adam_create_for_model(void* model_handle, f32 lr, f32 beta1, f32 beta2) {
+    TransformerModel* model = (TransformerModel*)model_handle;
+    i32 count = parameter_tensor_count(model);
+    if (!model || count <= 0) return NULL;
+    Tensor** params = (Tensor**)calloc((size_t)count, sizeof(Tensor*));
+    AdamOptimizer* optimizer = adam_create(count, lr, beta1, beta2);
+    if (!params || !optimizer || !collect_model_parameters(model, params, count) ||
+        ai_optimizer_init(optimizer, params) != AI_TRAIN_OK) {
+        free(params); adam_destroy(optimizer); return NULL;
+    }
+    free(params);
+    return optimizer;
+}
+
 void cpx_adam_set_weight_decay(void* handle, f32 weight_decay) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
-    opt->weight_decay = weight_decay;
+    opt->config.weight_decay = weight_decay;
 }
 
 void cpx_adam_set_epsilon(void* handle, f32 epsilon) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
-    opt->epsilon = epsilon;
+    opt->config.epsilon = epsilon;
 }
 
 void cpx_adam_set_lr(void* handle, f32 lr) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
-    opt->learning_rate = lr;
+    opt->config.learning_rate = lr;
 }
 
 f32 cpx_adam_get_lr(void* handle) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
-    return opt->learning_rate;
+    return opt->config.learning_rate;
 }
 
 i32 cpx_adam_get_step(void* handle) {
     AdamOptimizer* opt = (AdamOptimizer*)handle;
-    return opt->t;
+    return opt->step;
 }
 
 void cpx_adam_destroy(void* handle) {
@@ -193,12 +240,41 @@ f32 cpx_train_step(void* model_handle, void* opt_handle, const i32* tokens,
     TransformerModel* model = (TransformerModel*)model_handle;
     AdamOptimizer* opt = (AdamOptimizer*)opt_handle;
 
+    if (!model || !opt || !tokens || !targets || batch <= 0 || seq_len <= 0)
+        return NAN;
+    i32 num_params = parameter_tensor_count(model);
+    if (opt->parameter_count != num_params) return NAN;
+
+    Tensor** params = (Tensor**)calloc((size_t)num_params, sizeof(Tensor*));
+    Tensor** param_grads = (Tensor**)calloc((size_t)num_params, sizeof(Tensor*));
+    if (!params || !param_grads || !collect_model_parameters(model, params, num_params)) {
+        free(params); free(param_grads); return NAN;
+    }
+    size_t parameter_elements = 0;
+    for (i32 i = 0; i < num_params; ++i) {
+        parameter_elements += params[i]->size;
+        param_grads[i] = tensor_create(params[i]->ndim, params[i]->shape);
+        if (!param_grads[i]) {
+            for (i32 j = 0; j <= i; ++j) tensor_destroy(param_grads[j]);
+            free(params); free(param_grads); return NAN;
+        }
+    }
+    if (!opt->first[0] && ai_optimizer_init(opt, params) != AI_TRAIN_OK) {
+        for (i32 i = 0; i < num_params; ++i) tensor_destroy(param_grads[i]);
+        free(params); free(param_grads); return NAN;
+    }
+
     // Allocate memory pools
     i32 vocab_size = model->vocab_size;
     i32 hidden_dim = model->hidden_dim;
-    size_t act_size = (size_t)batch * seq_len * hidden_dim * 8;  // Generous activation space
-    size_t grad_size = act_size;
+    size_t positions = (size_t)batch * (size_t)seq_len;
+    size_t act_size = (positions * ((size_t)vocab_size + (size_t)hidden_dim * 32u) + 262144u) * sizeof(f32);
+    size_t grad_size = (parameter_elements * 4u + positions * (size_t)hidden_dim * 48u + 262144u) * sizeof(f32);
     MemoryPools* mem = mempool_create(0, act_size, grad_size);
+    if (!mem) {
+        for (i32 i = 0; i < num_params; ++i) tensor_destroy(param_grads[i]);
+        free(params); free(param_grads); return NAN;
+    }
 
     // Allocate logits tensor
     Tensor* logits = tensor_arena_alloc_tensor(mem->activations, 3,
@@ -211,19 +287,13 @@ f32 cpx_train_step(void* model_handle, void* opt_handle, const i32* tokens,
     f32 loss = cross_entropy_loss(logits->data, targets, batch * seq_len, vocab_size);
 
     // Backward pass
-    i32 num_params = opt->num_params;
-    Tensor** param_grads = (Tensor**)calloc(num_params, sizeof(Tensor*));
-    transformer_backward(model, logits, targets, batch, seq_len, param_grads, mem);
-
-    // Collect parameter tensors from model
-    // This is a simplified version - full implementation would enumerate all params
-    Tensor** params = (Tensor**)calloc(num_params, sizeof(Tensor*));
-    // TODO: Enumerate model parameters into params array
+    transformer_backward(model, logits, tokens, targets, batch, seq_len, param_grads, mem);
 
     // Optimizer step
-    adam_step(opt, params, param_grads);
+    if (ai_optimizer_step(opt, params, param_grads) != AI_TRAIN_OK) loss = NAN;
 
     // Cleanup
+    for (i32 i = 0; i < num_params; ++i) tensor_destroy(param_grads[i]);
     free(params);
     free(param_grads);
     mempool_destroy(mem);
@@ -237,7 +307,8 @@ f32 cpx_eval_step(void* model_handle, const i32* tokens, const i32* targets,
     i32 vocab_size = model->vocab_size;
     i32 hidden_dim = model->hidden_dim;
 
-    size_t act_size = (size_t)batch * seq_len * hidden_dim * 4;
+    size_t positions = (size_t)batch * (size_t)seq_len;
+    size_t act_size = (positions * ((size_t)vocab_size + (size_t)hidden_dim * 24u) + 262144u) * sizeof(f32);
     MemoryPools* mem = mempool_create(0, act_size, 0);
 
     Tensor* logits = tensor_arena_alloc_tensor(mem->activations, 3,

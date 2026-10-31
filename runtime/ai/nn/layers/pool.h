@@ -5,7 +5,7 @@
 #ifndef NN_POOL_H
 #define NN_POOL_H
 
-#include "../../llm/tensor.h"
+#include "../../core/tensor.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,9 +29,9 @@ typedef struct {
 /**
  * Create pooling layer
  */
-PoolLayer* pool_create(PoolType type, int kernel_h, int kernel_w,
-                       int stride_h, int stride_w,
-                       int pad_h, int pad_w);
+PoolLayer* pool_layer_create(PoolType type, int kernel_h, int kernel_w,
+                             int stride_h, int stride_w,
+                             int pad_h, int pad_w);
 
 /**
  * Forward pass
@@ -48,7 +48,7 @@ void pool_backward(PoolLayer* layer, const Tensor* grad_output, Tensor* grad_inp
 /**
  * Free layer
  */
-void pool_free(Pool Layer* layer);
+void pool_free(PoolLayer* layer);
 
 /**
  * Calculate output size

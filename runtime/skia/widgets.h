@@ -1,5 +1,5 @@
 /*
- * Core Widgets — Pre-built UI components for Casperix UI
+ * Core Widgets — Pre-built UI components for Casprix UI
  *
  * Widgets are factory functions that create configured SGNodes with
  * event handlers for common interactive elements: buttons, text inputs,
@@ -189,7 +189,7 @@ void widget_text_input_set_error(SGNode* node, int has_error);
 int  widget_text_input_has_error(SGNode* node);
 
 /* ---- Field/Form validation-rule enum -----------------------------------
- * Casperix cannot yet pass a capturing closure (or a bare function name) as a
+ * Casprix cannot yet pass a capturing closure (or a bare function name) as a
  * value, so the .cpx Field/Form layer selects validation behaviour with one of
  * these rule codes plus an integer parameter, rather than a validator callback.
  * widget_text_validate() returns 1 when `text` satisfies (rule, param). */
