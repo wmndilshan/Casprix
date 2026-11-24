@@ -273,10 +273,10 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
     int reg_count = func->next_value_id > 0 ? (int)func->next_value_id : 1;
     if (reg_count > CVM_MAX_REGS) reg_count = CVM_MAX_REGS;
 
-    size_t reg_bytes = (size_t)reg_count * sizeof(CvmReg);
     /* Keep register file cacheline-aligned to reduce split-line slot accesses. */
     CvmReg* regs = NULL;
 #if defined(_ISOC11_SOURCE)
+    size_t reg_bytes = (size_t)reg_count * sizeof(CvmReg);
     size_t aligned_size = (reg_bytes + 63u) & ~(size_t)63u;
     regs = (CvmReg*)aligned_alloc(64u, aligned_size);
     if (regs) memset(regs, 0, aligned_size);
@@ -1174,18 +1174,27 @@ static void cvm_heap_object_untrack(CvmState* vm, void* obj) {
     }
 }
 
-static void cvm_arc_release_managed(CvmState* vm, void* obj) {
-    if (!obj) return;
-    /* Only untrack when the object is actually destroyed. A non-final
-     * release (strong count remains > 0) must leave tracking intact so
-     * remaining owners and emergency VM teardown stay consistent. */
-    if (!arc_release_survived(obj)) {
-        cvm_heap_object_untrack(vm, obj);
+static void cvm_live_alloc_untrack(CvmState* vm, void* obj) {
+    if (!vm || !obj) return;
+    for (int i = 0; i < vm->live_alloc_count; i++) {
+        if (vm->live_allocs[i] == obj) {
+            vm->live_allocs[i] = vm->live_allocs[vm->live_alloc_count - 1];
+            vm->live_alloc_count--;
+            return;
+        }
     }
 }
 
-/* Class layout used by CVM-managed objects: word 0 holds this descriptor
- * pointer (type cookie); managed fields are released/scanned by offset. */
+static void cvm_arc_release_managed(CvmState* vm, void* obj) {
+    if (!obj) return;
+    /* MIR ARC_RELEASE / DROP accounts for one ownership action. Always remove
+     * the allocation from emergency-cleanup tracking — even if other strong
+     * owners remain — so VM shutdown cannot release foreign references. */
+    (void)arc_release_survived(obj);
+    cvm_heap_object_untrack(vm, obj);
+}
+
+/* Shared per-class layout (managed field offsets). */
 typedef struct CvmClassInfo {
     const char* name;
     int         size;
@@ -1194,25 +1203,54 @@ typedef struct CvmClassInfo {
     struct CvmClassInfo* next;
 } CvmClassInfo;
 
+/* Per-object header stored at offset 0. Carries owning VM for nested
+ * destruction without a global active-VM pointer. */
+typedef struct CvmObjHeader {
+    CvmClassInfo* info;
+    CvmState*     owner_vm;
+} CvmObjHeader;
+
 static CvmClassInfo* g_cvm_class_infos = NULL;
-/* Active VM for destructor untracking of nested managed fields. */
-static CvmState* g_cvm_active = NULL;
+
+static CvmClassInfo* cvm_obj_info(void* obj) {
+    CvmObjHeader* hdr;
+    if (!obj) return NULL;
+    hdr = *(CvmObjHeader**)obj;
+    return hdr ? hdr->info : NULL;
+}
 
 static void cvm_class_dtor(void* obj) {
+    CvmObjHeader* hdr;
     CvmClassInfo* info;
+    CvmState* owner_vm;
     int i;
+    bool cycle_finalize;
     if (!obj) return;
-    info = *(CvmClassInfo**)obj;
+    cycle_finalize = arc_is_cycle_finalizing(obj);
+    hdr = *(CvmObjHeader**)obj;
+    if (!hdr) return;
+    info = hdr->info;
+    owner_vm = hdr->owner_vm;
+    hdr->owner_vm = NULL;
+    *(CvmObjHeader**)obj = NULL;
+    if (owner_vm) {
+        cvm_live_alloc_untrack(owner_vm, obj);
+        cvm_heap_object_untrack(owner_vm, obj);
+    }
+    free(hdr);
     if (!info) return;
     for (i = 0; i < info->n_managed; i++) {
         void** slot = (void**)((char*)obj + info->field_offsets[i]);
         void* child = *slot;
         *slot = NULL;
         if (!child) continue;
-        /* Nested release must update heap tracking when the child dies. */
-        if (!arc_release_survived(child)) {
-            if (g_cvm_active) cvm_heap_object_untrack(g_cvm_active, child);
-        }
+        /* Cycle collection tears down the white set itself; releasing
+         * already-collected children here is a use-after-free. */
+        if (cycle_finalize) continue;
+        (void)arc_release_survived(child);
+        /* Child may still be residual-tracked; drop that entry so VM
+         * emergency reclaim cannot release a foreign/already-released ref. */
+        if (owner_vm) cvm_heap_object_untrack(owner_vm, child);
     }
 }
 
@@ -1220,7 +1258,7 @@ static void cvm_class_scan(void* obj, void (*visit)(void* field_ptr)) {
     CvmClassInfo* info;
     int i;
     if (!obj || !visit) return;
-    info = *(CvmClassInfo**)obj;
+    info = cvm_obj_info(obj);
     if (!info) return;
     for (i = 0; i < info->n_managed; i++) {
         void* child = *(void**)((char*)obj + info->field_offsets[i]);
@@ -1239,17 +1277,35 @@ static CvmClassInfo* cvm_class_info_get(const char* name, int size,
     }
     info = (CvmClassInfo*)calloc(1, sizeof(CvmClassInfo));
     if (!info) return NULL;
-    info->name = name;
-    info->size = size;
-    info->n_managed = n_managed > 0 ? n_managed : 0;
-    if (info->n_managed > 0 && offsets) {
-        info->field_offsets = (int*)malloc((size_t)info->n_managed * sizeof(int));
-        if (!info->field_offsets) {
+    {
+        const char* src = name ? name : "$anon";
+        size_t nlen = strlen(src) + 1;
+        char* copy = (char*)malloc(nlen);
+        if (!copy) {
             free(info);
             return NULL;
         }
-        memcpy(info->field_offsets, offsets,
-               (size_t)info->n_managed * sizeof(int));
+        memcpy(copy, src, nlen);
+        info->name = copy;
+    }
+    info->size = size;
+    info->n_managed = n_managed > 0 ? n_managed : 0;
+    if (info->n_managed > 0 && offsets) {
+        int kept = 0;
+        info->field_offsets = (int*)malloc((size_t)info->n_managed * sizeof(int));
+        if (!info->field_offsets) {
+            free((void*)info->name);
+            free(info);
+            return NULL;
+        }
+        /* Reject out-of-bounds / header-overlapping field descriptors. */
+        for (int i = 0; i < info->n_managed; i++) {
+            int off = offsets[i];
+            if (off < (int)sizeof(void*) || off + (int)sizeof(void*) > size)
+                continue;
+            info->field_offsets[kept++] = off;
+        }
+        info->n_managed = kept;
     }
     info->next = g_cvm_class_infos;
     g_cvm_class_infos = info;
@@ -1269,15 +1325,21 @@ static void* cvm_heap_object_alloc_ex(CvmState* vm, size_t size,
     if (info && info->n_managed > 0) {
         mem = arc_alloc_full(size, cvm_class_dtor, cvm_class_scan);
     } else if (info) {
-        /* Still install type cookie; no child refs to release. */
-        mem = arc_alloc_full(size, NULL, NULL);
+        mem = arc_alloc_full(size, cvm_class_dtor, NULL);
     } else {
         mem = arc_alloc(size);
     }
     if (!mem) return NULL;
 
     if (info) {
-        *(CvmClassInfo**)mem = info;
+        CvmObjHeader* hdr = (CvmObjHeader*)calloc(1, sizeof(CvmObjHeader));
+        if (!hdr) {
+            arc_release(mem);
+            return NULL;
+        }
+        hdr->info = info;
+        hdr->owner_vm = vm;
+        *(CvmObjHeader**)mem = hdr;
     }
 
     if (vm->heap_obj_count >= vm->heap_obj_cap) {
@@ -1292,49 +1354,61 @@ static void* cvm_heap_object_alloc_ex(CvmState* vm, size_t size,
         vm->heap_obj_cap = new_cap;
     }
     vm->heap_objs[vm->heap_obj_count++] = mem;
+
+    if (vm->live_alloc_count >= vm->live_alloc_cap) {
+        int new_cap = vm->live_alloc_cap ? vm->live_alloc_cap * 2 : 16;
+        void** grown = (void**)realloc(vm->live_allocs,
+                                      (size_t)new_cap * sizeof(void*));
+        if (!grown) {
+            cvm_heap_object_untrack(vm, mem);
+            arc_release(mem);
+            return NULL;
+        }
+        vm->live_allocs = grown;
+        vm->live_alloc_cap = new_cap;
+    }
+    vm->live_allocs[vm->live_alloc_count++] = mem;
     return mem;
 }
 
 void cvm_state_destroy(CvmState* vm) {
-    CvmState* prev_active;
     if (!vm) return;
-    prev_active = g_cvm_active;
-    g_cvm_active = vm;
-    /* Emergency reclaim for objects still tracked (missing MIR drops).
-     * Drain remaining strong refs; frames are already gone. */
+    /* Sever owner_vm back-pointers before any reclaim so destructors that
+     * run after this VM is freed (external owners) never touch it. */
+    for (int i = 0; i < vm->live_alloc_count; i++) {
+        void* obj = vm->live_allocs[i];
+        CvmObjHeader* hdr;
+        if (!obj) continue;
+        hdr = *(CvmObjHeader**)obj;
+        if (hdr && hdr->owner_vm == vm)
+            hdr->owner_vm = NULL;
+    }
+    /* Emergency reclaim: one residual ownership per MIR-unaccounted object. */
     while (vm->heap_obj_count > 0) {
         void* obj = vm->heap_objs[vm->heap_obj_count - 1];
         vm->heap_obj_count--;
         if (!obj) continue;
-        for (int n = 0; n < 64; n++) {
-            if (!arc_release_survived(obj)) break;
-        }
+        (void)arc_release_survived(obj);
     }
-    g_cvm_active = prev_active;
     free(vm->heap_objs);
+    free(vm->live_allocs);
     free(vm->globals);
     free(vm->profiles);
     free(vm);
 }
 
 int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
-    CvmState* prev_active;
     MirFunction* func = mir_module_find_function(vm->module, entry);
     if (!func) {
         cvm_diag(vm, "[CVM] entry function '%s' not found\n", entry);
         return -1;
     }
-    prev_active = g_cvm_active;
-    g_cvm_active = vm;
     CvmReg reg_args[64];
     int cnt = n_args < 64 ? n_args : 64;
     for (int i = 0; i < cnt; i++) reg_args[i] = (CvmReg)args[i];
 
     CvmProfile* prof = cvm_get_profile(vm, func);
-    if (!prof) {
-        g_cvm_active = prev_active;
-        return 0;
-    }
+    if (!prof) return 0;
     prof->call_count++;
 
     /* Tiering check — same logic as cvm_dispatch_call */
@@ -1344,7 +1418,6 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
         memcpy(jit_regs, reg_args, (size_t)cnt * sizeof(CvmReg));
         if (vm->jit) cjb_call(vm->jit, prof, jit_regs, cnt);
         else prof->native_fn(jit_regs, cnt);
-        g_cvm_active = prev_active;
         return (int64_t)jit_regs[0];
     }
     if (prof->tier == CVM_TIER_INTERPRET && vm->jit &&
@@ -1357,9 +1430,7 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
         }
     }
 
-    CvmReg ret = cvm_exec_function(vm, func, reg_args, cnt);
-    g_cvm_active = prev_active;
-    return (int64_t)ret;
+    return (int64_t)cvm_exec_function(vm, func, reg_args, cnt);
 }
 
 CvmReg cvm_call_function(CvmState* vm, MirFunction* func,

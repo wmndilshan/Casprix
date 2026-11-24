@@ -36,15 +36,17 @@ static void test_node_destructor(void* obj) {
     TestNode* node = (TestNode*)obj;
 
     g_destructor_calls++;
-    if (node->strong_ref) {
+    /* Cycle finalization tears down the white set; do not release children. */
+    if (!arc_is_cycle_finalizing(obj) && node->strong_ref) {
         arc_release(node->strong_ref);
+        node->strong_ref = NULL;
+    } else {
         node->strong_ref = NULL;
     }
     if (node->has_weak_ref) {
         arc_weak_release(&node->weak_ref);
         node->has_weak_ref = false;
     }
-    arc_release(obj);
 }
 
 static void node_set_strong(TestNode* from, TestNode* to) {

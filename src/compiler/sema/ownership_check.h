@@ -99,12 +99,11 @@ void own_state_snapshot(OwnershipChecker* checker, OwnStateSnapshot* out);
 /* Replace the checker's current move state with a copy of `snap`. */
 void own_state_restore(OwnershipChecker* checker, const OwnStateSnapshot* snap);
 
-/* dst := intersection(dst, src) — a variable stays MOVED only if it is moved
- * in BOTH. Used to merge sibling branches at a join point. */
+/* dst := intersection(dst, src) — moved only if moved in BOTH (definitely moved). */
 void own_state_merge_intersect(OwnStateSnapshot* dst, const OwnStateSnapshot* src);
 
-/* dst := union(dst, src) — a variable is MOVED if moved in EITHER. Used to fold
- * a loop back-edge into the loop-head state. */
+/* dst := union(dst, src) — moved if moved in EITHER (possibly moved).
+ * Used at branch joins for use-after-move safety and for loop back-edges. */
 void own_state_merge_union(OwnStateSnapshot* dst, const OwnStateSnapshot* src);
 
 /* out := deep copy of src (out must be uninitialised or already freed). */
@@ -128,6 +127,9 @@ bool check_ownership_valid(OwnershipChecker* checker, const char* var_name, int 
 
 // Mark a variable as moved
 void mark_moved(OwnershipChecker* checker, const char* var_name, int line);
+
+/* Clear move state after reinitialization of a binding. */
+void mark_unmoved(OwnershipChecker* checker, const char* var_name);
 
 // Add immutable borrow
 bool add_borrow(OwnershipChecker* checker, const char* var_name, int line);

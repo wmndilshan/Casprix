@@ -321,6 +321,17 @@ void mark_moved(OwnershipChecker* checker, const char* var_name, int line) {
     CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC, "Marked '%s' as moved at line %d", var_name, line);
 }
 
+void mark_unmoved(OwnershipChecker* checker, const char* var_name) {
+    Symbol* sym;
+    OwnershipInfo* info;
+    if (!checker || !var_name) return;
+    sym = lookup_symbol(checker->analyzer->symbols, var_name);
+    if (!sym) return;
+    move_set(&checker->move_state, sym, false, 0);
+    info = get_ownership_info(sym);
+    if (info) info->move_location = 0;
+}
+
 bool add_borrow(OwnershipChecker* checker, const char* var_name, int line) {
     if (checker->in_unsafe_block) {
         return true;
