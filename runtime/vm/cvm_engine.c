@@ -42,6 +42,7 @@
 #include "jit_bridge.h"
 #include "../io/direct_io.h"
 #include "../io/fast_format.h"
+#include "../memory/arc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -183,8 +184,10 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
                                 const char* func_name,
                                 MirValueId* arg_ids, int n_args);
 
-/* Forward-declare VM-lifetime heap object allocator (MIR_OBJ_ALLOC) */
+/* ARC-backed object allocator for MIR_OBJ_ALLOC (strong count starts at 1). */
 static void* cvm_heap_object_alloc(CvmState* vm, size_t size);
+static void cvm_heap_object_untrack(CvmState* vm, void* obj);
+static void cvm_arc_release_managed(CvmState* vm, void* obj);
 
 static CvmReg* cvm_global_addr(CvmState* vm, const char* name) {
     if (!vm || !vm->module || !name) return NULL;
@@ -394,7 +397,7 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
         /* [MIR_BORROW]       */ &&op_borrow,
         /* [MIR_BORROW_MUT]   */ &&op_borrow,
         /* [MIR_MOVE]         */ &&op_move,
-        /* [MIR_DROP]         */ &&op_nop,
+        /* [MIR_DROP]         */ &&op_drop,
         /* [MIR_STRUCT_INIT]  */ &&op_nop,
         /* [MIR_EXTRACT]      */ &&op_extract,
         /* [MIR_INSERT]       */ &&op_nop,
@@ -744,12 +747,21 @@ op_move:
     NEXT_INST();
 
 op_arc_retain: {
-    /* ARC retain: call arc_retain if available; otherwise no-op. */
-    /* arc_retain is in runtime/memory/arc.h; link conditionally */
+    void* obj = (void*)(uintptr_t)REG(inst->as.refop.ptr);
+    if (obj) (void)arc_retain(obj);
     NEXT_INST();
 }
 
 op_arc_release: {
+    void* obj = (void*)(uintptr_t)REG(inst->as.refop.ptr);
+    cvm_arc_release_managed(vm, obj);
+    NEXT_INST();
+}
+
+op_drop: {
+    /* DROP of a managed object reference releases one strong ownership. */
+    void* obj = (void*)(uintptr_t)REG(inst->as.refop.ptr);
+    cvm_arc_release_managed(vm, obj);
     NEXT_INST();
 }
 
@@ -881,6 +893,17 @@ done:
                         if ((int)inst->as.transfer.source < frame->reg_count)
                             frame->regs[inst->as.transfer.source] = 0;
                     break;
+                case MIR_ARC_RETAIN: {
+                    void* obj = (void*)(uintptr_t)REG(inst->as.refop.ptr);
+                    if (obj) (void)arc_retain(obj);
+                    break;
+                }
+                case MIR_ARC_RELEASE:
+                case MIR_DROP: {
+                    void* obj = (void*)(uintptr_t)REG(inst->as.refop.ptr);
+                    cvm_arc_release_managed(vm, obj);
+                    break;
+                }
                 case MIR_EXTRACT: {
                     uint8_t* b = (uint8_t*)(uintptr_t)REG(inst->as.field_op.aggregate);
                     if (b) { uint64_t v; memcpy(&v, b + (ptrdiff_t)inst->as.field_op.field_idx*8, 8); SET(inst->result, v); }
@@ -1133,17 +1156,37 @@ CvmState* cvm_state_create(MirModule* module, CvmJitBridge* jit) {
     return vm;
 }
 
-/* Allocate a zero-initialised heap object and keep it alive for the VM's
- * lifetime (see the heap_objs comment in CvmState). Returns NULL on OOM. */
+static void cvm_heap_object_untrack(CvmState* vm, void* obj) {
+    if (!vm || !obj) return;
+    for (int i = 0; i < vm->heap_obj_count; i++) {
+        if (vm->heap_objs[i] == obj) {
+            vm->heap_objs[i] = vm->heap_objs[vm->heap_obj_count - 1];
+            vm->heap_obj_count--;
+            return;
+        }
+    }
+}
+
+static void cvm_arc_release_managed(CvmState* vm, void* obj) {
+    if (!obj) return;
+    /* Untrack before release so a destroying free cannot leave a stale ptr. */
+    cvm_heap_object_untrack(vm, obj);
+    arc_release(obj);
+}
+
+/* Allocate an ARC-managed object (strong count = 1). Track for leak cleanup. */
 static void* cvm_heap_object_alloc(CvmState* vm, size_t size) {
     if (size < 16) size = 16;   /* object header + at least one slot */
-    void* mem = calloc(1, size);
+    void* mem = arc_alloc(size);
     if (!mem) return NULL;
     if (vm->heap_obj_count >= vm->heap_obj_cap) {
         int new_cap = vm->heap_obj_cap ? vm->heap_obj_cap * 2 : 16;
         void** grown = (void**)realloc(vm->heap_objs,
                                       (size_t)new_cap * sizeof(void*));
-        if (!grown) { free(mem); return NULL; }
+        if (!grown) {
+            arc_release(mem);
+            return NULL;
+        }
         vm->heap_objs = grown;
         vm->heap_obj_cap = new_cap;
     }
@@ -1153,7 +1196,12 @@ static void* cvm_heap_object_alloc(CvmState* vm, size_t size) {
 
 void cvm_state_destroy(CvmState* vm) {
     if (!vm) return;
-    for (int i = 0; i < vm->heap_obj_count; i++) free(vm->heap_objs[i]);
+    /* Release any objects that never received a matching MIR drop/release. */
+    while (vm->heap_obj_count > 0) {
+        void* obj = vm->heap_objs[vm->heap_obj_count - 1];
+        vm->heap_obj_count--;
+        if (obj) arc_release(obj);
+    }
     free(vm->heap_objs);
     free(vm->globals);
     free(vm->profiles);

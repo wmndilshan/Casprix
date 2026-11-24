@@ -248,6 +248,7 @@ if(BUILD_COMPILER)
         runtime/vm/jit_bridge.c
         runtime/io/direct_io.c
         runtime/io/fast_format.c
+        runtime/memory/arc.c
     )
 
     add_executable(casprix src/main.c ${CASPRIX_CVM_EXEC_SOURCES})
