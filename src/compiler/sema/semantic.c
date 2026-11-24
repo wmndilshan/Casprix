@@ -48,6 +48,7 @@ void init_semantic_analyzer(SemanticAnalyzer* analyzer) {
     analyzer->alloc_scope_depth = 0;
     analyzer->module_aliases = NULL;
     analyzer->module_alias_count = 0;
+    analyzer->in_lvalue = false;
     init_closure_analyzer();
 
     /* Initialize memory-model analysis subsystems */
@@ -412,6 +413,20 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
                 expr->data_type = TYPE_ERROR;
             }
             break;
+
+        case TOKEN_BITAND:
+        case TOKEN_PIPE:      /* bitwise OR outside lambda context */
+        case TOKEN_BITXOR:
+        case TOKEN_LSHIFT:
+        case TOKEN_RSHIFT:
+            if (type_is_integer(left_type) && type_is_integer(right_type)) {
+                expr->data_type = get_result_type(left_type, right_type);
+            } else {
+                report_type_error(expr->line, expr->column,
+                    "Bitwise operators require integer operands");
+                expr->data_type = TYPE_ERROR;
+            }
+            break;
             
         default:
             expr->data_type = TYPE_ERROR;
@@ -490,6 +505,16 @@ static void analyze_unary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
                 expr->data_type = TYPE_ERROR;
             }
             break;
+
+        case TOKEN_BITNOT:
+            if (type_is_integer(operand_type)) {
+                expr->data_type = operand_type;
+            } else {
+                report_type_error(expr->line, expr->column,
+                    "Bitwise NOT requires an integer operand");
+                expr->data_type = TYPE_ERROR;
+            }
+            break;
             
         default:
             expr->data_type = TYPE_ERROR;
@@ -554,14 +579,17 @@ static void analyze_variable_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         return;
     }
 
-    // Parameters are always initialized (passed by caller)
-    // Only check initialization for variables
-    // NOTE: We're being lenient here to avoid false positives from complex control flow
-    // A full data flow analysis would be needed for perfect tracking
-    if (symbol->kind == SYMBOL_VARIABLE && !symbol->is_initialized) {
-        // For now, we only warn, not error, to allow complex initialization patterns
-        // This is acceptable since uninitialized variables will cause runtime errors anyway
-        // A production compiler would do full dataflow analysis
+    /* Parameters are always initialized (passed by caller). Locals must be
+     * definitely initialized before use as an rvalue. Assignment targets are
+     * exempt — they establish initialization. */
+    if (symbol->kind == SYMBOL_VARIABLE && !symbol->is_initialized &&
+        !analyzer->in_lvalue) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Use of possibly uninitialized variable '%s'", var->name);
+        report_semantic_error(expr->line, expr->column, msg);
+        expr->data_type = TYPE_ERROR;
+        return;
     }
 
     if (symbol->is_closure_value) {
@@ -1850,15 +1878,17 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
         return;
     }
 
-    // Mark as initialized if there's an initializer
-    // For class types, also set the class_info
-    if (decl->initializer && decl->initializer->data_type != TYPE_ERROR) {
+    // Mark as initialized if there's an initializer expression. Even when the
+    // initializer has a type error, the binding was written and must not be
+    // reported as uninitialized (type errors are reported separately).
+    if (decl->initializer) {
         Symbol* symbol = lookup_symbol(analyzer->symbols, decl->name);
         if (symbol) {
             symbol->is_initialized = true;
             symbol->is_mutable = decl->is_mutable;
             symbol->is_const = decl->is_const;
 
+            if (decl->initializer->data_type != TYPE_ERROR) {
             /* Bind loan holder → place so scope exit releases the loan. */
             if (decl->initializer->type == EXPR_UNARY &&
                 decl->initializer->as.unary.operator == TOKEN_BITAND &&
@@ -1953,12 +1983,17 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
                     symbol->class_info = class_sym;
                 }
             }
+            } /* end type-ok wiring */
         }
     } else {
         Symbol* symbol = lookup_symbol(analyzer->symbols, decl->name);
         if (symbol) {
             symbol->is_mutable = decl->is_mutable;
             symbol->is_const = decl->is_const;
+            if (decl->type == TYPE_CLASS && decl->class_name) {
+                ClassSymbol* class_sym = lookup_class(analyzer->symbols, decl->class_name);
+                if (class_sym) symbol->class_info = class_sym;
+            }
         }
     }
 }
@@ -1978,8 +2013,10 @@ static void analyze_assignment_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
         return;
     }
 
-    // Analyze the target expression (l-value)
+    // Analyze the target expression (l-value) — skip definite-init reads.
+    analyzer->in_lvalue = true;
     analyze_expr(analyzer, assign->target);
+    analyzer->in_lvalue = false;
 
     // Analyze the value expression (r-value)
     analyze_expr(analyzer, assign->value);
@@ -2022,6 +2059,8 @@ static void analyze_assignment_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
                 return;
             }
             symbol->is_initialized = true;
+            /* Reinitialization restores ownership after a prior move. */
+            mark_unmoved(&g_ownership_ctx, assign->target->as.variable.name);
 
             if (symbol->type == TYPE_FUNC) {
                 if (assign->value->type == EXPR_LAMBDA) {
@@ -2056,6 +2095,84 @@ static void analyze_print_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     }
     
     analyze_expr(analyzer, print->expression);
+}
+
+/* Capture / restore / merge definite-initialization flags across CFG joins.
+ * A local is usable after a join only if every reaching path initialized it
+ * (or it was already initialized before the split). */
+typedef struct {
+    Symbol** syms;
+    bool*    flags;
+    int      count;
+} InitFlagSnap;
+
+static void init_flags_capture(SymbolTable* table, InitFlagSnap* snap) {
+    snap->count = 0;
+    snap->syms = NULL;
+    snap->flags = NULL;
+    if (!table || table->count <= 0) return;
+    snap->syms = (Symbol**)malloc((size_t)table->count * sizeof(Symbol*));
+    snap->flags = (bool*)malloc((size_t)table->count * sizeof(bool));
+    if (!snap->syms || !snap->flags) {
+        free(snap->syms);
+        free(snap->flags);
+        snap->syms = NULL;
+        snap->flags = NULL;
+        return;
+    }
+    snap->count = table->count;
+    for (int i = 0; i < table->count; i++) {
+        snap->syms[i] = table->symbols[i];
+        snap->flags[i] = table->symbols[i]->is_initialized;
+    }
+}
+
+static void init_flags_restore(const InitFlagSnap* snap) {
+    if (!snap) return;
+    for (int i = 0; i < snap->count; i++) {
+        if (snap->syms[i])
+            snap->syms[i]->is_initialized = snap->flags[i];
+    }
+}
+
+static bool init_flags_lookup(const InitFlagSnap* snap, Symbol* sym) {
+    if (!snap || !sym) return false;
+    for (int i = 0; i < snap->count; i++) {
+        if (snap->syms[i] == sym) return snap->flags[i];
+    }
+    return false;
+}
+
+static void init_flags_merge(const InitFlagSnap* pre,
+                             const InitFlagSnap* then_s,
+                             const InitFlagSnap* else_s,
+                             bool has_else) {
+    /* Walk the pre-split symbol set; locals declared inside a branch are
+     * already out of scope when the join is reached. */
+    for (int i = 0; i < pre->count; i++) {
+        Symbol* sym = pre->syms[i];
+        if (!sym) continue;
+        if (pre->flags[i]) {
+            sym->is_initialized = true;
+            continue;
+        }
+        bool t = init_flags_lookup(then_s, sym);
+        if (!has_else) {
+            sym->is_initialized = false; /* fall-through may skip init */
+        } else {
+            bool e = init_flags_lookup(else_s, sym);
+            sym->is_initialized = t && e;
+        }
+    }
+}
+
+static void init_flags_free(InitFlagSnap* snap) {
+    if (!snap) return;
+    free(snap->syms);
+    free(snap->flags);
+    snap->syms = NULL;
+    snap->flags = NULL;
+    snap->count = 0;
 }
 
 /* Conservative "does control flow definitely leave this statement without
@@ -2242,50 +2359,66 @@ static void analyze_if_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             "If condition must be boolean");
     }
 
-    /* Path-sensitive move analysis: analyse each branch from a common
-     * pre-branch snapshot, then merge so a move on one path does not leak
-     * onto the other or past the join. */
+    /* Path-sensitive move + init analysis: analyse each branch from a common
+     * pre-branch snapshot, then merge so a move/init on one path does not
+     * incorrectly apply to the other. */
     OwnStateSnapshot pre;
     own_state_snapshot(&g_ownership_ctx, &pre);
+    InitFlagSnap init_pre;
+    init_flags_capture(analyzer->symbols, &init_pre);
 
     OwnStateSnapshot then_s;
     if (if_stmt->then_branch) {
         analyze_stmt(analyzer, if_stmt->then_branch);
     }
     own_state_snapshot(&g_ownership_ctx, &then_s);
+    InitFlagSnap init_then;
+    init_flags_capture(analyzer->symbols, &init_then);
 
     own_state_restore(&g_ownership_ctx, &pre);
+    init_flags_restore(&init_pre);
     OwnStateSnapshot else_s;
     if (if_stmt->else_branch) {
         analyze_stmt(analyzer, if_stmt->else_branch);
     }
     own_state_snapshot(&g_ownership_ctx, &else_s);
+    InitFlagSnap init_else;
+    init_flags_capture(analyzer->symbols, &init_else);
 
     bool then_div = branch_diverges(if_stmt->then_branch);
     bool else_div = if_stmt->else_branch ? branch_diverges(if_stmt->else_branch) : false;
 
-    /* Merge: a variable is MOVED after the join only if every path that can
-     * reach the join moved it. A branch that diverges cannot reach the join
-     * and is excluded. With no else branch, the implicit fall-through path is
-     * `pre` (nothing moved there). */
+    /* Move merge (union / possibly-moved). Diverging branches excluded. */
     if (then_div && else_div) {
-        /* Join is unreachable dead code; leave state at the pre-branch value. */
         own_state_restore(&g_ownership_ctx, &pre);
+        init_flags_restore(&init_pre);
     } else if (then_div) {
         own_state_restore(&g_ownership_ctx, &else_s);
+        init_flags_restore(&init_else);
     } else if (else_div) {
         own_state_restore(&g_ownership_ctx, &then_s);
+        init_flags_restore(&init_then);
     } else {
         OwnStateSnapshot merged;
         own_state_copy(&merged, &then_s);
-        own_state_merge_intersect(&merged, &else_s);
+        if (if_stmt->else_branch) {
+            own_state_merge_union(&merged, &else_s);
+        } else {
+            own_state_merge_union(&merged, &pre);
+        }
         own_state_restore(&g_ownership_ctx, &merged);
         own_state_free(&merged);
+        /* Init merge (intersection / definitely-initialized). */
+        init_flags_merge(&init_pre, &init_then, &init_else,
+                         if_stmt->else_branch != NULL);
     }
 
     own_state_free(&pre);
     own_state_free(&then_s);
     own_state_free(&else_s);
+    init_flags_free(&init_pre);
+    init_flags_free(&init_then);
+    init_flags_free(&init_else);
 }
 
 static void analyze_for_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
@@ -2403,6 +2536,10 @@ static void analyze_for_in_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     int scope = 0;
     enter_scope(analyzer->symbols, &scope);
     add_symbol(analyzer->symbols, fi->var_name, SYMBOL_VARIABLE, iter_ty, scope);
+    {
+        Symbol* loop_var = lookup_symbol(analyzer->symbols, fi->var_name);
+        if (loop_var) loop_var->is_initialized = true;
+    }
 
     analyzer->loop_depth++;
     if (fi->body) analyze_loop_body_fixpoint(analyzer, fi->body);
@@ -2420,16 +2557,14 @@ static void analyze_match_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     }
     analyze_expr(analyzer, ms->subject);
 
-    /* Path-sensitive move merge across arms: each arm is analysed from the
-     * same pre-match snapshot; a variable is MOVED after the match only if
-     * every non-diverging arm moved it. We cannot cheaply prove exhaustiveness,
-     * so the implicit "no arm matched" fall-through (pre-match state) is also
-     * folded in — a move confined to one arm never escapes the match. */
+    /* Path-sensitive move merge across arms: each arm starts from the same
+     * pre-match snapshot; after the match a variable is treated as moved if
+     * any reachable arm (or fall-through) may have moved it. */
     OwnStateSnapshot pre;
     own_state_snapshot(&g_ownership_ctx, &pre);
 
-    OwnStateSnapshot acc;       /* accumulated intersection of reachable arms */
-    own_state_copy(&acc, &pre); /* start from fall-through (nothing extra moved) */
+    OwnStateSnapshot acc;       /* accumulated union of reachable arms */
+    own_state_copy(&acc, &pre);
 
     bool has_wildcard = false;
     for (int i = 0; i < ms->arm_count; i++) {
@@ -2453,7 +2588,7 @@ static void analyze_match_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
         if (!branch_diverges(ms->arms[i].body)) {
             OwnStateSnapshot arm_s;
             own_state_snapshot(&g_ownership_ctx, &arm_s);
-            own_state_merge_intersect(&acc, &arm_s);
+            own_state_merge_union(&acc, &arm_s);
             own_state_free(&arm_s);
         }
     }

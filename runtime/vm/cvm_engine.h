@@ -145,14 +145,19 @@ typedef struct {
     /* Optional JIT bridge (NULL → no JIT) */
     CvmJitBridge*   jit;
 
-    /* ARC objects created by MIR_OBJ_ALLOC (user pointers). Tracking records
-     * still-live allocations for emergency reclaim. An entry is removed only
-     * when a release destroys the object (strong count reaches zero), not on
-     * every release — otherwise multi-owner objects would be forgotten while
-     * still alive. */
+    /* Residual VM ownership for OBJ_ALLOC not yet released by MIR.
+     * Removed on MIR ARC_RELEASE/DROP. Destroy releases one strong ref
+     * per remaining entry — never drains foreign owners. */
     void**          heap_objs;
     int             heap_obj_count;
     int             heap_obj_cap;
+
+    /* All CVM allocations still physically alive from this VM. Used only to
+     * invalidate per-object owner_vm back-pointers on VM destroy so nested
+     * destructors cannot touch a freed CvmState. Not an ownership set. */
+    void**          live_allocs;
+    int             live_alloc_count;
+    int             live_alloc_cap;
 
     /* Stable, addressable storage for MIR module globals. Each MIR global is
      * represented by one machine-word slot; aggregate globals hold a pointer

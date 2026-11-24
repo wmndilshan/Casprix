@@ -87,6 +87,15 @@ static void arc_owned_mark_moved(MirLowerCtx* ctx, MirValueId alloca_id) {
     }
 }
 
+static void arc_owned_mark_unmoved(MirLowerCtx* ctx, MirValueId alloca_id) {
+    for (int i = ctx->arc_owned_count - 1; i >= 0; i--) {
+        if (ctx->arc_owned[i].alloca_id == alloca_id) {
+            ctx->arc_owned[i].moved = false;
+            return;
+        }
+    }
+}
+
 static void emit_arc_release_slot(MirLowerCtx* ctx, MirValueId alloca_id) {
     MirType* ptr_ty = mir_type_ptr(ctx->module, mir_type_i8(ctx->module));
     MirValueId val = mir_build_load(&ctx->builder, alloca_id, ptr_ty);
@@ -490,9 +499,13 @@ static MirValueId lower_variable(MirLowerCtx* ctx, Expr* expr) {
     }
 
     if (var->is_move) {
-        /* move semantics — load then invalidate; skip later ARC drop. */
-        MirValueId loaded = mir_build_load(&ctx->builder, alloca_id,
-                                            var_type ? var_type : mir_type_i64(ctx->module));
+        /* Move: transfer ownership and clear the slot so path-agnostic
+         * scope releases become null no-ops (safe across branches). */
+        MirType* load_ty = var_type ? var_type : mir_type_i64(ctx->module);
+        MirValueId loaded = mir_build_load(&ctx->builder, alloca_id, load_ty);
+        MirValueId cleared = mir_build_const_null(&ctx->builder,
+            mir_type_ptr(ctx->module, mir_type_i8(ctx->module)));
+        mir_build_store(&ctx->builder, alloca_id, cleared);
         arc_owned_mark_moved(ctx, alloca_id);
         return mir_build_move(&ctx->builder, loaded);
     }
@@ -1189,6 +1202,11 @@ static void lower_declaration(MirLowerCtx* ctx, Stmt* stmt) {
             } else {
                 mir_build_store(&ctx->builder, alloca_id, init_val);
             }
+        } else if (arc) {
+            /* Conditional init: start as null so path-agnostic releases are safe. */
+            MirValueId cleared = mir_build_const_null(&ctx->builder,
+                mir_type_ptr(ctx->module, mir_type_i8(ctx->module)));
+            mir_build_store(&ctx->builder, alloca_id, cleared);
         }
     }
 }
@@ -1211,6 +1229,8 @@ static void lower_assignment(MirLowerCtx* ctx, Stmt* stmt) {
             if (arc) {
                 store_arc_owned(ctx, alloca_id, value,
                                 expr_transfers_fresh_arc(assign->value));
+                /* Reinitialization after move restores destruction obligation. */
+                arc_owned_mark_unmoved(ctx, alloca_id);
             } else {
                 mir_build_store(&ctx->builder, alloca_id, value);
             }
@@ -1529,29 +1549,30 @@ static void lower_match(MirLowerCtx* ctx, Stmt* stmt) {
 
 static void lower_return(MirLowerCtx* ctx, Stmt* stmt) {
     ReturnStmt* ret = &stmt->as.return_stmt;
-    MirValueId skip_alloca = MIR_VALUE_NONE;
+    MirValueId val = MIR_VALUE_NONE;
 
-    /* Returning a moved/owned local transfers ownership — do not release it. */
-    if (ret->value && ret->value->type == EXPR_VARIABLE) {
-        MirType* vt = NULL;
-        MirValueId aid = var_map_get(ctx, ret->value->as.variable.name, &vt);
-        if (aid != MIR_VALUE_NONE) {
-            for (int i = 0; i < ctx->var_map_count; i++) {
-                if (ctx->var_map[i].alloca_id == aid && ctx->var_map[i].arc_owned) {
-                    skip_alloca = aid;
-                    arc_owned_mark_moved(ctx, aid);
-                    break;
+    if (ret->value) {
+        val = lower_expr(ctx, ret->value);
+        /* Returning an owned local: clear its slot so subsequent releases
+         * do not destroy the transferred object (works for any path). */
+        if (ret->value->type == EXPR_VARIABLE) {
+            MirType* vt = NULL;
+            MirValueId aid = var_map_get(ctx, ret->value->as.variable.name, &vt);
+            if (aid != MIR_VALUE_NONE) {
+                for (int i = 0; i < ctx->var_map_count; i++) {
+                    if (ctx->var_map[i].alloca_id == aid &&
+                        ctx->var_map[i].arc_owned) {
+                        MirValueId cleared = mir_build_const_null(&ctx->builder,
+                            mir_type_ptr(ctx->module, mir_type_i8(ctx->module)));
+                        mir_build_store(&ctx->builder, aid, cleared);
+                        break;
+                    }
                 }
             }
         }
     }
 
-    MirValueId val = MIR_VALUE_NONE;
-    if (ret->value) {
-        val = lower_expr(ctx, ret->value);
-    }
-
-    emit_arc_releases_from(ctx, 0, skip_alloca);
+    emit_arc_releases_from(ctx, 0, MIR_VALUE_NONE);
 
     if (ret->value) {
         mir_build_ret(&ctx->builder, val);

@@ -507,6 +507,13 @@ bool arc_is_deallocating(const void* obj) {
     return arc_header_is_deallocating(get_header_const(obj));
 }
 
+bool arc_is_cycle_finalizing(const void* obj) {
+    if (!obj) {
+        return false;
+    }
+    return (get_header_const(obj)->flags & ARC_FLAG_CYCLE_FINALIZE) != 0;
+}
+
 bool arc_is_moved(const void* obj) {
     if (!obj) {
         return false;
@@ -555,6 +562,9 @@ bool arc_cycle_collect(void* obj) {
         return false;
     }
 
+    /* Destructor must not release white-set children — they are collected
+     * separately. Clear edges via the destructor's cycle-aware path. */
+    arc_atomic_fetch_or_u32(&header->flags, ARC_FLAG_CYCLE_FINALIZE);
     arc_finalize_zero_strong(header);
     return true;
 }

@@ -18,6 +18,7 @@ typedef struct {
     int alloc_scope_depth;  // Track nested alloc { ... } regions
     char** module_aliases;  // Import aliases available for qualified calls
     int module_alias_count;
+    bool in_lvalue;  // True while analysing an assignment target
 } SemanticAnalyzer;
 
 void init_semantic_analyzer(SemanticAnalyzer* analyzer);

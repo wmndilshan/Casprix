@@ -64,6 +64,7 @@ extern "C" {
 #define ARC_FLAG_BUFFERED      0x10  // Already in cycle collector's buffer
 #define ARC_FLAG_ACYCLIC       0x20  // Known to never participate in cycles
 #define ARC_FLAG_DEALLOCATING  0x40  // Destruction has started; upgrades must fail
+#define ARC_FLAG_CYCLE_FINALIZE 0x80 // Finalizing via cycle collector (no edge releases)
 
 // ARC color for cycle collection (Bacon-Rajan algorithm)
 typedef enum {
@@ -162,6 +163,11 @@ const ArcHeader* arc_get_header_const(const void* obj);
 
 // Report whether destruction has started for this object.
 bool arc_is_deallocating(const void* obj);
+
+/* True when this object is being finalized by the cycle collector.
+ * Destructors must not release managed child references in this mode —
+ * the white set is torn down by the collector. */
+bool arc_is_cycle_finalizing(const void* obj);
 
 // Check if object has been moved
 bool arc_is_moved(const void* obj);
