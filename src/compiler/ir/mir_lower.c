@@ -27,6 +27,8 @@
 
 static void var_map_reset(MirLowerCtx* ctx) {
     ctx->var_map_count = 0;
+    ctx->arc_owned_count = 0;
+    ctx->arc_scope_depth = 0;
 }
 
 static void var_map_set(MirLowerCtx* ctx, const char* name,
@@ -48,7 +50,91 @@ static void var_map_set(MirLowerCtx* ctx, const char* name,
     ctx->var_map[ctx->var_map_count].name = name;
     ctx->var_map[ctx->var_map_count].alloca_id = alloca_id;
     ctx->var_map[ctx->var_map_count].type = type;
+    ctx->var_map[ctx->var_map_count].arc_owned = false;
     ctx->var_map_count++;
+}
+
+static bool type_is_arc_class(MirLowerCtx* ctx, DataType dt, const char* class_name) {
+    ClassSymbol* cs;
+    if (dt != TYPE_CLASS && dt != TYPE_STRING && dt != TYPE_STRBUF && dt != TYPE_SLICE)
+        return false;
+    if (dt != TYPE_CLASS) return true;
+    if (!ctx->symtable || !class_name) return true;
+    cs = lookup_class(ctx->symtable, class_name);
+    if (cs && cs->is_enum) return false;
+    return true;
+}
+
+static void arc_owned_push(MirLowerCtx* ctx, MirValueId alloca_id) {
+    if (alloca_id == MIR_VALUE_NONE) return;
+    if (ctx->arc_owned_count >= ctx->arc_owned_capacity) {
+        ctx->arc_owned_capacity = ctx->arc_owned_capacity ? ctx->arc_owned_capacity * 2 : 32;
+        ctx->arc_owned = realloc(ctx->arc_owned,
+                         (size_t)ctx->arc_owned_capacity * sizeof(ctx->arc_owned[0]));
+    }
+    ctx->arc_owned[ctx->arc_owned_count].alloca_id = alloca_id;
+    ctx->arc_owned[ctx->arc_owned_count].scope_depth = ctx->arc_scope_depth;
+    ctx->arc_owned[ctx->arc_owned_count].moved = false;
+    ctx->arc_owned_count++;
+}
+
+static void arc_owned_mark_moved(MirLowerCtx* ctx, MirValueId alloca_id) {
+    for (int i = ctx->arc_owned_count - 1; i >= 0; i--) {
+        if (ctx->arc_owned[i].alloca_id == alloca_id) {
+            ctx->arc_owned[i].moved = true;
+            return;
+        }
+    }
+}
+
+static void emit_arc_release_slot(MirLowerCtx* ctx, MirValueId alloca_id) {
+    MirType* ptr_ty = mir_type_ptr(ctx->module, mir_type_i8(ctx->module));
+    MirValueId val = mir_build_load(&ctx->builder, alloca_id, ptr_ty);
+    mir_build_arc_release(&ctx->builder, val);
+}
+
+/* Emit releases for owned slots at scope_depth >= min_depth.
+ * skip_alloca is not released (ownership transferred by return). */
+static void emit_arc_releases_from(MirLowerCtx* ctx, int min_depth,
+                                  MirValueId skip_alloca) {
+    if (mir_block_is_terminated(ctx->builder.current_block)) return;
+    for (int i = ctx->arc_owned_count - 1; i >= 0; i--) {
+        if (ctx->arc_owned[i].scope_depth < min_depth) break;
+        if (ctx->arc_owned[i].moved) continue;
+        if (ctx->arc_owned[i].alloca_id == skip_alloca) continue;
+        emit_arc_release_slot(ctx, ctx->arc_owned[i].alloca_id);
+    }
+}
+
+static void arc_scope_pop_to(MirLowerCtx* ctx, int new_depth) {
+    while (ctx->arc_owned_count > 0 &&
+           ctx->arc_owned[ctx->arc_owned_count - 1].scope_depth > new_depth) {
+        ctx->arc_owned_count--;
+    }
+    ctx->arc_scope_depth = new_depth;
+}
+
+static bool expr_transfers_fresh_arc(Expr* expr) {
+    if (!expr) return false;
+    if (expr->type == EXPR_NEW) return true;
+    if (expr->type == EXPR_CALL &&
+        (expr->data_type == TYPE_CLASS || expr->data_type == TYPE_STRING ||
+         expr->data_type == TYPE_STRBUF || expr->data_type == TYPE_SLICE))
+        return true;
+    if (expr->type == EXPR_VARIABLE && expr->as.variable.is_move) return true;
+    if (expr->type == EXPR_UNARY && expr->as.unary.operator == TOKEN_MOVE) return true;
+    return false;
+}
+
+static void store_arc_owned(MirLowerCtx* ctx, MirValueId alloca_id,
+                            MirValueId value, bool value_is_fresh) {
+    MirType* ptr_ty = mir_type_ptr(ctx->module, mir_type_i8(ctx->module));
+    MirValueId old = mir_build_load(&ctx->builder, alloca_id, ptr_ty);
+    if (!value_is_fresh) {
+        mir_build_arc_retain(&ctx->builder, value);
+    }
+    mir_build_store(&ctx->builder, alloca_id, value);
+    mir_build_arc_release(&ctx->builder, old);
 }
 
 static MirValueId var_map_get(MirLowerCtx* ctx, const char* name, MirType** out_type) {
@@ -404,9 +490,10 @@ static MirValueId lower_variable(MirLowerCtx* ctx, Expr* expr) {
     }
 
     if (var->is_move) {
-        /* move semantics — load then invalidate */
+        /* move semantics — load then invalidate; skip later ARC drop. */
         MirValueId loaded = mir_build_load(&ctx->builder, alloca_id,
                                             var_type ? var_type : mir_type_i64(ctx->module));
+        arc_owned_mark_moved(ctx, alloca_id);
         return mir_build_move(&ctx->builder, loaded);
     }
 
@@ -1066,9 +1153,26 @@ static void lower_declaration(MirLowerCtx* ctx, Stmt* stmt) {
     MirValueId alloca_id = allocate_var_storage(ctx, decl->name, var_type);
     var_map_set(ctx, decl->name, alloca_id, var_type);
 
-    if (decl->initializer) {
-        MirValueId init_val = lower_expr(ctx, decl->initializer);
-        mir_build_store(&ctx->builder, alloca_id, init_val);
+    {
+        bool arc = type_is_arc_class(ctx, decl->type, decl->class_name);
+        if (arc) {
+            for (int i = 0; i < ctx->var_map_count; i++) {
+                if (ctx->var_map[i].alloca_id == alloca_id)
+                    ctx->var_map[i].arc_owned = true;
+            }
+            arc_owned_push(ctx, alloca_id);
+        }
+
+        if (decl->initializer) {
+            MirValueId init_val = lower_expr(ctx, decl->initializer);
+            if (arc) {
+                bool fresh = expr_transfers_fresh_arc(decl->initializer);
+                if (!fresh) mir_build_arc_retain(&ctx->builder, init_val);
+                mir_build_store(&ctx->builder, alloca_id, init_val);
+            } else {
+                mir_build_store(&ctx->builder, alloca_id, init_val);
+            }
+        }
     }
 }
 
@@ -1080,7 +1184,19 @@ static void lower_assignment(MirLowerCtx* ctx, Stmt* stmt) {
         MirValueId alloca_id = var_map_get(ctx, assign->target->as.variable.name, &var_type);
         MirValueId value = lower_expr(ctx, assign->value);
         if (alloca_id != MIR_VALUE_NONE) {
-            mir_build_store(&ctx->builder, alloca_id, value);
+            bool arc = false;
+            for (int i = 0; i < ctx->var_map_count; i++) {
+                if (ctx->var_map[i].alloca_id == alloca_id && ctx->var_map[i].arc_owned) {
+                    arc = true;
+                    break;
+                }
+            }
+            if (arc) {
+                store_arc_owned(ctx, alloca_id, value,
+                                expr_transfers_fresh_arc(assign->value));
+            } else {
+                mir_build_store(&ctx->builder, alloca_id, value);
+            }
         } else if (ctx->symtable) {
             Symbol* symbol = lookup_symbol(ctx->symtable, assign->target->as.variable.name);
             if (symbol_is_global_variable(symbol)) {
@@ -1093,12 +1209,25 @@ static void lower_assignment(MirLowerCtx* ctx, Stmt* stmt) {
             }
         }
     } else if (assign->target->type == EXPR_MEMBER_ACCESS) {
-        /* Field assignment: obj.field = value */
+        /* Field assignment: obj.field = value.
+         * Class-typed fields use ARC store semantics when the field type is
+         * a managed class; otherwise this is a plain store. */
         MirValueId field_ptr = lower_field_ptr(ctx,
                                                assign->target->as.member.object,
                                                assign->target->as.member.member_name);
         MirValueId value = lower_expr(ctx, assign->value);
-        mir_build_store(&ctx->builder, field_ptr, value);
+        DataType field_dt = assign->target->data_type;
+        const char* field_class = assign->target->class_name;
+        if (type_is_arc_class(ctx, field_dt, field_class)) {
+            MirType* ptr_ty = mir_type_ptr(ctx->module, mir_type_i8(ctx->module));
+            MirValueId old = mir_build_load(&ctx->builder, field_ptr, ptr_ty);
+            if (!expr_transfers_fresh_arc(assign->value))
+                mir_build_arc_retain(&ctx->builder, value);
+            mir_build_store(&ctx->builder, field_ptr, value);
+            mir_build_arc_release(&ctx->builder, old);
+        } else {
+            mir_build_store(&ctx->builder, field_ptr, value);
+        }
     } else if (assign->target->type == EXPR_INDEX) {
         /* Array element assignment: arr[i] = value */
         MirValueId base = lower_expr(ctx, assign->target->as.index.array);
@@ -1383,8 +1512,31 @@ static void lower_match(MirLowerCtx* ctx, Stmt* stmt) {
 
 static void lower_return(MirLowerCtx* ctx, Stmt* stmt) {
     ReturnStmt* ret = &stmt->as.return_stmt;
+    MirValueId skip_alloca = MIR_VALUE_NONE;
+
+    /* Returning a moved/owned local transfers ownership — do not release it. */
+    if (ret->value && ret->value->type == EXPR_VARIABLE) {
+        MirType* vt = NULL;
+        MirValueId aid = var_map_get(ctx, ret->value->as.variable.name, &vt);
+        if (aid != MIR_VALUE_NONE) {
+            for (int i = 0; i < ctx->var_map_count; i++) {
+                if (ctx->var_map[i].alloca_id == aid && ctx->var_map[i].arc_owned) {
+                    skip_alloca = aid;
+                    arc_owned_mark_moved(ctx, aid);
+                    break;
+                }
+            }
+        }
+    }
+
+    MirValueId val = MIR_VALUE_NONE;
     if (ret->value) {
-        MirValueId val = lower_expr(ctx, ret->value);
+        val = lower_expr(ctx, ret->value);
+    }
+
+    emit_arc_releases_from(ctx, 0, skip_alloca);
+
+    if (ret->value) {
         mir_build_ret(&ctx->builder, val);
     } else {
         mir_build_ret_void(&ctx->builder);
@@ -1408,11 +1560,20 @@ static void lower_print(MirLowerCtx* ctx, Stmt* stmt) {
 
 static void lower_block(MirLowerCtx* ctx, Stmt* stmt) {
     BlockStmt* block = &stmt->as.block;
+    int saved_depth = ctx->arc_scope_depth;
+    ctx->arc_scope_depth++;
+
     for (int i = 0; i < block->stmt_count; i++) {
         lower_stmt(ctx, block->statements[i]);
         /* Stop if block was terminated (return/break/continue) */
         if (mir_block_is_terminated(ctx->builder.current_block)) break;
     }
+
+    /* Scope exit: release ARC locals declared in this block. */
+    if (!mir_block_is_terminated(ctx->builder.current_block)) {
+        emit_arc_releases_from(ctx, saved_depth + 1, MIR_VALUE_NONE);
+    }
+    arc_scope_pop_to(ctx, saved_depth);
 }
 
 static void lower_stmt(MirLowerCtx* ctx, Stmt* stmt) {
@@ -1516,11 +1677,26 @@ MirFunction* mir_lower_function(MirLowerCtx* ctx, Stmt* func_stmt) {
     mir_func->is_async = f->is_async;
     mir_builder_set_block(&ctx->builder, entry);
 
+    int saved_arc_count = ctx->arc_owned_count;
+    int saved_arc_depth = ctx->arc_scope_depth;
+    ctx->arc_scope_depth = 0;
+
     /* Bind parameters to alloca slots */
     for (int i = 0; i < mir_func->param_count; i++) {
         MirValueId param_alloca = allocate_var_storage(ctx, mir_func->params[i].name, mir_func->params[i].type);
         mir_build_store(&ctx->builder, param_alloca, mir_func->params[i].value_id);
         var_map_set(ctx, mir_func->params[i].name, param_alloca, mir_func->params[i].type);
+
+        /* Match native: only OWNED class/string params are dropped by the callee. */
+        if (i < f->param_count &&
+            f->parameters[i].ownership == OWNERSHIP_OWNED &&
+            type_is_arc_class(ctx, f->parameters[i].type, f->parameters[i].class_name)) {
+            for (int vi = 0; vi < ctx->var_map_count; vi++) {
+                if (ctx->var_map[vi].alloca_id == param_alloca)
+                    ctx->var_map[vi].arc_owned = true;
+            }
+            arc_owned_push(ctx, param_alloca);
+        }
     }
 
     /* Lower body */
@@ -1530,6 +1706,7 @@ MirFunction* mir_lower_function(MirLowerCtx* ctx, Stmt* func_stmt) {
 
     /* Ensure function is terminated */
     if (!mir_block_is_terminated(ctx->builder.current_block)) {
+        emit_arc_releases_from(ctx, 0, MIR_VALUE_NONE);
         if (ret_type->kind == MIR_TYPE_VOID) {
             mir_build_ret_void(&ctx->builder);
         } else {
@@ -1543,6 +1720,8 @@ MirFunction* mir_lower_function(MirLowerCtx* ctx, Stmt* func_stmt) {
     ctx->builder = saved_builder;
     ctx->var_map_count = saved_var_count;
     ctx->loop_depth = saved_loop_depth;
+    ctx->arc_owned_count = saved_arc_count;
+    ctx->arc_scope_depth = saved_arc_depth;
 
     return mir_func;
 }
@@ -1593,7 +1772,10 @@ static void lower_class(MirLowerCtx* ctx, Stmt* stmt) {
 
         MirBuilder saved = ctx->builder;
         int saved_vars = ctx->var_map_count;
+        int saved_arc_count = ctx->arc_owned_count;
+        int saved_arc_depth = ctx->arc_scope_depth;
         ctx->loop_depth = 0;
+        ctx->arc_scope_depth = 0;
 
         MirBlock* entry = mir_function_add_block(mir_func, "entry");
         mir_builder_init(&ctx->builder, ctx->module, mir_func);
@@ -1603,15 +1785,29 @@ static void lower_class(MirLowerCtx* ctx, Stmt* stmt) {
             MirValueId pa = mir_build_alloca(&ctx->builder, mir_func->params[j].type);
             mir_build_store(&ctx->builder, pa, mir_func->params[j].value_id);
             var_map_set(ctx, mir_func->params[j].name, pa, mir_func->params[j].type);
+            /* `this` is not owned by the method; OWNED params are. */
+            if (j > 0 && (j - 1) < m->param_count &&
+                m->parameters[j - 1].ownership == OWNERSHIP_OWNED &&
+                type_is_arc_class(ctx, m->parameters[j - 1].type,
+                                  m->parameters[j - 1].class_name)) {
+                for (int vi = 0; vi < ctx->var_map_count; vi++) {
+                    if (ctx->var_map[vi].alloca_id == pa)
+                        ctx->var_map[vi].arc_owned = true;
+                }
+                arc_owned_push(ctx, pa);
+            }
         }
 
         if (m->body) lower_stmt(ctx, m->body);
         if (!mir_block_is_terminated(ctx->builder.current_block)) {
+            emit_arc_releases_from(ctx, 0, MIR_VALUE_NONE);
             mir_build_ret_void(&ctx->builder);
         }
 
         ctx->builder = saved;
         ctx->var_map_count = saved_vars;
+        ctx->arc_owned_count = saved_arc_count;
+        ctx->arc_scope_depth = saved_arc_depth;
     }
 }
 
@@ -1777,6 +1973,7 @@ MirModule* mir_lower_program(Stmt** statements, int stmt_count,
 
             /* Ensure the entry function is terminated */
             if (!mir_block_is_terminated(ctx.builder.current_block)) {
+                emit_arc_releases_from(&ctx, 0, MIR_VALUE_NONE);
                 mir_build_ret_void(&ctx.builder);
             }
 
@@ -1785,6 +1982,7 @@ MirModule* mir_lower_program(Stmt** statements, int stmt_count,
     }
 
     free(ctx.var_map);
+    free(ctx.arc_owned);
 
     if (ctx.error_count > 0) {
         return NULL;   /* pipeline reports "MIR lowering failed" and exits 65 */

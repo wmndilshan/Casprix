@@ -596,6 +596,7 @@ static bool jit_function_is_supported(MirFunction* func) {
                 case MIR_CALL_VIRTUAL:
                 case MIR_ARC_RETAIN:
                 case MIR_ARC_RELEASE:
+                case MIR_DROP:
                 case MIR_OBJ_ALLOC:
                 case MIR_SUSPEND:
                 case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV: case MIR_FNEG:

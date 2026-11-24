@@ -398,6 +398,7 @@ if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_vm_jit.c")
         ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
         ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
         ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+        ${CMAKE_SOURCE_DIR}/runtime/memory/arc.c
         # MIR subsystem (builder, printer, optimizer, borrow checker)
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
@@ -439,6 +440,7 @@ if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_jit_caps
         ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
         ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
         ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+        ${CMAKE_SOURCE_DIR}/runtime/memory/arc.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
@@ -472,6 +474,7 @@ if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_jit_rega
         ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
         ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
         ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+        ${CMAKE_SOURCE_DIR}/runtime/memory/arc.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
         ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
@@ -506,6 +509,7 @@ foreach(_jt test_jit_trampoline test_jit_selfcall)
             ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
             ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
             ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+            ${CMAKE_SOURCE_DIR}/runtime/memory/arc.c
             ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
             ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
             ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c

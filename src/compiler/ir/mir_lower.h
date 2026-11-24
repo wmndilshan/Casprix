@@ -34,9 +34,20 @@ typedef struct {
         const char*  name;
         MirValueId   alloca_id;
         MirType*     type;
+        bool         arc_owned; /* strong ARC ref stored in this slot */
     }*              var_map;
     int             var_map_count;
     int             var_map_capacity;
+
+    /* Owned ARC slots by lexical scope (for DROP / RELEASE elaboration). */
+    struct {
+        MirValueId   alloca_id;
+        int          scope_depth;
+        bool         moved;     /* ownership transferred (skip drop) */
+    }*              arc_owned;
+    int             arc_owned_count;
+    int             arc_owned_capacity;
+    int             arc_scope_depth;
 
     /* Loop break/continue targets */
     struct {
