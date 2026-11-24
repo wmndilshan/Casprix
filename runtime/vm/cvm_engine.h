@@ -145,11 +145,11 @@ typedef struct {
     /* Optional JIT bridge (NULL → no JIT) */
     CvmJitBridge*   jit;
 
-    /* ARC objects created by MIR_OBJ_ALLOC. Entries are user pointers from
-     * arc_alloc. Tracking is diagnostic / leak-cleanup only: ARC retain and
-     * release own the strong references. On successful arc_release that
-     * destroys the object, the entry is removed. Remaining live entries are
-     * released once during cvm_state_destroy to catch missing MIR drops. */
+    /* ARC objects created by MIR_OBJ_ALLOC (user pointers). Tracking records
+     * still-live allocations for emergency reclaim. An entry is removed only
+     * when a release destroys the object (strong count reaches zero), not on
+     * every release — otherwise multi-owner objects would be forgotten while
+     * still alive. */
     void**          heap_objs;
     int             heap_obj_count;
     int             heap_obj_cap;

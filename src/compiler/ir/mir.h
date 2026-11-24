@@ -334,8 +334,13 @@ struct MirInst {
         /* ARC retain/release, drop */
         struct { MirValueId ptr; } refop;
 
-        /* Obj alloc */
-        struct { const char* class_name; int size; } obj_alloc;
+        /* Obj alloc — managed_offsets are byte offsets of ARC-owned fields */
+        struct {
+            const char* class_name;
+            int size;
+            int managed_field_count;
+            int* managed_offsets;
+        } obj_alloc;
 
         /* Struct init */
         struct { MirValueId* fields; int n_fields; } struct_init;
@@ -629,6 +634,8 @@ void       mir_build_drop(MirBuilder* b, MirValueId value);
 void       mir_build_arc_retain(MirBuilder* b, MirValueId ptr);
 void       mir_build_arc_release(MirBuilder* b, MirValueId ptr);
 MirValueId mir_build_obj_alloc(MirBuilder* b, const char* class_name, int size);
+MirValueId mir_build_obj_alloc_ex(MirBuilder* b, const char* class_name, int size,
+                                  const int* managed_offsets, int managed_field_count);
 
 /* Aggregates */
 MirValueId mir_build_struct_init(MirBuilder* b, MirType* type,
