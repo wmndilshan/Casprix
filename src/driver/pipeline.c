@@ -327,20 +327,19 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     }
     debug_step_wait();
 
-    /* --- Phase 4.5: Ownership Check --- */
-    if (!g_config.compact_output) debug_phase_start("OWNERSHIP CHECK");
-    {
-        OwnershipChecker own_checker;
-        ownership_checker_init(&own_checker, &ctx.analyzer);
-        (void)own_checker; /* updates had_error directly */
-    }
-    if (had_error) {
-        CPX_ERROR("Ownership check failed.");
-        result = 65; goto done;
-    }
+    /* --- Phase 4.5: Ownership (runs inside sema; DEF-003) ---
+     * Loan/move checking is performed during analyze_program via
+     * g_ownership_ctx. The previous init-only stage is removed. */
     if (!g_config.compact_output) {
-        CPX_INFO("Ownership check passed");
+        debug_phase_start("OWNERSHIP CHECK");
+        if (had_error) {
+            CPX_ERROR("Ownership check failed.");
+            result = 65; goto done;
+        }
+        CPX_INFO("Ownership analysis completed during semantic analysis");
         debug_phase_end("Ownership Check");
+    } else if (had_error) {
+        result = 65; goto done;
     }
     debug_step_wait();
 
@@ -360,10 +359,15 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     }
     debug_step_wait();
 
-    if (g_config.check_only) { result = 0; goto done; }
+    /* Plain --check-only stops after frontend validation.
+     * --safe-mode / --mir with --check-only must still run MIR verify (DEF-010). */
+    if (g_config.check_only && !g_config.use_mir && !g_config.safe_mode) {
+        result = 0; goto done;
+    }
 
     /* --- Phase 5: MIR pipeline (when enabled) --- */
-    if (g_config.use_mir) {
+    if (g_config.use_mir || g_config.safe_mode) {
+        g_config.use_mir = true;
         debug_phase_start("MIR LOWERING");
         perf_start(&g_diag.perf, "MIR Lowering", STAGE_MIR);
         ctx.mir_module = mir_lower_program(ctx.statements, ctx.stmt_count,
@@ -462,6 +466,12 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
             result = 65; goto done;
         }
         if (!g_config.compact_output) CPX_INFO("MIR verification passed");
+
+        /* --check-only with --safe-mode/--mir: validation complete; no codegen. */
+        if (g_config.check_only) {
+            result = 0;
+            goto done;
+        }
 
         /* --- Phase 5.9: in-process execution via the CVM (--execute) ---
          *

@@ -135,10 +135,13 @@ the resulting local static library is also ignored.
 ## Known limitations
 
 - The MIR native backend and JIT are experimental and do not support every
-  language construct.
+  language construct. Default native codegen remains the legacy AST path.
+- Ownership/borrow checking is enforced in the frontend and under `--safe-mode`;
+  CVM runtime ARC/DROP integration remains incomplete (Phase 2).
 - Escaping captured closures and captured closures passed as plain function
   values are rejected.
 - `spawn`, `where` clauses, and `scope` blocks are not implemented.
+- Generics monomorphization is not yet connected to the production driver.
 - The HTTP server currently focuses on bounded HTTP/1 request handling; TLS,
   persistent connections, and a stable production server API are not provided.
 - Package registry and model-loading paths must not be treated as hardened

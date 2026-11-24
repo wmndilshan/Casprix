@@ -456,21 +456,44 @@ static MirValueId lower_binary(MirLowerCtx* ctx, Expr* expr) {
 
 static MirValueId lower_unary(MirLowerCtx* ctx, Expr* expr) {
     UnaryExpr* un = &expr->as.unary;
-    MirValueId operand = lower_expr(ctx, un->operand);
 
     switch (un->operator) {
         case TOKEN_MINUS: {
+            MirValueId operand = lower_expr(ctx, un->operand);
             bool is_float = (un->operand->data_type == TYPE_F32 ||
                             un->operand->data_type == TYPE_F64);
             return is_float ? mir_build_fneg(&ctx->builder, operand)
                             : mir_build_neg(&ctx->builder, operand);
         }
-        case TOKEN_NOT:
+        case TOKEN_NOT: {
+            MirValueId operand = lower_expr(ctx, un->operand);
             return mir_build_logic_not(&ctx->builder, operand);
-        case TOKEN_BITAND:
-            return mir_build_borrow(&ctx->builder, operand);
-        default:
+        }
+        case TOKEN_BITAND: {
+            /* Prefer place-based borrows for locals so MIR_BORROW/_MUT
+             * retain storage identity through mem2reg (address-taken
+             * allocas are non-promotable). Loading first then borrowing
+             * the rvalue loses place identity (Phase 0 DEF-009). */
+            if (un->operand && un->operand->type == EXPR_VARIABLE &&
+                !un->operand->as.variable.is_move) {
+                MirType* var_type = NULL;
+                MirValueId place = var_map_get(ctx, un->operand->as.variable.name,
+                                               &var_type);
+                if (place != MIR_VALUE_NONE) {
+                    return un->is_mut
+                        ? mir_build_borrow_mut(&ctx->builder, place)
+                        : mir_build_borrow(&ctx->builder, place);
+                }
+            }
+            MirValueId operand = lower_expr(ctx, un->operand);
+            return un->is_mut
+                ? mir_build_borrow_mut(&ctx->builder, operand)
+                : mir_build_borrow(&ctx->builder, operand);
+        }
+        default: {
+            MirValueId operand = lower_expr(ctx, un->operand);
             return operand;
+        }
     }
 }
 

@@ -43,6 +43,7 @@ typedef struct {
     int             src_line;       /* Source location */
     int             src_col;
     bool            active;         /* Still live? */
+    bool            stored;         /* Result stored to memory (extends loan) */
 } MirBorrow;
 
 /* Borrow check error */

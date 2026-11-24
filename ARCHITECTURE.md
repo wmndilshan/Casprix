@@ -20,8 +20,8 @@ Casprix uses a multi-pass compilation strategy to transform source code into opt
 
 ### Pass 2: Semantic Analysis & Symbol Resolution
 - **Symbol Table**: Manages nested scopes, class hierarchies, and member visibility.
-- **Type Checking**: Enforces strong typing, generic monomorphization, and interface conformance.
-- **Ownership Analysis**: Tracks resource lifetimes and ensures memory safety without a runtime garbage collector.
+- **Type Checking**: Enforces strong typing with Phase 1 conversion policy (widening-only implicits). Generic monomorphization is present as a middle-end module but not yet driver-wired.
+- **Ownership Analysis**: Tracks moves and `&`/`&mut` loans during semantic analysis; MIR borrow checking runs under `--safe-mode`. Runtime ARC + cycle GC remain part of the native object model (not “GC-free”).
 
 ### Pass 3: Intermediate Representation (IR)
 - The AST is lowered into a target-independent Mid-level IR (MIR), facilitating high-level optimizations and multi-backend support.

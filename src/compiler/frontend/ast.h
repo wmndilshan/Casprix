@@ -213,6 +213,9 @@ typedef struct {
 typedef struct {
     CpxTokenType operator;
     Expr* operand;
+    /* True when operator is TOKEN_BITAND and the source wrote `&mut`.
+     * Distinguishes `&x` (shared borrow) from `&mut x` (exclusive borrow). */
+    bool is_mut;
 } UnaryExpr;
 
 typedef struct {
