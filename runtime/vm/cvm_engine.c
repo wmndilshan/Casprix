@@ -1219,6 +1219,36 @@ static CvmClassInfo* cvm_obj_info(void* obj) {
     return hdr ? hdr->info : NULL;
 }
 
+/* Break managed edges before white-set finalization:
+ * WHITE children are collected (not released); surviving children are released. */
+static void cvm_class_cycle_clear(void* obj, void (*collect_white_child)(void* child)) {
+    CvmObjHeader* hdr;
+    CvmClassInfo* info;
+    CvmState* owner_vm;
+    int i;
+    if (!obj) return;
+    hdr = *(CvmObjHeader**)obj;
+    if (!hdr || !hdr->info) return;
+    info = hdr->info;
+    owner_vm = hdr->owner_vm;
+    for (i = 0; i < info->n_managed; i++) {
+        void** slot = (void**)((char*)obj + info->field_offsets[i]);
+        void* child = *slot;
+        ArcHeader* ch;
+        *slot = NULL;
+        if (!child) continue;
+        ch = arc_get_header(child);
+        if (!ch) continue;
+        if (ch->color == ARC_COLOR_WHITE) {
+            if (collect_white_child) collect_white_child(child);
+            continue;
+        }
+        if (arc_is_deallocating(child)) continue;
+        (void)arc_release_survived(child);
+        if (owner_vm) cvm_heap_object_untrack(owner_vm, child);
+    }
+}
+
 static void cvm_class_dtor(void* obj) {
     CvmObjHeader* hdr;
     CvmClassInfo* info;
@@ -1244,12 +1274,11 @@ static void cvm_class_dtor(void* obj) {
         void* child = *slot;
         *slot = NULL;
         if (!child) continue;
-        /* Cycle collection tears down the white set itself; releasing
-         * already-collected children here is a use-after-free. */
+        /* Edges to the white set were already cleared by cycle_clear.
+         * Any remaining child here during cycle finalize would be a bug;
+         * skip to avoid UAF. Normal destruction still releases children. */
         if (cycle_finalize) continue;
         (void)arc_release_survived(child);
-        /* Child may still be residual-tracked; drop that entry so VM
-         * emergency reclaim cannot release a foreign/already-released ref. */
         if (owner_vm) cvm_heap_object_untrack(owner_vm, child);
     }
 }
@@ -1324,6 +1353,7 @@ static void* cvm_heap_object_alloc_ex(CvmState* vm, size_t size,
                               (int)size, managed_offsets, n_managed);
     if (info && info->n_managed > 0) {
         mem = arc_alloc_full(size, cvm_class_dtor, cvm_class_scan);
+        if (mem) arc_set_cycle_clear(mem, cvm_class_cycle_clear);
     } else if (info) {
         mem = arc_alloc_full(size, cvm_class_dtor, NULL);
     } else {

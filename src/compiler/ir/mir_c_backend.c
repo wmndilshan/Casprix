@@ -308,7 +308,12 @@ static bool c_begin_module(MirBackend* self, MirModule* module) {
     fprintf(data->out, "#include <stdint.h>\n");
     fprintf(data->out, "#include <stdlib.h>\n");
     fprintf(data->out, "#include <string.h>\n\n");
-    fprintf(data->out, "static void* cpx_obj_alloc(size_t size) { return calloc(1, size); }\n\n");
+    /* Managed-object helpers: declarations for ARC; calloc stub for alloc
+     * when not linked against the Casprix runtime. Full runtime linkage is
+     * required for correct retain/release semantics at execution time. */
+    fprintf(data->out, "static void* cpx_obj_alloc(size_t size) { return calloc(1, size); }\n");
+    fprintf(data->out, "void* arc_retain(void* obj);\n");
+    fprintf(data->out, "void arc_release(void* obj);\n\n");
     fprintf(data->out, "void nuwan_print_int(int64_t val);\n");
     fprintf(data->out, "void nuwan_print_float(double val);\n");
     fprintf(data->out, "void nuwan_print_bool(bool val);\n");
@@ -421,6 +426,17 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
         case MIR_CONST_NULL:
             fprintf(data->out, "    cpx_v%u = NULL;\n", inst->result);
             break;
+        case MIR_UNDEF:
+            /* Explicit undefined SSA value (e.g. uninit alloca after mem2reg).
+             * Emit a typed zero; consumers must not rely on the bit pattern. */
+            c_type_name(inst->type, type_buf, sizeof(type_buf));
+            if (!inst->type || strcmp(type_buf, "void") == 0)
+                fprintf(data->out, "    cpx_v%u = NULL;\n", inst->result);
+            else if (c_is_pointer_like(inst->type))
+                fprintf(data->out, "    cpx_v%u = NULL;\n", inst->result);
+            else
+                fprintf(data->out, "    cpx_v%u = (%s)0;\n", inst->result, type_buf);
+            break;
         case MIR_GLOBAL_ADDR: {
             char symbol_buf[128];
             c_global_symbol_name(data->module,
@@ -473,7 +489,10 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
             break;
         }
         case MIR_OBJ_ALLOC:
-            fprintf(data->out, "    cpx_v%u = cpx_obj_alloc(%d);\n", inst->result, inst->as.obj_alloc.size);
+            /* calloc stub for --emit-c only. MIR→C→native rejects this opcode
+             * via MIR_CAP_MIR_C_NATIVE before emission. */
+            fprintf(data->out, "    cpx_v%u = cpx_obj_alloc(%d);\n",
+                    inst->result, inst->as.obj_alloc.size);
             break;
         case MIR_CALL:
             callee = mir_module_find_function(data->module, inst->as.call.func_name);
@@ -574,12 +593,24 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
             c_emit_value(data->out, func, inst->as.transfer.source, inst->type);
             fprintf(data->out, ";\n");
             break;
-        case MIR_DROP:
         case MIR_ARC_RETAIN:
+            fprintf(data->out, "    arc_retain(");
+            c_emit_value(data->out, func, inst->as.refop.ptr, NULL);
+            fprintf(data->out, ");\n");
+            break;
         case MIR_ARC_RELEASE:
+            fprintf(data->out, "    arc_release(");
+            c_emit_value(data->out, func, inst->as.refop.ptr, NULL);
+            fprintf(data->out, ");\n");
+            break;
+        case MIR_DROP:
+            /* Drop elaborates to a strong-release of the owned reference. */
+            fprintf(data->out, "    arc_release(");
+            c_emit_value(data->out, func, inst->as.refop.ptr, NULL);
+            fprintf(data->out, ");\n");
+            break;
         case MIR_NOP:
         case MIR_DEBUGLOC:
-            fprintf(data->out, "    /* ignored opcode %d */\n", inst->opcode);
             break;
         case MIR_BR:
             fprintf(data->out, "    cpx_pred = %u; goto bb%u;\n", data->current_block ? data->current_block->id : 0, inst->as.br.target->id);
@@ -613,6 +644,9 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
             break;
         case MIR_RET_VOID:
             fprintf(data->out, "    return;\n");
+            break;
+        case MIR_UNREACHABLE:
+            fprintf(data->out, "    abort();\n");
             break;
         default:
             fprintf(data->out, "    /* unsupported MIR opcode %d */\n", inst->opcode);

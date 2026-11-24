@@ -90,6 +90,9 @@ bool mir_backend_emit_module(MirBackend* backend, MirModule* module) {
 typedef struct {
     VmBytecodeChunk chunk;
     FILE*           output;
+    bool            had_error;
+    const char*     error_func;
+    int             error_opcode;
 } VmBackendData;
 
 static void vm_emit_byte(VmBackendData* d, uint8_t byte) {
@@ -105,13 +108,6 @@ static void vm_emit_u16(VmBackendData* d, uint16_t val) {
     vm_emit_byte(d, (uint8_t)((val >> 8) & 0xFF));
 }
 
-static void vm_emit_u32(VmBackendData* d, uint32_t val) {
-    vm_emit_byte(d, (uint8_t)(val & 0xFF));
-    vm_emit_byte(d, (uint8_t)((val >> 8) & 0xFF));
-    vm_emit_byte(d, (uint8_t)((val >> 16) & 0xFF));
-    vm_emit_byte(d, (uint8_t)((val >> 24) & 0xFF));
-}
-
 static void vm_emit_i64(VmBackendData* d, int64_t val) {
     for (int i = 0; i < 8; i++) {
         vm_emit_byte(d, (uint8_t)((val >> (i * 8)) & 0xFF));
@@ -122,6 +118,9 @@ static bool vm_begin_module(MirBackend* self, MirModule* module) {
     (void)module;
     VmBackendData* d = (VmBackendData*)self->data;
     memset(&d->chunk, 0, sizeof(VmBytecodeChunk));
+    d->had_error = false;
+    d->error_func = NULL;
+    d->error_opcode = -1;
     return true;
 }
 
@@ -152,9 +151,19 @@ static void vm_end_function(MirBackend* self) {
     (void)self;
 }
 
+static void vm_fail_unsupported(VmBackendData* d, MirFunction* func, MirOpcode op,
+                                const char* why) {
+    if (d->had_error) return;
+    d->had_error = true;
+    d->error_func = func && func->name ? func->name : "<anon>";
+    d->error_opcode = (int)op;
+    fprintf(stderr,
+            "VM backend: refusing incomplete lowering for opcode %d in '%s' (%s)\n",
+            (int)op, d->error_func, why ? why : "unsupported");
+}
+
 static void vm_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
     VmBackendData* d = (VmBackendData*)self->data;
-    (void)func;
 
     switch (inst->opcode) {
         case MIR_CONST_INT:
@@ -243,33 +252,14 @@ static void vm_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
             break;
 
         case MIR_BR:
-            vm_emit_byte(d, VM_JUMP);
-            /* Placeholder offset — needs patching in a real implementation */
-            vm_emit_u32(d, 0);
-            break;
-
         case MIR_CONDBR:
-            vm_emit_byte(d, VM_LOAD_LOCAL);
-            vm_emit_u16(d, (uint16_t)inst->as.condbr.cond);
-            vm_emit_byte(d, VM_JUMP_IF);
-            vm_emit_u32(d, 0); /* Placeholder for true target */
-            vm_emit_byte(d, VM_JUMP);
-            vm_emit_u32(d, 0); /* Placeholder for false target */
+            vm_fail_unsupported(d, func, inst->opcode,
+                                "branch targets are placeholders, not patched");
             break;
 
         case MIR_CALL:
-            /* Push arguments */
-            for (int i = 0; i < inst->as.call.n_args; i++) {
-                vm_emit_byte(d, VM_LOAD_LOCAL);
-                vm_emit_u16(d, (uint16_t)inst->as.call.args[i]);
-            }
-            vm_emit_byte(d, VM_CALL);
-            vm_emit_u16(d, 0); /* Placeholder function index */
-            vm_emit_byte(d, (uint8_t)inst->as.call.n_args);
-            if (inst->result != MIR_VALUE_NONE) {
-                vm_emit_byte(d, VM_STORE_LOCAL);
-                vm_emit_u16(d, (uint16_t)inst->result);
-            }
+            vm_fail_unsupported(d, func, inst->opcode,
+                                "call function index is a placeholder");
             break;
 
         case MIR_ARC_RETAIN:
@@ -285,11 +275,12 @@ static void vm_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
             break;
 
         case MIR_NOP:
+        case MIR_DEBUGLOC:
             break;
 
         default:
-            /* Stub: emit NOP for unhandled instructions */
-            vm_emit_byte(d, VM_NOP);
+            /* Never silently NOP unsupported MIR — fail the backend. */
+            vm_fail_unsupported(d, func, inst->opcode, "no bytecode encoding");
             break;
     }
 }
@@ -302,6 +293,13 @@ static void vm_emit_block_label(MirBackend* self, MirBlock* block) {
 
 static bool vm_finalize(MirBackend* self, const char* output_path) {
     VmBackendData* d = (VmBackendData*)self->data;
+
+    if (d->had_error) {
+        fprintf(stderr,
+                "  [ERROR] VM bytecode emission failed (unsupported opcode %d in '%s')\n",
+                d->error_opcode, d->error_func ? d->error_func : "<anon>");
+        return false;
+    }
 
     FILE* f = fopen(output_path, "wb");
     if (!f) {
@@ -623,74 +621,44 @@ typedef struct {
     int             profile_count;
     int             profile_capacity;
     VmBytecodeChunk bytecode;       /* Tier 0: interpreted */
+    bool            had_error;
 } JitBackendData;
 
 static bool jit_begin_module(MirBackend* self, MirModule* module) {
     (void)module;
     JitBackendData* d = (JitBackendData*)self->data;
     memset(&d->bytecode, 0, sizeof(VmBytecodeChunk));
-    return true;
+    d->had_error = false;
+    /* Standalone JIT packaging is incomplete: it records profiles but does
+     * not emit executable bytecode or native code. Refuse success. */
+    fprintf(stderr,
+            "JIT backend: standalone --jit package emission is incomplete "
+            "(use --execute for in-process CVM+JIT tier-up)\n");
+    d->had_error = true;
+    return false;
 }
 static void jit_end_module(MirBackend* self) { (void)self; }
 static bool jit_begin_function(MirBackend* self, MirFunction* func) {
     JitBackendData* d = (JitBackendData*)self->data;
-
-    /* Register profile entry */
-    if (d->profile_count >= d->profile_capacity) {
-        d->profile_capacity = d->profile_capacity ? d->profile_capacity * 2 : 64;
-        d->profiles = realloc(d->profiles, d->profile_capacity * sizeof(JitProfile));
-    }
-    JitProfile* p = &d->profiles[d->profile_count++];
-    p->name = func->name;
-    p->call_count = 0;
-    p->loop_iterations = 0;
-    p->current_tier = JIT_TIER_INTERPRET;
-    p->native_code = NULL;
-    p->native_size = 0;
-
-    return true;
+    (void)func;
+    d->had_error = true;
+    return false;
 }
 static void jit_end_function(MirBackend* self) { (void)self; }
 static void jit_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
-    (void)self; (void)inst; (void)func;
-    /* JIT: bytecode emission + profiling counters.
-     * Full implementation would insert profile points at loop headers
-     * and function entries, and compile hot paths to native code. */
+    JitBackendData* d = (JitBackendData*)self->data;
+    (void)inst; (void)func;
+    d->had_error = true;
 }
 static void jit_emit_block_label(MirBackend* self, MirBlock* block) {
     (void)self; (void)block;
 }
 static bool jit_finalize(MirBackend* self, const char* output_path) {
     JitBackendData* d = (JitBackendData*)self->data;
-    FILE* f = fopen(output_path, "wb");
-    if (!f) {
-        fprintf(stderr, "  [ERROR] Cannot open JIT output: %s\n", output_path);
-        return false;
-    }
-
-    {
-        const uint8_t magic[] = { 'C', 'P', 'X', 'J', 1, 0 };
-        uint16_t profile_count = (uint16_t)d->profile_count;
-        fwrite(magic, 1, sizeof(magic), f);
-        fwrite(&profile_count, sizeof(profile_count), 1, f);
-    }
-
-    for (int i = 0; i < d->profile_count; i++) {
-        const JitProfile* profile = &d->profiles[i];
-        uint8_t name_len = (uint8_t)strlen(profile->name);
-        uint8_t tier = (uint8_t)profile->current_tier;
-        uint32_t call_count = (uint32_t)profile->call_count;
-        uint32_t loop_iterations = (uint32_t)profile->loop_iterations;
-
-        fwrite(&name_len, sizeof(name_len), 1, f);
-        fwrite(profile->name, 1, name_len, f);
-        fwrite(&tier, sizeof(tier), 1, f);
-        fwrite(&call_count, sizeof(call_count), 1, f);
-        fwrite(&loop_iterations, sizeof(loop_iterations), 1, f);
-    }
-
-    fclose(f);
-    return true;
+    (void)output_path;
+    fprintf(stderr,
+            "  [ERROR] JIT package emission refused (incomplete backend)\n");
+    return !d->had_error;
 }
 static void jit_destroy(MirBackend* self) {
     JitBackendData* d = (JitBackendData*)self->data;

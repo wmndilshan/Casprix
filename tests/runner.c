@@ -41,6 +41,12 @@ int main() {
     if ((dir = opendir(TEST_DIR)) != NULL) {
         while ((ent = readdir(dir)) != NULL) {
             if (strstr(ent->d_name, ".cpx") != NULL) {
+                /* Dedicated CMake tests own fixture_*.cpx (including expected
+                 * negatives). The suite runner only exercises positive
+                 * test_*.cpx sources. */
+                if (strncmp(ent->d_name, "fixture_", 8) == 0)
+                    continue;
+
                 total++;
                 char cmd[512];
                 char path[512];

@@ -33,6 +33,7 @@ CompilerConfig g_config = {
     .output_kind                  = OUTPUT_NATIVE,
     .native_codegen               = NATIVE_CODEGEN_LEGACY_AST,
     .allow_legacy_backend_fallback= false,
+    .codegen_produced_final_artifact = false,
     .opt_level                    = 2,
     .safe_mode                    = false,
     .size_opt                     = false,
@@ -75,11 +76,12 @@ void cli_print_usage(const char* program_name) {
 
     printf("\nBackend Options:\n");
     printf("  --mir                 Run the MIR middle-end before code generation\n");
-    printf("  --native, --aot       Use the MIR native backend (experimental)\n");
-    printf("  --legacy-backend      Fall back to AST codegen after MIR passes\n");
+    printf("  --native, --aot       MIR AOT via C backend + host C compiler\n");
+    printf("                        (transitional; not direct MIR→asm)\n");
+    printf("  --legacy-backend      After MIR passes, emit via legacy AST asmgen\n");
     printf("  --vm                  Emit VM bytecode via MIR backend\n");
     printf("  --jit                 Emit a JIT package via MIR backend\n");
-    printf("  --emit-c              Emit C source via MIR backend\n");
+    printf("  --emit-c              Emit C source via MIR backend (no host compile)\n");
     printf("  --c-entry <symbol>    Emit a library entry instead of main() (C backend)\n");
     printf("  --execute             Run the program in-process via the CVM (implies --mir);\n");
     printf("                        main()'s return value becomes the process exit code\n");

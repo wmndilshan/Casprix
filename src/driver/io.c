@@ -96,7 +96,7 @@ const char* driver_selected_output_name(void) {
         default:
             return (g_config.native_codegen == NATIVE_CODEGEN_MIR &&
                     !g_config.allow_legacy_backend_fallback)
-                   ? "native assembly (MIR backend)"
+                   ? "native executable (MIR→C→host-cc)"
                    : "native assembly (legacy backend)";
     }
 }

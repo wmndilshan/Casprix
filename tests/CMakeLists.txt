@@ -604,6 +604,17 @@ if(BUILD_COMPILER AND TARGET casprix)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_c_backend_high_level.cmake
     )
 
+    # Permanent negative: conditional move then use after join (use-after-move).
+    # Fixture is named fixture_*.cpx so the positive GLOB and suite runner skip it.
+    add_test(
+        NAME compiler_neg_conditional_use_after_move
+        COMMAND ${CMAKE_COMMAND}
+            -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+            -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_conditional_use_after_move.cpx
+            -DEXPECT_REGEX=Use of moved value
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_ownership_negative.cmake
+    )
+
     # Disable tests that require the Skia GUI framework when it is not built
     if(NOT ENABLE_SKIA_GUI)
         set(SKIA_TESTS
@@ -618,28 +629,48 @@ if(BUILD_COMPILER AND TARGET casprix)
     endif()
 endif()
 
-# ── Phase 1 semantic / borrow / type-system conformance ───────────────────────
+# ── Semantic / borrow / type-system conformance (fixture-gated) ───────────────
+# Register only when helpers and source fixtures exist. Permanent CMake must not
+# point at missing files. When local fixtures under tests/borrow,
+# tests/type_system, and tests/semantic are present, the historical phase1_*
+# names are preserved. When absent (clean/staged export), the tests are omitted
+# rather than registered broken.
 if(BUILD_COMPILER AND TARGET casprix)
+    set(_cpx_sem_pos_helper "${CMAKE_CURRENT_SOURCE_DIR}/semantic/check_positive.cmake")
+    set(_cpx_sem_neg_helper "${CMAKE_CURRENT_SOURCE_DIR}/semantic/check_negative.cmake")
+
     macro(casprix_phase1_neg name relpath regex)
-        add_test(
-            NAME phase1_neg_${name}
-            COMMAND ${CMAKE_COMMAND}
-                -DCASPRIX_EXE=$<TARGET_FILE:casprix>
-                -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${relpath}
-                -DEXPECT_REGEX=${regex}
-                -DEXTRA_ARGS=${ARGN}
-                -P ${CMAKE_CURRENT_SOURCE_DIR}/semantic/check_negative.cmake
-        )
+        if(EXISTS "${_cpx_sem_neg_helper}" AND
+           EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${relpath}")
+            add_test(
+                NAME phase1_neg_${name}
+                COMMAND ${CMAKE_COMMAND}
+                    -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+                    -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${relpath}
+                    -DEXPECT_REGEX=${regex}
+                    -DEXTRA_ARGS=${ARGN}
+                    -P ${_cpx_sem_neg_helper}
+            )
+            set_tests_properties(phase1_neg_${name} PROPERTIES LABELS "local_semantic")
+        else()
+            message(STATUS "  Omitting phase1_neg_${name}: missing fixture or helper")
+        endif()
     endmacro()
     macro(casprix_phase1_pos name relpath)
-        add_test(
-            NAME phase1_pos_${name}
-            COMMAND ${CMAKE_COMMAND}
-                -DCASPRIX_EXE=$<TARGET_FILE:casprix>
-                -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${relpath}
-                -DEXTRA_ARGS=${ARGN}
-                -P ${CMAKE_CURRENT_SOURCE_DIR}/semantic/check_positive.cmake
-        )
+        if(EXISTS "${_cpx_sem_pos_helper}" AND
+           EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${relpath}")
+            add_test(
+                NAME phase1_pos_${name}
+                COMMAND ${CMAKE_COMMAND}
+                    -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+                    -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${relpath}
+                    -DEXTRA_ARGS=${ARGN}
+                    -P ${_cpx_sem_pos_helper}
+            )
+            set_tests_properties(phase1_pos_${name} PROPERTIES LABELS "local_semantic")
+        else()
+            message(STATUS "  Omitting phase1_pos_${name}: missing fixture or helper")
+        endif()
     endmacro()
 
     casprix_phase1_neg(mut_borrow_conflict

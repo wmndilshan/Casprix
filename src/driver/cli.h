@@ -47,6 +47,8 @@ typedef struct {
     CompilerOutputKind   output_kind;
     NativeCodegenKind    native_codegen;
     bool                 allow_legacy_backend_fallback;
+    /* Set when MIR codegen already wrote the final artifact (skip NASM/link). */
+    bool                 codegen_produced_final_artifact;
     int                  opt_level;
     bool                 safe_mode;
     bool                 size_opt;
