@@ -1279,9 +1279,11 @@ static Expr* primary(Parser* parser) {
 static Expr* unary(Parser* parser) {
     if (match(parser, TOKEN_BITAND)) {
         Token op = parser->previous;
-        match(parser, TOKEN_MUT);
+        bool is_mut = match(parser, TOKEN_MUT);
         Expr* operand = unary(parser);
-        return create_unary_expr(op.type, operand, op.line, op.column);
+        Expr* expr = create_unary_expr(op.type, operand, op.line, op.column);
+        if (expr) expr->as.unary.is_mut = is_mut;
+        return expr;
     }
     if (match(parser, TOKEN_NOT) || match(parser, TOKEN_MINUS) ||
         match(parser, TOKEN_BITNOT)) {
@@ -1460,7 +1462,8 @@ static Expr* factor(Parser* parser) {
 
     while (match(parser, TOKEN_STAR) || match(parser, TOKEN_SLASH) || match(parser, TOKEN_PERCENT)) {
         Token op = parser->previous;
-        Expr* right = postfix(parser);
+        /* RHS must accept unary (`a * -b`), not only postfix. */
+        Expr* right = unary(parser);
         expr = create_binary_expr(expr, op.type, right, op.line, op.column);
     }
 

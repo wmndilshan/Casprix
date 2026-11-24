@@ -167,8 +167,29 @@ static OwnershipInfo* get_ownership_info(Symbol* sym) {
         info->is_linear_view = false;
         info->parent_string  = NULL;
         info->consume_count  = 0;
+        info->borrow_of = NULL;
+        info->borrow_of_mut = false;
     }
     return (OwnershipInfo*)sym->ownership_data;
+}
+
+void ownership_bind_loan(OwnershipChecker* checker, const char* holder_name,
+                         const char* place_name, bool is_mut) {
+    if (!checker || !holder_name || !place_name) return;
+    Symbol* sym = lookup_symbol(checker->analyzer->symbols, holder_name);
+    if (!sym) return;
+    OwnershipInfo* info = get_ownership_info(sym);
+    free(info->borrow_of);
+    info->borrow_of = strdup(place_name);
+    info->borrow_of_mut = is_mut;
+}
+
+void ownership_info_free(void* ownership_data) {
+    if (!ownership_data) return;
+    OwnershipInfo* info = (OwnershipInfo*)ownership_data;
+    free(info->borrow_of);
+    info->borrow_of = NULL;
+    free(info);
 }
 
 void register_linear_view(OwnershipChecker* checker,
@@ -424,21 +445,31 @@ void validate_scope_end(OwnershipChecker* checker, int scope_level) {
 
         OwnershipInfo* info = (OwnershipInfo*)sym->ownership_data;
 
-        /* Release any outstanding borrows */
+        /* If this binding held a loan of another place, release that loan
+         * so sequential non-overlapping borrows in outer scopes work. */
+        if (info->borrow_of) {
+            release_borrow(checker, info->borrow_of);
+            free(info->borrow_of);
+            info->borrow_of = NULL;
+            info->borrow_of_mut = false;
+        }
+
+        /* Clear loan flags on the place itself if it is leaving scope.
+         * Outstanding loans of an escaping place are a separate error
+         * (reference escape); reset local accounting here. */
         if (info->borrow_count > 0) {
-            CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC,                      "Auto-releasing %d borrow(s) on '%s' at scope end (level %d)",
-                     info->borrow_count, sym->name, scope_level);
+            CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC,
+                    "Clearing %d borrow(s) on '%s' at scope end (level %d)",
+                    info->borrow_count, sym->name, scope_level);
             info->borrow_count = 0;
         }
         if (info->has_mut_borrow) {
-            CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC,                      "Auto-releasing mutable borrow on '%s' at scope end (level %d)",
-                     sym->name, scope_level);
+            CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_SEMANTIC,
+                    "Clearing mutable borrow on '%s' at scope end (level %d)",
+                    sym->name, scope_level);
             info->has_mut_borrow = false;
         }
 
-        /* If the value is still OWNED and was never moved, it will be
-           dropped by the drop planner.  Nothing to warn about here —
-           this is normal RAII.  Reset state for symbol reuse. */
         if (info->state == OWNERSHIP_OWNED || info->state == OWNERSHIP_BORROW ||
             info->state == OWNERSHIP_BORROW_MUT) {
             info->state = OWNERSHIP_OWNED;

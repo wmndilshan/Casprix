@@ -5,6 +5,7 @@
 #include "compiler/sema/drop_planner.h"
 #include "compiler/sema/ownership_check.h"
 #include "compiler/sema/linear_view.h"
+#include "compiler/sema/type_compat.h"
 #include "compiler/middle/closure.h"
 #include "support/error.h"
 
@@ -76,50 +77,6 @@ void free_semantic_analyzer(SemanticAnalyzer* analyzer) {
 
 static const char* type_to_string(DataType type) {
     return datatype_to_string(type);
-}
-
-static bool types_compatible(DataType t1, DataType t2) {
-    if (t1 == TYPE_ERROR || t2 == TYPE_ERROR) return true;
-    if (t1 == TYPE_GENERIC || t2 == TYPE_GENERIC) return true;
-    if (t1 == t2) return true;
-    if (t1 == TYPE_DYN || t2 == TYPE_DYN) return false;
-
-    // Allow implicit conversions between numeric types
-    // Integer widening: i8 -> i16 -> i32 -> i64 -> i128
-    // Unsigned widening: u8 -> u16 -> u32 -> u64 -> u128
-    // Int -> Float widening: any integer -> f32/f64
-    // Float widening: f16 -> f32 -> f64
-    if (type_is_numeric(t1) && type_is_numeric(t2)) {
-        return true;  // Allow all numeric conversions (semantic check warns on narrowing)
-    }
-
-    // char is compatible with integer types
-    if ((t1 == TYPE_CHAR && type_is_integer(t2)) ||
-        (type_is_integer(t1) && t2 == TYPE_CHAR)) {
-        return true;
-    }
-
-    // string and strbuf are compatible (string -> strbuf conversion)
-    if ((t1 == TYPE_STRING && t2 == TYPE_STRBUF) ||
-        (t1 == TYPE_STRBUF && t2 == TYPE_STRING)) {
-        return true;
-    }
-
-    // class/struct and ref are compatible (implicit reference taking)
-    if ((t1 == TYPE_CLASS || t1 == TYPE_STRUCT) && t2 == TYPE_REF) {
-        return true;
-    }
-
-    // Allow integer literal 0 (null) to be assigned to pointer types (C-FFI interop)
-    // This enables: let p: rawptr = 0
-    if (type_is_integer(t1) && (t2 == TYPE_RAWPTR || t2 == TYPE_PTR || t2 == TYPE_REF)) {
-        return true;
-    }
-    if (type_is_integer(t2) && (t1 == TYPE_RAWPTR || t1 == TYPE_PTR || t1 == TYPE_REF)) {
-        return true;
-    }
-
-    return false;
 }
 
 // Determine the result type of a binary operation between two numeric types
@@ -432,7 +389,11 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             
         case TOKEN_EQUAL:
         case TOKEN_NOT_EQUAL:
-            if (types_compatible(left_type, right_type)) {
+            /* Equality is symmetric: either direction of implicit convertibility. */
+            if (types_compatible(left_type, right_type) ||
+                types_compatible(right_type, left_type) ||
+                (type_is_numeric(left_type) && type_is_numeric(right_type) &&
+                 type_is_unsigned(left_type) == type_is_unsigned(right_type))) {
                 expr->data_type = TYPE_BOOL;
             } else {
                 report_type_error(expr->line, expr->column,
@@ -476,10 +437,27 @@ static void analyze_unary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     
     switch (unary->operator) {
         case TOKEN_BITAND:
+            /* Borrow expressions: preserve place type for inference, but
+             * register shared/mutable loans on the referent (DEF-009). */
             expr->data_type = operand_type;
             if (unary->operand->class_name) {
                 if (expr->class_name) free(expr->class_name);
                 expr->class_name = strdup(unary->operand->class_name);
+            }
+            if (unary->operand->type == EXPR_VARIABLE &&
+                unary->operand->as.variable.name) {
+                const char* place = unary->operand->as.variable.name;
+                bool ok = unary->is_mut
+                    ? add_mut_borrow(&g_ownership_ctx, place, expr->line)
+                    : add_borrow(&g_ownership_ctx, place, expr->line);
+                if (!ok) {
+                    expr->data_type = TYPE_ERROR;
+                }
+            } else if (unary->is_mut) {
+                /* &mut of non-place: reject in safe analysis */
+                report_semantic_error(expr->line, expr->column,
+                    "mutable borrow requires an addressable place (local variable)");
+                expr->data_type = TYPE_ERROR;
             }
             break;
 
@@ -907,10 +885,9 @@ static void analyze_super_expr(SemanticAnalyzer* analyzer, Expr* expr) {
  *   -1  : not a match (wrong arity, or an incompatible argument type)
  *    0  : matches only via numeric/implicit conversions
  *  >0  : number of arguments whose type is an exact match (higher == better)
- * The exact-match count is the tiebreak between same-arity overloads; because
- * types_compatible() treats every numeric type as interchangeable, that is the
- * only signal available to disambiguate e.g. new Foo(1) between func Foo(x:int)
- * and func Foo(x:f64). */
+ * The exact-match count is the tiebreak between same-arity overloads.
+ * Phase 1 tightened types_compatible so narrowing is no longer free;
+ * exact matches still win over implicit widenings. */
 static int score_constructor(MethodSymbol* ctor, Expr** args, int arg_count) {
     if (ctor->param_count != arg_count) return -1;
     int exact = 0;
@@ -1882,6 +1859,17 @@ static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
             symbol->is_mutable = decl->is_mutable;
             symbol->is_const = decl->is_const;
 
+            /* Bind loan holder → place so scope exit releases the loan. */
+            if (decl->initializer->type == EXPR_UNARY &&
+                decl->initializer->as.unary.operator == TOKEN_BITAND &&
+                decl->initializer->as.unary.operand &&
+                decl->initializer->as.unary.operand->type == EXPR_VARIABLE &&
+                decl->initializer->as.unary.operand->as.variable.name) {
+                ownership_bind_loan(&g_ownership_ctx, decl->name,
+                    decl->initializer->as.unary.operand->as.variable.name,
+                    decl->initializer->as.unary.is_mut);
+            }
+
             if (decl->type == TYPE_FUNC &&
                 ((decl->initializer && decl->initializer->type_info) || decl->type_info)) {
                 TypeInfo* fn_info = decl->type_info ? decl->type_info : decl->initializer->type_info;
@@ -2402,10 +2390,19 @@ static void analyze_for_in_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     }
     analyze_expr(analyzer, fi->iterable);
 
+    /* Element type of the iterable: prefer TypeInfo element, else default Int.
+     * Hardcoding i64 caused false narrowing errors against Int accumulators. */
+    DataType iter_ty = TYPE_INT;
+    if (fi->iterable->type_info && fi->iterable->type_info->element_type)
+        iter_ty = fi->iterable->type_info->element_type->base;
+    else if (fi->iterable->data_type == TYPE_STATIC_ARRAY ||
+             fi->iterable->data_type == TYPE_SLICE)
+        iter_ty = TYPE_INT;
+
     /* Declare loop variable in a new scope */
     int scope = 0;
     enter_scope(analyzer->symbols, &scope);
-    add_symbol(analyzer->symbols, fi->var_name, SYMBOL_VARIABLE, TYPE_I64, scope);
+    add_symbol(analyzer->symbols, fi->var_name, SYMBOL_VARIABLE, iter_ty, scope);
 
     analyzer->loop_depth++;
     if (fi->body) analyze_loop_body_fixpoint(analyzer, fi->body);

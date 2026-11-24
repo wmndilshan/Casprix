@@ -8,13 +8,15 @@ This file summarizes **language surface**, **compiler pipelines**, and **CLI usa
 
 - Classes with inheritance and virtual dispatch
 - Closures (surface and capture rules still evolving in places)
-- Generics with monomorphization (`List<T>`-style)
+- Generics syntax (monomorphization exists in-tree but is **not yet wired** into the driver pipeline)
 - Arrays, `string`, control flow (`if` / `while` / `for` / `match`)
 - **Linear `StringView`**: non-owning borrow of `string` data with move-only semantics; checked in semantic / escape / drop passes (see [STDLIB_STRINGS_AND_REGEX.md](STDLIB_STRINGS_AND_REGEX.md))
+- **Borrow checking (Phase 1):** `&` / `&mut` place borrows with lexical loan lifetimes; overlapping mutable borrows rejected. See `docs/research/phase1_compiler_correctness/01_semantic_contract.md`
+- **Numeric conversions (Phase 1):** implicit widening only; narrowing and signedness changes require explicit casts (cast surface still limited)
 
 ### Optimizations (representative)
 
-- MIR-based middle end: const eval, borrow checking on MIR, inlining, mem2reg, SIMD legalization, etc.
+- MIR-based middle end: mem2reg, inlining, mir_opt (const fold/DCE/ARC elision); borrow checking under `--safe-mode`. `mir_consteval` and SIMD legalization modules exist but are **not driver-invoked** by default.
 - x86-64 codegen: linear-scan register allocation, peephole passes, loop optimizations, SIMD path in `src/compiler/opt/simd.c`
 - AVX2: enabled at **CMake** / compile time for the runtime and some kernels (`ENABLE_AVX2`), not via a `casprix -mavx2` flag
 

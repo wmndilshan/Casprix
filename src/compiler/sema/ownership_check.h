@@ -41,6 +41,11 @@ typedef struct OwnershipInfo {
     bool        is_linear_view;
     const char* parent_string;
     int         consume_count;
+
+    /* If this binding holds a borrow of another place (let a = &x / &mut x),
+     * borrow_of names that place. Released in validate_scope_end. */
+    char*       borrow_of;
+    bool        borrow_of_mut;
 } OwnershipInfo;
 
 /* ─── Path-sensitive move state ──────────────────────────────────────────────
@@ -138,6 +143,13 @@ bool is_move_expr(Expr* expr);
 
 // Validate ownership at end of scope
 void validate_scope_end(OwnershipChecker* checker, int scope_level);
+
+/* Record that binding `holder_name` holds a loan of `place_name`. */
+void ownership_bind_loan(OwnershipChecker* checker, const char* holder_name,
+                         const char* place_name, bool is_mut);
+
+/* Free an OwnershipInfo blob stored in Symbol::ownership_data. */
+void ownership_info_free(void* ownership_data);
 
 // Reset path-sensitive move state (call at function-body entry)
 void ownership_reset_function(OwnershipChecker* checker);

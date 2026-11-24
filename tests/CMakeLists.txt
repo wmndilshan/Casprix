@@ -614,6 +614,50 @@ if(BUILD_COMPILER AND TARGET casprix)
     endif()
 endif()
 
+# ── Phase 1 semantic / borrow / type-system conformance ───────────────────────
+if(BUILD_COMPILER AND TARGET casprix)
+    macro(casprix_phase1_neg name relpath regex)
+        add_test(
+            NAME phase1_neg_${name}
+            COMMAND ${CMAKE_COMMAND}
+                -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+                -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${relpath}
+                -DEXPECT_REGEX=${regex}
+                -DEXTRA_ARGS=${ARGN}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/semantic/check_negative.cmake
+        )
+    endmacro()
+    macro(casprix_phase1_pos name relpath)
+        add_test(
+            NAME phase1_pos_${name}
+            COMMAND ${CMAKE_COMMAND}
+                -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+                -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/${relpath}
+                -DEXTRA_ARGS=${ARGN}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/semantic/check_positive.cmake
+        )
+    endmacro()
+
+    casprix_phase1_neg(mut_borrow_conflict
+        borrow/test_mut_borrow_conflict.cpx "mutably while borrowed" --safe-mode)
+    casprix_phase1_neg(mut_imm_conflict
+        borrow/test_mut_imm_conflict.cpx "while mutably borrowed" --safe-mode)
+    casprix_phase1_neg(narrowing_rejected
+        type_system/test_narrowing_rejected.cpx "Type mismatch")
+    casprix_phase1_neg(signed_unsigned_rejected
+        type_system/test_signed_unsigned_rejected.cpx "Type mismatch")
+
+    casprix_phase1_pos(mut_borrow_ok borrow/test_mut_borrow_ok.cpx --safe-mode)
+    casprix_phase1_pos(shared_borrows_ok borrow/test_shared_borrows_ok.cpx --safe-mode)
+    casprix_phase1_pos(sequential_mut_borrows
+        borrow/test_sequential_mut_borrows.cpx --safe-mode)
+    casprix_phase1_pos(widening_ok type_system/test_widening_ok.cpx)
+
+    # DEF-010: --safe-mode --check-only must reject conflicting borrows
+    casprix_phase1_neg(def010_safe_mode_check_only
+        borrow/test_mut_borrow_conflict.cpx "mutably while borrowed" --safe-mode)
+endif()
+
 # ── CTest configuration ───────────────────────────────────────────────────────
 # Release builds define NDEBUG globally. Unit tests depend on assert(), so
 # explicitly keep assertions active for every executable created here.

@@ -84,7 +84,8 @@ void cli_print_usage(const char* program_name) {
     printf("  --execute             Run the program in-process via the CVM (implies --mir);\n");
     printf("                        main()'s return value becomes the process exit code\n");
     printf("  --opt-level=N         Optimization level 0-3 (default: 2)\n");
-    printf("  --safe-mode           Enable borrow checking (implies --mir)\n");
+    printf("  --safe-mode           Enable borrow checking (implies --mir);\n");
+    printf("                        with --check-only, still runs MIR borrow verification\n");
     printf("  --size-opt            Optimize for code size\n");
 
     printf("\nDiagnostic Options:\n");

@@ -125,6 +125,7 @@ static void track_borrow(MirBorrowChecker* bc, MirInst* inst, MirBorrowKind kind
     b->src_line = inst->src_line;
     b->src_col = inst->src_col;
     b->active = true;
+    b->stored = false;
 }
 
 /* ================================================================
@@ -347,7 +348,8 @@ static void check_borrow_conflicts(MirBorrowChecker* bc, MirValueId source,
         MirBorrow* existing = &bc->borrows[i];
         if (existing->borrow_id == new_borrow) continue;
 
-        bool active = (existing->borrow_id == inst->result) ||
+        bool active = existing->stored ||
+                      (existing->borrow_id == inst->result) ||
                       inst_uses_value(inst, existing->borrow_id) ||
                       is_live_after(bb, inst, existing->borrow_id, live_out[bb->id], num_vals);
 
@@ -685,6 +687,16 @@ int mir_borrow_check_function(MirBorrowChecker* bc, MirFunction* func) {
 
         for (MirInst* inst = bb->first; inst; inst = inst->next) {
             borrow_check_inst_operands(bc, inst);
+
+            /* Storing a borrow result into memory extends the loan for the
+             * lifetime of that storage (conservative: rest of function). */
+            if (inst->opcode == MIR_STORE) {
+                MirValueId val = inst->as.mem.value;
+                for (int bi = 0; bi < bc->borrow_count; bi++) {
+                    if (bc->borrows[bi].borrow_id == val)
+                        bc->borrows[bi].stored = true;
+                }
+            }
 
             /* Track move instructions */
             if (inst->opcode == MIR_MOVE) {

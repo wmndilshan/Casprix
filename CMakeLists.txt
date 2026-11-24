@@ -149,6 +149,7 @@ set(SEMA_SOURCES
     src/compiler/sema/escape_analysis.c
     src/compiler/sema/drop_planner.c
     src/compiler/sema/linear_view.c
+    src/compiler/sema/type_compat.c
 )
 
 set(LAYOUT_SOURCES

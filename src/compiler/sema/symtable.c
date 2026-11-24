@@ -2,6 +2,9 @@
 #include <string.h>
 #include "compiler/sema/symtable.h"
 
+/* Defined in ownership_check.c — avoid header cycle with OwnershipInfo. */
+void ownership_info_free(void* ownership_data);
+
 void init_symbol_table(SymbolTable* table) {
     table->count = 0;
     table->capacity = 16;
@@ -18,7 +21,8 @@ void free_symbol_table(SymbolTable* table) {
             free(table->symbols[i]->closure_capture_types);
         }
         if (table->symbols[i]->ownership_data) {
-            free(table->symbols[i]->ownership_data);
+            ownership_info_free(table->symbols[i]->ownership_data);
+            table->symbols[i]->ownership_data = NULL;
         }
         if (table->symbols[i]->enum_name) free(table->symbols[i]->enum_name);
         if (table->symbols[i]->kind == SYMBOL_CLASS && table->symbols[i]->class_info) {
@@ -170,7 +174,8 @@ void exit_scope(SymbolTable* table, int* scope_depth) {
             free(symbol->closure_capture_types);
         }
         if (symbol->ownership_data) {
-            free(symbol->ownership_data);
+            ownership_info_free(symbol->ownership_data);
+            symbol->ownership_data = NULL;
         }
         free(symbol);
     }

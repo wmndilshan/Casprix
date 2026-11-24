@@ -27,6 +27,7 @@ Expr* create_unary_expr(CpxTokenType op, Expr* operand, int line, int col) {
     expr->column = col;
     expr->as.unary.operator = op;
     expr->as.unary.operand = operand;
+    expr->as.unary.is_mut = false;
     return expr;
 }
 
@@ -543,6 +544,7 @@ Expr* clone_expr(const Expr* expr) {
         case EXPR_UNARY:
             clone->as.unary.operator = expr->as.unary.operator;
             clone->as.unary.operand = clone_expr(expr->as.unary.operand);
+            clone->as.unary.is_mut = expr->as.unary.is_mut;
             break;
         case EXPR_LITERAL:
             clone->as.literal.type = expr->as.literal.type;
