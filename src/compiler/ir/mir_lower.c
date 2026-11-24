@@ -939,7 +939,24 @@ static MirValueId lower_new(MirLowerCtx* ctx, Expr* expr) {
         }
     }
 
-    MirValueId obj = mir_build_obj_alloc(&ctx->builder, ne->class_name, obj_size);
+    /* Collect byte offsets of ARC-owned instance fields for destructor/scanner. */
+    int managed_offsets[64];
+    int managed_count = 0;
+    if (ctx->symtable) {
+        ClassSymbol* cs = lookup_class(ctx->symtable, ne->class_name);
+        if (cs) {
+            for (int fi = 0; fi < cs->field_count && managed_count < 64; fi++) {
+                FieldSymbol* f = &cs->fields[fi];
+                if (f->is_static || f->offset < 0) continue;
+                if (type_is_arc_class(ctx, f->type, f->class_name)) {
+                    managed_offsets[managed_count++] = f->offset;
+                }
+            }
+        }
+    }
+
+    MirValueId obj = mir_build_obj_alloc_ex(&ctx->builder, ne->class_name, obj_size,
+                                            managed_offsets, managed_count);
     const char* ctor_method_name = find_constructor_method_name(ctx, ne->class_name);
 
     /* Call constructor if args present */

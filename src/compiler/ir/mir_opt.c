@@ -634,10 +634,16 @@ int mir_pass_arc_elision(MirFunction* func) {
             for (MirInst* release = retain->next; release; release = release->next) {
                 if (release->opcode == MIR_ARC_RELEASE &&
                     release->as.refop.ptr == ptr) {
-                    /* Check no intervening use of ptr between retain and release */
+                    /* Check no intervening use/escape of ptr between retain and release.
+                     * Stores, calls, and field ops can alias or observe the object. */
                     bool intervening_use = false;
                     for (MirInst* mid = retain->next; mid != release; mid = mid->next) {
-                        if (value_used_in_inst(mid, ptr)) {
+                        if (value_used_in_inst(mid, ptr) ||
+                            mid->opcode == MIR_STORE ||
+                            mid->opcode == MIR_CALL ||
+                            mid->opcode == MIR_CALL_INDIRECT ||
+                            mid->opcode == MIR_CALL_VIRTUAL ||
+                            mid->opcode == MIR_OBJ_ALLOC) {
                             intervening_use = true;
                             break;
                         }

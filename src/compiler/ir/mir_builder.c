@@ -518,12 +518,25 @@ void mir_build_arc_release(MirBuilder* b, MirValueId ptr) {
     emit_void(b, inst);
 }
 
-MirValueId mir_build_obj_alloc(MirBuilder* b, const char* class_name, int size) {
+MirValueId mir_build_obj_alloc_ex(MirBuilder* b, const char* class_name, int size,
+                                  const int* managed_offsets, int managed_field_count) {
     MirType* ptr_type = mir_type_ptr(b->module, mir_type_i8(b->module));
     MirInst* inst = alloc_inst(b, MIR_OBJ_ALLOC, ptr_type);
     inst->as.obj_alloc.class_name = mir_arena_strdup(b->module->arena, class_name);
     inst->as.obj_alloc.size = size;
+    inst->as.obj_alloc.managed_field_count = managed_field_count > 0 ? managed_field_count : 0;
+    inst->as.obj_alloc.managed_offsets = NULL;
+    if (inst->as.obj_alloc.managed_field_count > 0 && managed_offsets) {
+        size_t bytes = (size_t)inst->as.obj_alloc.managed_field_count * sizeof(int);
+        inst->as.obj_alloc.managed_offsets =
+            (int*)mir_arena_alloc(b->module->arena, bytes);
+        memcpy(inst->as.obj_alloc.managed_offsets, managed_offsets, bytes);
+    }
     return emit(b, inst);
+}
+
+MirValueId mir_build_obj_alloc(MirBuilder* b, const char* class_name, int size) {
+    return mir_build_obj_alloc_ex(b, class_name, size, NULL, 0);
 }
 
 /* ================================================================
