@@ -86,12 +86,11 @@ static inline SourceSpan span_from_range(FileId f,
  * 2. SOURCE MAP — line index for snippet extraction
  * ════════════════════════════════════════════════════════════════════ */
 
-/* Pre-computed line→offset table for a single source file.
- * Built once from the source buffer, then shared read-only.        */
+/* Pre-computed line→offset table for a source snapshot owned by SourceMap. */
 typedef struct {
-    const char*     source;         /* raw source text (borrowed)    */
+    const char*     source;         /* owned raw source text         */
     uint32_t        source_len;     /* byte length                   */
-    const char*     filename;       /* display name                  */
+    const char*     filename;       /* owned display name            */
     FileId          id;
     uint32_t*       line_offsets;   /* offset of first byte per line */
     uint32_t        line_count;     /* total lines                   */

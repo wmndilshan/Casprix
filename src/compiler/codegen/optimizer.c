@@ -162,6 +162,8 @@ Expr* fold_constants(Expr* expr, OptimizerContext* ctx) {
 
     // Create folded literal expression
     Expr* folded = (Expr*)malloc(sizeof(Expr));
+    if (!folded) return expr;
+    memset(folded, 0, sizeof(*folded));
     folded->type = EXPR_LITERAL;
     folded->line = expr->line;
     folded->column = expr->column;
@@ -182,6 +184,7 @@ Expr* fold_constants(Expr* expr, OptimizerContext* ctx) {
 
     ctx->constants_folded++;
     ctx->optimizations_performed++;
+    free_expr(expr);
     return folded;
 }
 

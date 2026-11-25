@@ -16,5 +16,6 @@ typedef struct {
 
 void init_parser(Parser* parser, Lexer* lexer);
 Stmt** parse(Parser* parser, int* stmt_count);
+void parser_destroy(Parser* parser);
 
 #endif // PARSER_H

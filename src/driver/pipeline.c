@@ -75,10 +75,15 @@ static void compile_ctx_init(CompileCtx* ctx) {
 static void compile_ctx_destroy(CompileCtx* ctx) {
     if (ctx->mir_module)    { mir_module_destroy(ctx->mir_module);    ctx->mir_module = NULL; }
     if (ctx->analyzer_init) { free_semantic_analyzer(&ctx->analyzer); ctx->analyzer_init = false; }
-    if (ctx->registry_init) { free_module_registry(&ctx->module_registry); ctx->registry_init = false; }
     if (ctx->async_init)    { free_async(&ctx->async_ctx); ctx->async_init = false; }
-    /* Skip per-stmt free: merged module+user stmts array causes crash in free_stmt.
-     * Leaking AST nodes is acceptable for a short-lived compiler process. */
+    /* Module statement slots are nulled when their nodes move into this
+     * combined array. Destroy the registry containers first, then the one
+     * authoritative AST root set held here. */
+    if (ctx->registry_init) { free_module_registry(&ctx->module_registry); ctx->registry_init = false; }
+    if (ctx->statements) {
+        for (int i = 0; i < ctx->stmt_count; i++)
+            free_stmt(ctx->statements[i]);
+    }
     free(ctx->statements); ctx->statements = NULL;
     free(ctx->source);     ctx->source = NULL;
 }
@@ -177,8 +182,15 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     g_link_needs_ai_core = false;
 
     ctx.source = driver_read_file(source_path);
-    source_map_add_file(&g_diag.source_map, source_path,
-                        ctx.source, (uint32_t)strlen(ctx.source));
+    if (!ctx.source) {
+        result = 66;
+        goto done;
+    }
+    if (source_map_add_file(&g_diag.source_map, source_path,
+                            ctx.source, (uint32_t)strlen(ctx.source)) == UINT16_MAX) {
+        result = 74;
+        goto done;
+    }
 
     g_diag.perf.enabled = true;
 
@@ -212,7 +224,11 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         init_lexer(&l, ctx.source);
         int count = 0;
         Token t;
-        do { t = scan_token(&l); count++; } while (t.type != TOKEN_EOF);
+        do {
+            t = scan_token(&l);
+            count++;
+            if (t.type == TOKEN_STRING) free(t.literal.string_value);
+        } while (t.type != TOKEN_EOF);
         perf_set_items(&g_diag.perf, count);
     }
 
@@ -228,6 +244,7 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
     Parser parser;
     init_parser(&parser, &lexer);
     ctx.statements = parse(&parser, &ctx.stmt_count);
+    parser_destroy(&parser);
     if (g_debug_config.dump_ast) {
         debug_dump_ast(ctx.statements, ctx.stmt_count);
     }

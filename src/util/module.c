@@ -324,9 +324,13 @@ Module* load_module(ModuleRegistry* registry, const char* module_name, void* unu
 
     int stmt_count;
     Stmt** statements = parse(&parser, &stmt_count);
+    parser_destroy(&parser);
 
     if (had_error) {
         CPX_LOG(CPX_LOG_ERROR, CPX_LOG_CAT_PARSER, "Failed to parse module: %s", module_name);
+        for (int i = 0; i < stmt_count; i++)
+            free_stmt(statements[i]);
+        free(statements);
         free(source);
         free(module_path);
         return NULL;
@@ -353,16 +357,18 @@ Module* load_module(ModuleRegistry* registry, const char* module_name, void* unu
              module_name, stmt_count);
 
     // Recursively load any imports within this module
+    char* import_anchor = cpx_strdup(mod->path);
     for (int i = 0; i < stmt_count; i++) {
         if (statements[i] && statements[i]->type == STMT_INCLUDE) {
             IncludeStmt* incl = &statements[i]->as.include;
             if (incl->module_name) {
-                load_module(registry, incl->module_name, mod->path);
+                load_module(registry, incl->module_name, import_anchor);
             }
         }
     }
+    free(import_anchor);
 
-    return mod;
+    return get_module(registry, module_name);
 }
 
 Module* get_module(ModuleRegistry* registry, const char* name) {

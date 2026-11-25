@@ -260,13 +260,28 @@ int mir_pass_constant_fold(MirFunction* func) {
                     int64_t r = rhs_def->as.imm_i64;
                     int64_t result = 0;
                     bool valid = true;
-                    switch (inst->opcode) {
-                        case MIR_ADD: result = l + r; break;
-                        case MIR_SUB: result = l - r; break;
-                        case MIR_MUL: result = l * r; break;
-                        case MIR_DIV: if (r != 0) result = l / r; else valid = false; break;
-                        case MIR_MOD: if (r != 0) result = l % r; else valid = false; break;
-                        default: valid = false;
+                    bool is_unsigned = mir_type_is_unsigned(
+                        mir_function_value_type(func, inst->as.binary.lhs));
+                    if (is_unsigned) {
+                        uint64_t ul = (uint64_t)l, ur = (uint64_t)r, uresult = 0;
+                        switch (inst->opcode) {
+                            case MIR_ADD: uresult = ul + ur; break;
+                            case MIR_SUB: uresult = ul - ur; break;
+                            case MIR_MUL: uresult = ul * ur; break;
+                            case MIR_DIV: if (ur) uresult = ul / ur; else valid = false; break;
+                            case MIR_MOD: if (ur) uresult = ul % ur; else valid = false; break;
+                            default: valid = false;
+                        }
+                        memcpy(&result, &uresult, sizeof(result));
+                    } else {
+                        switch (inst->opcode) {
+                            case MIR_ADD: result = l + r; break;
+                            case MIR_SUB: result = l - r; break;
+                            case MIR_MUL: result = l * r; break;
+                            case MIR_DIV: if (r != 0) result = l / r; else valid = false; break;
+                            case MIR_MOD: if (r != 0) result = l % r; else valid = false; break;
+                            default: valid = false;
+                        }
                     }
                     if (valid) {
                         inst->opcode = MIR_CONST_INT;
@@ -285,13 +300,15 @@ int mir_pass_constant_fold(MirFunction* func) {
                     int64_t l = lhs_def->as.imm_i64;
                     int64_t r = rhs_def->as.imm_i64;
                     bool result = false;
+                    bool is_unsigned = mir_type_is_unsigned(
+                        mir_function_value_type(func, inst->as.binary.lhs));
                     switch (inst->opcode) {
                         case MIR_CMP_EQ: result = (l == r); break;
                         case MIR_CMP_NE: result = (l != r); break;
-                        case MIR_CMP_LT: result = (l < r);  break;
-                        case MIR_CMP_LE: result = (l <= r); break;
-                        case MIR_CMP_GT: result = (l > r);  break;
-                        case MIR_CMP_GE: result = (l >= r); break;
+                        case MIR_CMP_LT: result = is_unsigned ? (uint64_t)l < (uint64_t)r : l < r; break;
+                        case MIR_CMP_LE: result = is_unsigned ? (uint64_t)l <= (uint64_t)r : l <= r; break;
+                        case MIR_CMP_GT: result = is_unsigned ? (uint64_t)l > (uint64_t)r : l > r; break;
+                        case MIR_CMP_GE: result = is_unsigned ? (uint64_t)l >= (uint64_t)r : l >= r; break;
                         default: break;
                     }
                     inst->opcode = MIR_CONST_BOOL;

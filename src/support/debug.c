@@ -270,6 +270,7 @@ void debug_dump_tokens(const char* source) {
     do {
         token = scan_token(&lexer);
         debug_print_token(&token);
+        if (token.type == TOKEN_STRING) free(token.literal.string_value);
         token_count++;
     } while (token.type != TOKEN_EOF && token.type != TOKEN_ERROR);
 

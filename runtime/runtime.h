@@ -31,6 +31,7 @@ void nuwan_free(void* ptr);
 char* nuwan_strdup(const char* str);
 
 void nuwan_print_int(int64_t val);
+void nuwan_print_uint(uint64_t val);
 void nuwan_print_float(double val);
 void nuwan_print_bool(bool val);
 void nuwan_print_str(const char* val);

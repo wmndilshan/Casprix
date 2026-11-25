@@ -505,6 +505,7 @@ MirType*  mir_type_func(MirModule* m, MirType* ret,
 int       mir_type_size(MirType* t);
 int       mir_type_align(MirType* t);
 bool      mir_type_is_integer(MirType* t);
+bool      mir_type_is_unsigned(MirType* t);
 bool      mir_type_is_float(MirType* t);
 bool      mir_type_is_pointer(MirType* t);
 const char* mir_type_name(MirType* t);
@@ -582,6 +583,7 @@ MirValueId mir_build_xor(MirBuilder* b, MirValueId lhs, MirValueId rhs);
 MirValueId mir_build_not(MirBuilder* b, MirValueId operand);
 MirValueId mir_build_shl(MirBuilder* b, MirValueId lhs, MirValueId rhs);
 MirValueId mir_build_shr(MirBuilder* b, MirValueId lhs, MirValueId rhs);
+MirValueId mir_build_ushr(MirBuilder* b, MirValueId lhs, MirValueId rhs);
 
 /* Logical */
 MirValueId mir_build_logic_and(MirBuilder* b, MirValueId lhs, MirValueId rhs);

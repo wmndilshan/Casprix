@@ -57,6 +57,7 @@ typedef struct MirConstValue {
 /* Const-eval interpreter state */
 typedef struct {
     MirModule*          module;
+    MirFunction*        current_func;
 
     /* Value slots (indexed by MirValueId) */
     MirConstValue*      slots;

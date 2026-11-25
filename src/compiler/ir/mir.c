@@ -305,6 +305,10 @@ bool mir_type_is_integer(MirType* t) {
     return t && (t->kind >= MIR_TYPE_I8 && t->kind <= MIR_TYPE_U64);
 }
 
+bool mir_type_is_unsigned(MirType* t) {
+    return t && (t->kind >= MIR_TYPE_U8 && t->kind <= MIR_TYPE_U64);
+}
+
 bool mir_type_is_float(MirType* t) {
     return t && (t->kind == MIR_TYPE_F32 || t->kind == MIR_TYPE_F64);
 }

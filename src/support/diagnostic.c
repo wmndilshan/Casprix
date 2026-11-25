@@ -112,6 +112,8 @@ void source_map_init(SourceMap* sm) {
 
 void source_map_destroy(SourceMap* sm) {
     for (int i = 0; i < sm->file_count; i++) {
+        free((void*)sm->files[i].source);
+        free((void*)sm->files[i].filename);
         free(sm->files[i].line_offsets);
     }
     free(sm->files);
@@ -120,35 +122,60 @@ void source_map_destroy(SourceMap* sm) {
 
 FileId source_map_add_file(SourceMap* sm, const char* filename,
                             const char* source, uint32_t len) {
+    if (!sm || !source || sm->file_count >= UINT16_MAX) return UINT16_MAX;
     if (sm->file_count >= sm->file_capacity) {
-        sm->file_capacity *= 2;
-        sm->files = (SourceFile*)realloc(sm->files,
-                        (size_t)sm->file_capacity * sizeof(SourceFile));
+        int new_capacity = sm->file_capacity > 0 ? sm->file_capacity * 2 : 4;
+        SourceFile* new_files = (SourceFile*)realloc(
+            sm->files, (size_t)new_capacity * sizeof(SourceFile));
+        if (!new_files) return UINT16_MAX;
+        sm->files = new_files;
+        sm->file_capacity = new_capacity;
     }
 
-    FileId id = (FileId)sm->file_count;
-    SourceFile* f = &sm->files[sm->file_count++];
-    f->source = source;
-    f->source_len = len;
-    f->filename = filename;
-    f->id = id;
+    char* source_copy = (char*)malloc((size_t)len + 1);
+    char* filename_copy = NULL;
+    if (filename) {
+        size_t filename_len = strlen(filename);
+        filename_copy = (char*)malloc(filename_len + 1);
+        if (filename_copy) memcpy(filename_copy, filename, filename_len + 1);
+    }
+    if (!source_copy || (filename && !filename_copy)) {
+        free(source_copy);
+        free(filename_copy);
+        return UINT16_MAX;
+    }
+    memcpy(source_copy, source, len);
+    source_copy[len] = '\0';
 
     /* Build line offset table.  First pass: count lines. */
     uint32_t lines = 1;
     for (uint32_t i = 0; i < len; i++) {
-        if (source[i] == '\n') lines++;
+        if (source_copy[i] == '\n') lines++;
     }
-    f->line_offsets = (uint32_t*)malloc(lines * sizeof(uint32_t));
-    f->line_count = lines;
+    uint32_t* line_offsets = (uint32_t*)malloc((size_t)lines * sizeof(uint32_t));
+    if (!line_offsets) {
+        free(source_copy);
+        free(filename_copy);
+        return UINT16_MAX;
+    }
 
     /* Second pass: record offsets (1-indexed: line_offsets[0] = line 1). */
     uint32_t li = 0;
-    f->line_offsets[li++] = 0;
+    line_offsets[li++] = 0;
     for (uint32_t i = 0; i < len; i++) {
-        if (source[i] == '\n' && li < lines) {
-            f->line_offsets[li++] = i + 1;
+        if (source_copy[i] == '\n' && li < lines) {
+            line_offsets[li++] = i + 1;
         }
     }
+    FileId id = (FileId)sm->file_count;
+    sm->files[sm->file_count++] = (SourceFile){
+        .source = source_copy,
+        .source_len = len,
+        .filename = filename_copy,
+        .id = id,
+        .line_offsets = line_offsets,
+        .line_count = lines,
+    };
     return id;
 }
 

@@ -315,6 +315,7 @@ static bool c_begin_module(MirBackend* self, MirModule* module) {
     fprintf(data->out, "void* arc_retain(void* obj);\n");
     fprintf(data->out, "void arc_release(void* obj);\n\n");
     fprintf(data->out, "void nuwan_print_int(int64_t val);\n");
+    fprintf(data->out, "void nuwan_print_uint(uint64_t val);\n");
     fprintf(data->out, "void nuwan_print_float(double val);\n");
     fprintf(data->out, "void nuwan_print_bool(bool val);\n");
     fprintf(data->out, "void nuwan_print_str(const char* val);\n\n");
