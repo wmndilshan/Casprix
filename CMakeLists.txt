@@ -172,9 +172,11 @@ set(MIR_SOURCES
     src/compiler/ir/mir_consteval.c
     src/compiler/ir/mir_borrow.c
     src/compiler/ir/mir_backend.c
+    src/compiler/ir/mir_backend_caps.c
     src/compiler/ir/mir_c_backend.c
     src/compiler/ir/mir_mem2reg.c
     src/compiler/ir/mir_inline.c
+    src/compiler/ir/mir_pipeline.c
     src/compiler/ir/mir_async.c
     src/compiler/ir/mir_regex.c
 )

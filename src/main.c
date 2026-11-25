@@ -71,8 +71,9 @@ int main(int argc, char* argv[]) {
         goto done;
     }
 
-    /* MIR-based backends handle their own output — skip NASM + GCC */
-    if (g_config.output_kind != OUTPUT_NATIVE) {
+    /* MIR backends / MIR→C→native already wrote the final artifact. */
+    if (g_config.output_kind != OUTPUT_NATIVE ||
+        g_config.codegen_produced_final_artifact) {
         if (!g_config.compact_output) {
             printf("\n================================================================================\n");
             printf("  COMPILATION SUCCESSFUL (%s)\n", driver_selected_output_name());

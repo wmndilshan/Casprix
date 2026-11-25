@@ -126,6 +126,7 @@ static void track_borrow(MirBorrowChecker* bc, MirInst* inst, MirBorrowKind kind
     b->src_col = inst->src_col;
     b->active = true;
     b->stored = false;
+    b->storage_id = MIR_VALUE_NONE;
 }
 
 /* ================================================================
@@ -340,6 +341,13 @@ static void mark_uses(MirInst* inst, bool* def_bb, bool* use_bb, int num_vals) {
     #undef RECORD_USE
 }
 
+static bool borrow_defined_before(MirBlock* bb, MirInst* at, MirValueId borrow_id) {
+    for (MirInst* scan = bb->first; scan && scan != at; scan = scan->next) {
+        if (scan->result == borrow_id) return true;
+    }
+    return false;
+}
+
 static void check_borrow_conflicts(MirBorrowChecker* bc, MirValueId source,
                                     MirBorrowKind new_kind, int line, int col,
                                     MirValueId new_borrow, MirBlock* bb, MirInst* inst,
@@ -347,11 +355,28 @@ static void check_borrow_conflicts(MirBorrowChecker* bc, MirValueId source,
     for (int i = 0; i < bc->borrow_count; i++) {
         MirBorrow* existing = &bc->borrows[i];
         if (existing->borrow_id == new_borrow) continue;
+        /* Pre-populated borrow set includes later borrows; only prior defs
+         * can already be active at this program point. */
+        if (!borrow_defined_before(bb, inst, existing->borrow_id)) continue;
 
-        bool active = existing->stored ||
-                      (existing->borrow_id == inst->result) ||
-                      inst_uses_value(inst, existing->borrow_id) ||
-                      is_live_after(bb, inst, existing->borrow_id, live_out[bb->id], num_vals);
+        /* Loan activity follows the borrow SSA value (and any later reload of
+         * the storage that holds it). Alloca pointer liveness alone must not
+         * keep the loan alive for the whole function — that rejected valid
+         * sequential non-overlapping `&mut` in nested scopes. */
+        bool reload_keeps_loan = false;
+        if (existing->storage_id != MIR_VALUE_NONE) {
+            for (MirInst* scan = inst; scan; scan = scan->next) {
+                if (scan->opcode == MIR_LOAD &&
+                    scan->as.mem.ptr == existing->storage_id) {
+                    reload_keeps_loan = true;
+                    break;
+                }
+            }
+        }
+        bool active =
+            inst_uses_value(inst, existing->borrow_id) ||
+            is_live_after(bb, inst, existing->borrow_id, live_out[bb->id], num_vals) ||
+            reload_keeps_loan;
 
         if (!active) continue;
         if (existing->source_id != source) continue;
@@ -692,9 +717,12 @@ int mir_borrow_check_function(MirBorrowChecker* bc, MirFunction* func) {
              * lifetime of that storage (conservative: rest of function). */
             if (inst->opcode == MIR_STORE) {
                 MirValueId val = inst->as.mem.value;
+                MirValueId ptr = inst->as.mem.ptr;
                 for (int bi = 0; bi < bc->borrow_count; bi++) {
-                    if (bc->borrows[bi].borrow_id == val)
+                    if (bc->borrows[bi].borrow_id == val) {
                         bc->borrows[bi].stored = true;
+                        bc->borrows[bi].storage_id = ptr;
+                    }
                 }
             }
 

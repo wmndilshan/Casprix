@@ -943,14 +943,11 @@ int mir_verify_module(MirModule* module, FILE* diag) {
     for (MirFunction* f = module->func_list; f; f = f->next_func) {
         errors += mir_verify_function(f, diag);
     }
-    MirBorrowChecker bc;
-    mir_borrow_init(&bc, module);
-    int berr = mir_borrow_check_module(&bc, module);
-    if (berr > 0) {
-        if (diag) mir_borrow_print_errors(&bc, diag);
-        errors += berr;
-    }
-    mir_borrow_destroy(&bc);
+    /* Structural/type verification only. Borrow/ownership checking is a
+     * separate pipeline stage (mir_borrow_check_module) so safe-mode can
+     * place it before mem2reg while non-safe builds skip it. Embedding
+     * borrow here forced every consumer through lexical borrow rules. */
+    (void)diag;
     return errors;
 }
 

@@ -84,6 +84,13 @@ typedef void (*arc_destructor_fn)(void* obj);
 // Field scanner for cycle detection - calls arc_visit on each ref field
 typedef void (*arc_scan_fn)(void* obj, void (*visitor)(void* field_ptr));
 
+/* Called before a white object is finalized. Must:
+ *  - null every outgoing managed edge
+ *  - invoke collect_white_child on children that are still WHITE
+ *  - release strong refs to surviving (non-white) children
+ * This prevents both UAF on collected peers and leaks of external owners. */
+typedef void (*arc_cycle_clear_fn)(void* obj, void (*collect_white_child)(void* child));
+
 // ARC object header - prepended to every managed object
 typedef struct ArcHeader {
     void* allocation_base;         // Original allocation base for free()
@@ -96,6 +103,7 @@ typedef struct ArcHeader {
     ArcColor color;                // Color for cycle collection
     arc_destructor_fn destructor;  // Optional custom destructor
     arc_scan_fn scanner;           // Optional field scanner for cycle detection
+    arc_cycle_clear_fn cycle_clear; /* Optional white-set edge breaker */
 } ArcHeader;
 
 // Weak reference handle
@@ -115,6 +123,9 @@ void* arc_alloc_with_destructor(size_t size, arc_destructor_fn destructor);
 
 // Allocate with destructor and cycle scanner
 void* arc_alloc_full(size_t size, arc_destructor_fn destructor, arc_scan_fn scanner);
+
+/* Attach a cycle edge-clear callback (may be NULL). Safe on any ARC object. */
+void arc_set_cycle_clear(void* obj, arc_cycle_clear_fn clear_fn);
 
 // Allocate with an explicit payload alignment. alignment=0 uses the runtime default.
 void* arc_alloc_aligned(size_t size, size_t alignment);

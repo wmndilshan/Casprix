@@ -340,6 +340,7 @@ void* arc_alloc_full_aligned(size_t size, size_t alignment,
     header->color = ARC_COLOR_BLACK;
     header->destructor = destructor;
     header->scanner = scanner;
+    header->cycle_clear = NULL;
 
     if (destructor) {
         header->flags |= ARC_FLAG_HAS_DESTRUCTOR;
@@ -512,6 +513,14 @@ bool arc_is_cycle_finalizing(const void* obj) {
         return false;
     }
     return (get_header_const(obj)->flags & ARC_FLAG_CYCLE_FINALIZE) != 0;
+}
+
+void arc_set_cycle_clear(void* obj, arc_cycle_clear_fn clear_fn) {
+    ArcHeader* header;
+    if (!obj) return;
+    header = get_header(obj);
+    if (!header) return;
+    header->cycle_clear = clear_fn;
 }
 
 bool arc_is_moved(const void* obj) {

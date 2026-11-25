@@ -35,13 +35,9 @@
 #include "compiler/codegen/asmgen.h"
 #include "compiler/codegen/optimizer.h"
 #include "compiler/ir/mir.h"
-#include "compiler/ir/mir_lower.h"
-#include "compiler/ir/mir_opt.h"
-#include "compiler/ir/mir_borrow.h"
-#include "compiler/ir/mir_consteval.h"
+#include "compiler/ir/mir_pipeline.h"
 #include "compiler/ir/mir_backend.h"
-#include "compiler/ir/mir_mem2reg.h"
-#include "compiler/ir/mir_inline.h"
+#include "compiler/ir/mir_backend_caps.h"
 #include "util/tools.h"
 #include "util/module.h"
 
@@ -164,6 +160,10 @@ static MirBackend* create_mir_backend(const char* output_path) {
         default:         return mir_backend_create_x86_64(cfg);
     }
 }
+
+/* Forward decls for helpers defined below pipeline_compile. */
+static bool find_source_root_for_runtime(char* out, size_t outsz);
+static bool find_prebuilt_lib_path(const char* name, char* out, size_t outsz);
 
 /* ============================================================================
  * pipeline_compile
@@ -365,107 +365,42 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
         result = 0; goto done;
     }
 
-    /* --- Phase 5: MIR pipeline (when enabled) --- */
+    /* --- Phase 5: canonical MIR preparation (shared across consumers) --- */
     if (g_config.use_mir || g_config.safe_mode) {
+        MirPipelineOptions mir_opts;
+        MirPipelineResult mir_res;
+
         g_config.use_mir = true;
-        debug_phase_start("MIR LOWERING");
-        perf_start(&g_diag.perf, "MIR Lowering", STAGE_MIR);
-        ctx.mir_module = mir_lower_program(ctx.statements, ctx.stmt_count,
-                                           ctx.analyzer.symbols, "main");
-        if (!ctx.mir_module) {
-            printf("\n  [ERROR] MIR lowering failed.\n");
-            result = 65; goto done;
+        debug_phase_start("MIR PIPELINE");
+        perf_start(&g_diag.perf, "MIR Pipeline", STAGE_MIR);
+
+        mir_pipeline_options_init(&mir_opts);
+        mir_opts.optimize = g_config.optimize;
+        mir_opts.opt_level = g_config.opt_level;
+        mir_opts.run_inline = g_config.optimize && g_config.opt_level >= 2;
+        mir_opts.safe_mode = g_config.safe_mode;
+        mir_opts.dump_mir = g_config.dump_mir || g_config.dump_all;
+        mir_opts.module_name = "main";
+
+        mir_res = mir_pipeline_prepare(ctx.statements, ctx.stmt_count,
+                                       ctx.analyzer.symbols, &mir_opts);
+        if (mir_res.status != MIR_PIPE_OK) {
+            const char* why = "internal error";
+            if (mir_res.status == MIR_PIPE_ERR_LOWER) why = "lowering failed";
+            else if (mir_res.status == MIR_PIPE_ERR_VERIFY) why = "verification failed";
+            else if (mir_res.status == MIR_PIPE_ERR_BORROW) why = "borrow check failed";
+            printf("\n  [ERROR] MIR pipeline: %s.\n", why);
+            result = 65;
+            goto done;
         }
-        printf("  Lowered %d function(s) — %d string(s)\n",
-               ctx.mir_module->func_count, ctx.mir_module->string_count);
+        ctx.mir_module = mir_res.module;
+        printf("  Prepared MIR: %d function(s), %d alloca(s) promoted, "
+               "%d call(s) inlined, %d async transform(s)\n",
+               ctx.mir_module->func_count, mir_res.allocas_promoted,
+               mir_res.calls_inlined, mir_res.async_transformed);
         perf_end(&g_diag.perf);
-        if (g_config.dump_mir || g_config.dump_all) {
-            printf("\n  === MIR (after lowering) ===\n");
-            mir_print_module(ctx.mir_module, stdout);
-        }
-
-        /* Async MIR Transformation */
-        debug_phase_start("ASYNC MIR TRANSFORM");
-        perf_start(&g_diag.perf, "Async MIR Transform", STAGE_MIR);
-        int async_transformed = 0;
-        for (MirFunction* f = ctx.mir_module->func_list; f; f = f->next_func) {
-            if (f->is_async) {
-                async_transformed += mir_transform_async(f);
-            }
-        }
-        printf("  Transformed %d async function(s) to MIR state machines\n", async_transformed);
-        perf_end(&g_diag.perf);
-        debug_phase_end("Async MIR Transform");
+        debug_phase_end("MIR Pipeline");
         debug_step_wait();
-
-        debug_phase_end("MIR Lowering");
-        debug_step_wait();
-
-        /* mem2reg: alloca → SSA promotion */
-        debug_phase_start("SSA CONSTRUCTION (mem2reg)");
-        perf_start(&g_diag.perf, "mem2reg (SSA)", STAGE_OPT);
-        MirMem2RegStats m2r = {0};
-        mir_mem2reg_module(ctx.mir_module, &m2r);
-        perf_end(&g_diag.perf);
-        printf("  Promoted %d allocas, eliminated %d loads/%d stores, inserted %d phi\n",
-               m2r.allocas_promoted, m2r.loads_eliminated,
-               m2r.stores_eliminated, m2r.phis_inserted);
-        debug_phase_end("SSA Construction");
-        debug_step_wait();
-
-        /* Inlining */
-        if (g_config.optimize && g_config.opt_level >= 2) {
-            debug_phase_start("INLINING");
-            perf_start(&g_diag.perf, "Inlining", STAGE_OPT);
-            MirInlineStats inl = {0};
-            mir_inline_module(ctx.mir_module, g_config.opt_level, &inl);
-            perf_end(&g_diag.perf);
-            printf("  Inlined %d calls (%d instructions)\n",
-                   inl.calls_inlined, inl.instructions_copied);
-            if (g_config.dump_mir) {
-                printf("\n  === MIR (after inlining) ===\n");
-                mir_print_module(ctx.mir_module, stdout);
-            }
-            debug_phase_end("Inlining");
-            debug_step_wait();
-        }
-
-        /* Borrow checking */
-        if (g_config.safe_mode) {
-            debug_phase_start("BORROW CHECKING");
-            MirBorrowChecker bc;
-            mir_borrow_init(&bc, ctx.mir_module);
-            int errs = mir_borrow_check_module(&bc, ctx.mir_module);
-            if (errs > 0) {
-                printf("\n  [ERROR] Borrow checker: %d error(s)\n", errs);
-                mir_borrow_print_errors(&bc, stdout);
-                mir_borrow_destroy(&bc);
-                result = 65; goto done;
-            }
-            printf("  Borrow check passed\n");
-            mir_borrow_destroy(&bc);
-            debug_phase_end("Borrow Checking");
-            debug_step_wait();
-        }
-
-        /* MIR Optimization */
-        if (g_config.optimize) {
-            debug_phase_start("MIR OPTIMIZATION");
-            perf_start(&g_diag.perf, "MIR Optimization", STAGE_OPT);
-            MirOptStats opt = {0};
-            mir_optimize_module(ctx.mir_module, (MirOptLevel)g_config.opt_level, &opt);
-            perf_end(&g_diag.perf);
-            printf("  Folded %d constants, eliminated %d dead insts\n",
-                   opt.constants_folded, opt.dead_insts_eliminated);
-            debug_phase_end("MIR Optimization");
-            debug_step_wait();
-        }
-
-        if (mir_verify_module(ctx.mir_module, stderr) != 0) {
-            printf("\n  [ERROR] MIR verification failed (CFG, types, or ownership).\n");
-            result = 65; goto done;
-        }
-        if (!g_config.compact_output) CPX_INFO("MIR verification passed");
 
         /* --check-only with --safe-mode/--mir: validation complete; no codegen. */
         if (g_config.check_only) {
@@ -473,27 +408,7 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
             goto done;
         }
 
-        /* --- Phase 5.9: in-process execution via the CVM (--execute) ---
-         *
-         * Runs the fully-lowered MIR module directly through the CVM
-         * interpreter — no .cpxv/.cpxj serialization, no separate loader
-         * (Option A: bypass the incomplete bytecode formats entirely).
-         *
-         * Entry point is `main` (the Casprix `func main()` convention); if
-         * absent, the synthetic `__casprix_entry` (file-scope top-level
-         * statements) is used. A no-arg entry is assumed; argv passthrough
-         * is a follow-up.
-         *
-         * A CvmJitBridge is attached so hot functions (past CVM_JIT_THRESHOLD
-         * calls) tier up to the mini x86-64 JIT. jit_function_is_supported()
-         * conservatively bails any function that would exceed the trampoline's
-         * argument capacity or the fixed register map, so tier-up is safe on
-         * arbitrary programs (unsupported functions simply stay interpreted).
-         *
-         * `--execute` is terminal: whatever the mode (`--execute` alone,
-         * `--vm --execute`, …) the driver runs the program and exits with
-         * main()'s return value as the process exit code, matching normal
-         * language-runtime convention. No output artifact is emitted. */
+        /* --- Phase 5.9: in-process CVM execution (--execute) --- */
         if (g_config.execute) {
             debug_phase_start("EXECUTE (CVM)");
 
@@ -507,10 +422,15 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
                 result = 65; goto done;
             }
 
+            if (!mir_backend_caps_validate(ctx.mir_module, MIR_CAP_CVM, stderr)) {
+                printf("\n  [ERROR] --execute: MIR contains ops unsupported by CVM.\n");
+                result = 65; goto done;
+            }
+
             if (!g_config.compact_output)
                 CPX_INFO("Executing '%s' via CVM (JIT tier-up enabled)...", entry);
 
-            CvmJitBridge* jit = cjb_create();  /* NULL → CVM falls back to pure interpretation */
+            CvmJitBridge* jit = cjb_create();
             CvmState* vm = cvm_state_create(ctx.mir_module, jit);
             if (!vm) {
                 printf("\n  [ERROR] --execute: could not create CVM state.\n");
@@ -534,7 +454,6 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
                 result = 70; goto done;
             }
 
-            /* main()'s return becomes the process exit code (low 8 bits). */
             result = (int)(rc & 0xFF);
             goto done;
         }
@@ -554,30 +473,156 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
 
     /* --- Phase 7: Code generation --- */
     if (g_config.use_mir && uses_mir_codegen_backend()) {
+        MirCapabilityProfile cap;
+        char c_path[1024];
+        char exe_path[1024];
+        const char* emit_path = output_file_path;
+        bool mir_c_native = (g_config.output_kind == OUTPUT_NATIVE &&
+                             g_config.native_codegen == NATIVE_CODEGEN_MIR &&
+                             !g_config.allow_legacy_backend_fallback);
+
         debug_phase_start("CODE GENERATION (MIR Backend)");
         if (!ctx.mir_module) {
             printf("\n  [ERROR] MIR required but no MIR module produced.\n");
             result = 65; goto done;
         }
-        printf("  Generating %s...\n", driver_selected_output_name());
-        MirBackend* backend = create_mir_backend(output_file_path);
-        bool ok = backend && mir_backend_emit_module(backend, ctx.mir_module);
-        if (!ok) {
-            printf("\n  [ERROR] Backend code generation failed.\n");
-            if (backend) backend->destroy(backend);
-            result = 74; goto done;
+
+        /* Capability gate before emission — never silently omit ops. */
+        if (mir_c_native)
+            cap = MIR_CAP_MIR_C_NATIVE;
+        else if (g_config.output_kind == OUTPUT_C)
+            cap = MIR_CAP_EMIT_C;
+        else if (g_config.output_kind == OUTPUT_VM)
+            cap = MIR_CAP_VM_BYTECODE;
+        else if (g_config.output_kind == OUTPUT_JIT)
+            cap = MIR_CAP_JIT_PACKAGE;
+        else
+            cap = MIR_CAP_MIR_X86_ASM;
+
+        if (!mir_backend_caps_validate(ctx.mir_module, cap, stderr)) {
+            printf("\n  [ERROR] Selected backend '%s' cannot lower this MIR module.\n",
+                   mir_capability_profile_name(cap));
+            if (mir_c_native) {
+                printf("  Hint: use default native (legacy AST) or --execute (CVM).\n");
+            }
+            result = 65; goto done;
         }
-        printf("  Output: %s\n", output_file_path);
-        backend->destroy(backend);
+
+        /* Transitional MIR-native: MIR → C → host C compiler → executable.
+         * This is not direct MIR→assembly; see CLI help for --native/--aot. */
+        if (mir_c_native) {
+            size_t n = strlen(output_file_path);
+            if (n + 8 >= sizeof(c_path)) {
+                printf("\n  [ERROR] Output path too long for MIR→C staging.\n");
+                result = 74; goto done;
+            }
+            snprintf(c_path, sizeof(c_path), "%s", output_file_path);
+            /* Prefer replacing .asm with .c; otherwise append .c. */
+            if (n > 4 && strcmp(c_path + n - 4, ".asm") == 0)
+                memcpy(c_path + n - 4, ".c", 3);
+            else
+                snprintf(c_path, sizeof(c_path), "%s.c", output_file_path);
+
+            /* Derive executable base (without .exe); GCC adds .exe on Windows. */
+            snprintf(exe_path, sizeof(exe_path), "%s", output_file_path);
+            n = strlen(exe_path);
+            if (n > 4 && strcmp(exe_path + n - 4, ".asm") == 0)
+                exe_path[n - 4] = '\0';
+
+            printf("  Generating MIR→C→native (%s)...\n", driver_selected_output_name());
+            {
+                MirBackendConfig cfg = make_mir_backend_config(c_path);
+                cfg.output_format = MIR_OUTPUT_C;
+                cfg.pic = true;
+                MirBackend* backend = mir_backend_create_c(cfg);
+                bool ok = backend && mir_backend_emit_module(backend, ctx.mir_module);
+                if (backend) backend->destroy(backend);
+                if (!ok) {
+                    printf("\n  [ERROR] MIR→C emission failed.\n");
+                    result = 74; goto done;
+                }
+            }
+
+            if (!check_tool_available(TOOL_GCC, NULL)) {
+                printf("\n  [ERROR] Host C compiler (GCC) required for MIR→C→native.\n");
+                result = 74; goto done;
+            }
+            {
+                const char* gcc = get_tool_command(TOOL_GCC);
+                const char* opt_flags = g_config.optimize ? "-O2" : "-g";
+                char command[4096];
+                char rt_path[1024] = "";
+                char runtime_flags[1536] = "";
+                char inline_sources[4096] = "";
+                bool have_rt = find_prebuilt_lib_path("libcasprix_runtime.a",
+                                                     rt_path, sizeof(rt_path));
+                if (have_rt) {
+#ifdef _WIN32
+                    snprintf(runtime_flags, sizeof(runtime_flags),
+                             " \"%s\" -lws2_32 -lpthread -ladvapi32", rt_path);
+#else
+                    snprintf(runtime_flags, sizeof(runtime_flags),
+                             " \"%s\" -lm -lpthread", rt_path);
+#endif
+                } else {
+                    char root[1024];
+                    if (find_source_root_for_runtime(root, sizeof(root))) {
+                        snprintf(inline_sources, sizeof(inline_sources),
+                                 "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
+                                 "\"%s/runtime/memory/ownership.c\" \"%s/runtime/object.c\"",
+                                 root, root, root, root);
+                    }
+                }
+
+#ifdef _WIN32
+                snprintf(command, sizeof(command),
+                         "%s %s \"%s\" %s -o \"%s.exe\"%s",
+                         gcc, opt_flags, c_path, inline_sources,
+                         exe_path, runtime_flags);
+#else
+                snprintf(command, sizeof(command),
+                         "%s %s -no-pie \"%s\" %s -o \"%s\"%s -lm",
+                         gcc, opt_flags, c_path, inline_sources,
+                         exe_path, runtime_flags);
+#endif
+                if (g_config.verbose) CPX_INFO("Command: %s", command);
+                if (system(command) != 0) {
+                    printf("\n  [ERROR] Host C compile of MIR-generated C failed.\n");
+                    result = 74; goto done;
+                }
+            }
+            if (!g_config.keep_asm_file) remove(c_path);
+            g_config.codegen_produced_final_artifact = true;
+            printf("  Output: %s.exe (via MIR→C→host-cc)\n", exe_path);
+            debug_phase_end("Code Generation (MIR Backend)");
+            result = 0; goto done;
+        }
+
+        printf("  Generating %s...\n", driver_selected_output_name());
+        {
+            MirBackend* backend = create_mir_backend(emit_path);
+            bool ok = backend && mir_backend_emit_module(backend, ctx.mir_module);
+            if (!ok) {
+                printf("\n  [ERROR] Backend code generation failed.\n");
+                if (backend) backend->destroy(backend);
+                result = 74; goto done;
+            }
+            printf("  Output: %s\n", emit_path);
+            backend->destroy(backend);
+        }
+        /* Non-native MIR artifacts are final; native MIR x86 asm would still
+         * need assemble/link, but that path is not selected for --native. */
+        if (g_config.output_kind != OUTPUT_NATIVE)
+            g_config.codegen_produced_final_artifact = true;
         debug_phase_end("Code Generation (MIR Backend)");
         result = 0; goto done;
     }
 
-    /* Legacy AST → x86-64 code generation */
+    /* Legacy AST → x86-64 code generation (default native path). */
     if (g_config.use_mir && g_config.output_kind == OUTPUT_NATIVE &&
         g_config.native_codegen == NATIVE_CODEGEN_MIR &&
         g_config.allow_legacy_backend_fallback) {
-        printf("  Falling back to legacy AST codegen.\n");
+        printf("  Falling back to legacy AST codegen (--legacy-backend).\n");
     }
 
     perf_start(&g_diag.perf, "Code Generation", STAGE_CODEGEN);

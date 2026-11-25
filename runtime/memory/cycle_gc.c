@@ -92,8 +92,13 @@ static void cycle_collect_white(void* obj) {
     // Mark as black to prevent re-collection
     header->color = ARC_COLOR_BLACK;
 
-    // Recurse into children first (collect deepest nodes first)
-    if (header->scanner) {
+    /* Prefer cycle_clear: nulls edges while children are still live, collects
+     * WHITE peers, and releases surviving (non-white) references. Falling back
+     * to scanner recursion alone can leave dangling peer pointers for the
+     * destructor and can leak edges to externally reachable objects. */
+    if (header->cycle_clear) {
+        header->cycle_clear(obj, cycle_collect_white);
+    } else if (header->scanner) {
         header->scanner(obj, cycle_collect_white);
     }
 
