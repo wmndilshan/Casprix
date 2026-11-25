@@ -229,6 +229,9 @@ MirValueId mir_build_shl(MirBuilder* b, MirValueId lhs, MirValueId rhs) {
 MirValueId mir_build_shr(MirBuilder* b, MirValueId lhs, MirValueId rhs) {
     return build_binary(b, MIR_SHR, lhs, rhs);
 }
+MirValueId mir_build_ushr(MirBuilder* b, MirValueId lhs, MirValueId rhs) {
+    return build_binary(b, MIR_USHR, lhs, rhs);
+}
 
 MirValueId mir_build_logic_and(MirBuilder* b, MirValueId lhs, MirValueId rhs) {
     MirInst* inst = alloc_inst(b, MIR_LOGIC_AND, mir_type_bool(b->module));

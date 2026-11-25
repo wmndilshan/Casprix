@@ -127,8 +127,12 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
 
     switch (inst->opcode) {
         case MIR_CONST_INT:
-            set_slot(ce, r, mir_cval_int(inst->as.imm_i64));
+        {
+            MirConstValue value = mir_cval_int(inst->as.imm_i64);
+            value.type = mir_function_value_type(ce->current_func, r);
+            set_slot(ce, r, value);
             return true;
+        }
 
         case MIR_CONST_FLOAT:
             set_slot(ce, r, mir_cval_float(inst->as.imm_f64));
@@ -161,19 +165,42 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
                 return false;
             }
             int64_t result = 0;
-            switch (inst->opcode) {
-                case MIR_ADD: result = l->as.i64 + rv->as.i64; break;
-                case MIR_SUB: result = l->as.i64 - rv->as.i64; break;
-                case MIR_MUL: result = l->as.i64 * rv->as.i64; break;
-                case MIR_DIV:
-                    if (rv->as.i64 == 0) { ce->error_msg = "consteval: division by zero"; return false; }
-                    result = l->as.i64 / rv->as.i64; break;
-                case MIR_MOD:
-                    if (rv->as.i64 == 0) { ce->error_msg = "consteval: modulo by zero"; return false; }
-                    result = l->as.i64 % rv->as.i64; break;
-                default: break;
+            MirType* operand_type = mir_function_value_type(
+                ce->current_func, inst->as.binary.lhs);
+            if (mir_type_is_unsigned(operand_type)) {
+                uint64_t a = (uint64_t)l->as.i64;
+                uint64_t b = (uint64_t)rv->as.i64;
+                uint64_t bits = 0;
+                switch (inst->opcode) {
+                    case MIR_ADD: bits = a + b; break;
+                    case MIR_SUB: bits = a - b; break;
+                    case MIR_MUL: bits = a * b; break;
+                    case MIR_DIV:
+                        if (!b) { ce->error_msg = "consteval: division by zero"; return false; }
+                        bits = a / b; break;
+                    case MIR_MOD:
+                        if (!b) { ce->error_msg = "consteval: modulo by zero"; return false; }
+                        bits = a % b; break;
+                    default: break;
+                }
+                memcpy(&result, &bits, sizeof(result));
+            } else {
+                switch (inst->opcode) {
+                    case MIR_ADD: result = l->as.i64 + rv->as.i64; break;
+                    case MIR_SUB: result = l->as.i64 - rv->as.i64; break;
+                    case MIR_MUL: result = l->as.i64 * rv->as.i64; break;
+                    case MIR_DIV:
+                        if (rv->as.i64 == 0) { ce->error_msg = "consteval: division by zero"; return false; }
+                        result = l->as.i64 / rv->as.i64; break;
+                    case MIR_MOD:
+                        if (rv->as.i64 == 0) { ce->error_msg = "consteval: modulo by zero"; return false; }
+                        result = l->as.i64 % rv->as.i64; break;
+                    default: break;
+                }
             }
-            set_slot(ce, r, mir_cval_int(result));
+            MirConstValue value = mir_cval_int(result);
+            value.type = mir_function_value_type(ce->current_func, r);
+            set_slot(ce, r, value);
             return true;
         }
 
@@ -207,13 +234,15 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
                 return false;
             }
             bool result = false;
+            bool is_unsigned = mir_type_is_unsigned(mir_function_value_type(
+                ce->current_func, inst->as.binary.lhs));
             switch (inst->opcode) {
                 case MIR_CMP_EQ: result = l->as.i64 == rv->as.i64; break;
                 case MIR_CMP_NE: result = l->as.i64 != rv->as.i64; break;
-                case MIR_CMP_LT: result = l->as.i64 < rv->as.i64; break;
-                case MIR_CMP_LE: result = l->as.i64 <= rv->as.i64; break;
-                case MIR_CMP_GT: result = l->as.i64 > rv->as.i64; break;
-                case MIR_CMP_GE: result = l->as.i64 >= rv->as.i64; break;
+                case MIR_CMP_LT: result = is_unsigned ? (uint64_t)l->as.i64 < (uint64_t)rv->as.i64 : l->as.i64 < rv->as.i64; break;
+                case MIR_CMP_LE: result = is_unsigned ? (uint64_t)l->as.i64 <= (uint64_t)rv->as.i64 : l->as.i64 <= rv->as.i64; break;
+                case MIR_CMP_GT: result = is_unsigned ? (uint64_t)l->as.i64 > (uint64_t)rv->as.i64 : l->as.i64 > rv->as.i64; break;
+                case MIR_CMP_GE: result = is_unsigned ? (uint64_t)l->as.i64 >= (uint64_t)rv->as.i64 : l->as.i64 >= rv->as.i64; break;
                 default: break;
             }
             set_slot(ce, r, mir_cval_bool(result));
@@ -241,7 +270,7 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
         }
 
         /* Bitwise */
-        case MIR_BAND: case MIR_BOR: case MIR_BXOR: case MIR_SHL: case MIR_SHR: {
+        case MIR_BAND: case MIR_BOR: case MIR_BXOR: case MIR_SHL: case MIR_SHR: case MIR_USHR: {
             MirConstValue* l = get_slot(ce, inst->as.binary.lhs);
             MirConstValue* rv = get_slot(ce, inst->as.binary.rhs);
             if (l->kind != MIR_CVAL_INT || rv->kind != MIR_CVAL_INT) {
@@ -255,6 +284,7 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
                 case MIR_BXOR: result = l->as.i64 ^ rv->as.i64; break;
                 case MIR_SHL:  result = l->as.i64 << rv->as.i64; break;
                 case MIR_SHR:  result = l->as.i64 >> rv->as.i64; break;
+                case MIR_USHR: result = (int64_t)((uint64_t)l->as.i64 >> ((uint64_t)rv->as.i64 & 63)); break;
                 default: break;
             }
             set_slot(ce, r, mir_cval_int(result));
@@ -336,12 +366,16 @@ bool mir_consteval_call(MirConstEval* ce, MirFunction* func,
         return false;
     }
 
+    MirFunction* previous_func = ce->current_func;
+    ce->current_func = func;
     ce->call_depth++;
 
     /* Set up parameter slots */
     for (int i = 0; i < n_args && i < func->param_count; i++) {
         ensure_slot(ce, func->params[i].value_id);
         ce->slots[func->params[i].value_id] = args[i];
+        ce->slots[func->params[i].value_id].type =
+            mir_function_value_type(func, func->params[i].value_id);
     }
 
     /* Interpret basic blocks: follow the CFG */
@@ -358,6 +392,7 @@ bool mir_consteval_call(MirConstEval* ce, MirFunction* func,
                 if (cond->kind != MIR_CVAL_BOOL) {
                     ce->error_msg = "consteval: condbr on non-bool";
                     ce->call_depth--;
+                    ce->current_func = previous_func;
                     return false;
                 }
                 current = cond->as.b ? inst->as.condbr.true_bb : inst->as.condbr.false_bb;
@@ -367,11 +402,13 @@ bool mir_consteval_call(MirConstEval* ce, MirFunction* func,
                 MirConstValue* val = get_slot(ce, inst->as.ret.value);
                 *out_result = *val;
                 ce->call_depth--;
+                ce->current_func = previous_func;
                 return true;
             }
             if (inst->opcode == MIR_RET_VOID) {
                 *out_result = mir_cval_void();
                 ce->call_depth--;
+                ce->current_func = previous_func;
                 return true;
             }
 
@@ -381,6 +418,7 @@ bool mir_consteval_call(MirConstEval* ce, MirFunction* func,
                 if (!callee) {
                     ce->error_msg = "consteval: unknown function in call";
                     ce->call_depth--;
+                    ce->current_func = previous_func;
                     return false;
                 }
                 MirConstValue call_args[16];
@@ -392,6 +430,7 @@ bool mir_consteval_call(MirConstEval* ce, MirFunction* func,
                 MirConstValue call_result;
                 if (!mir_consteval_call(ce, callee, call_args, nca, &call_result)) {
                     ce->call_depth--;
+                    ce->current_func = previous_func;
                     return false;
                 }
                 if (inst->result != MIR_VALUE_NONE) {
@@ -403,12 +442,14 @@ bool mir_consteval_call(MirConstEval* ce, MirFunction* func,
             /* Regular instruction */
             if (!mir_consteval_step(ce, inst)) {
                 ce->call_depth--;
+                ce->current_func = previous_func;
                 return false;
             }
         }
         /* Block fell through without terminator — shouldn't happen */
         ce->error_msg = "consteval: block without terminator";
         ce->call_depth--;
+        ce->current_func = previous_func;
         return false;
 
     next_block:
@@ -417,5 +458,6 @@ bool mir_consteval_call(MirConstEval* ce, MirFunction* func,
 
     ce->error_msg = "consteval: reached null block";
     ce->call_depth--;
+    ce->current_func = previous_func;
     return false;
 }

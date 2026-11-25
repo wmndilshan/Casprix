@@ -1082,6 +1082,10 @@ static Expr* primary(Parser* parser) {
         expr->type_info      = NULL;
         expr->as.variable.name    = var_name;
         expr->as.variable.is_move = true;  /* <-- marks this as a move */
+        expr->as.variable.is_closure_value = false;
+        expr->as.variable.closure_capture_count = 0;
+        expr->as.variable.closure_lambda_id = -1;
+        expr->as.variable.closure_capture_types = NULL;
         return expr;
     }
 
@@ -1957,8 +1961,7 @@ static Stmt* expression_statement(Parser* parser) {
                 default: bin_op = TOKEN_PLUS; break;
             }
             // Clone the target expression for the right-hand side
-            Expr* lhs_copy = ALLOCATE(Expr, 1);
-            memcpy(lhs_copy, expr, sizeof(Expr));
+            Expr* lhs_copy = clone_expr(expr);
             value = create_binary_expr(lhs_copy, bin_op, value, line, col);
         }
 
@@ -2488,6 +2491,12 @@ static Stmt* include_statement(Parser* parser) {
         error_at_current(parser, "Failed to extract module path from string token");
         return NULL;
     }
+
+    /* Import/include path text is copied into the AST node above; it is not a
+     * string literal expression, so ownership of the lexer buffer must end
+     * here instead of being transferred to an AST node. */
+    free(parser->current.literal.string_value);
+    parser->current.literal.string_value = NULL;
     
     advance(parser); // Now consume the string token
 
@@ -2708,8 +2717,10 @@ static Stmt* declaration(Parser* parser) {
                     default: bin_op = TOKEN_PLUS; break;
                 }
                 // Clone the target expression for the right-hand side
-                Expr* lhs_copy = ALLOCATE(Expr, 1);
-                memcpy(lhs_copy, expr, sizeof(Expr));
+                /* Both sides are owned recursively by the AST. A shallow
+                 * copy aliases strings, TypeInfo, and child expressions and
+                 * makes ordinary AST destruction double-free them. */
+                Expr* lhs_copy = clone_expr(expr);
                 value = create_binary_expr(lhs_copy, bin_op, value, line, col);
             }
 
@@ -3227,4 +3238,17 @@ Stmt** parse(Parser* parser, int* stmt_count) {
     
     *stmt_count = count;
     return statements;
+}
+
+void parser_destroy(Parser* parser) {
+    if (!parser) return;
+    /* The current token has not been transferred into an AST node. The
+     * previous string token, when any, is owned by the parsed AST. */
+    if (parser->current.type == TOKEN_STRING &&
+        parser->current.literal.string_value) {
+        free(parser->current.literal.string_value);
+        parser->current.literal.string_value = NULL;
+    }
+    parser->lexer = NULL;
+    parser->source = NULL;
 }

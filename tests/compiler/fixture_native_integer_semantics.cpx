@@ -1,0 +1,23 @@
+func signed_div(a: i64, b: i64) -> i64 { return a / b }
+func signed_mod(a: i64, b: i64) -> i64 { return a % b }
+func unsigned_div(a: u64, b: u64) -> u64 { return a / b }
+func unsigned_mod(a: u64, b: u64) -> u64 { return a % b }
+func sum3(a: i64, b: i64, c: i64) -> i64 { return a + b + c }
+func main() -> i64 {
+  let high: u64 = 0u64 - 1u64
+  print(signed_div(-84, 7))
+  print(signed_div(84, -7))
+  print(signed_div(-84, -7))
+  print(signed_div(-85, 7))
+  print(signed_mod(-85, 7))
+  print(signed_mod(85, -7))
+  print(signed_div(-85, 7) * 7 + signed_mod(-85, 7))
+  print(unsigned_div(high, 2u64))
+  print(unsigned_mod(high, 10u64))
+  print(high)
+  print(high > 9223372036854775807u64)
+  print(high >> 1u64)
+  print(-8i64 >> 1i64)
+  print(sum3(100 / 3, 85 / 7, -85 % 7))
+  return 0
+}

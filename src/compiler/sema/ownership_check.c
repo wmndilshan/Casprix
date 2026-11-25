@@ -33,6 +33,7 @@ static void move_set(OwnMoveState* st, void* sym, bool moved, int line) {
         }
         e = &st->entries[st->count++];
         e->sym = sym;
+        e->scope_depth = sym ? ((Symbol*)sym)->scope_depth : -1;
     }
     e->moved = moved;
     e->move_line = line;
@@ -138,8 +139,7 @@ void own_state_forget_scope(OwnershipChecker* checker, int scope_level) {
     OwnMoveState* st = &checker->move_state;
     int w = 0;
     for (int i = 0; i < st->count; i++) {
-        Symbol* s = (Symbol*)st->entries[i].sym;
-        if (s && s->scope_depth == scope_level) continue; /* drop */
+        if (st->entries[i].scope_depth == scope_level) continue; /* drop */
         st->entries[w++] = st->entries[i];
     }
     st->count = w;
@@ -264,6 +264,16 @@ void ownership_checker_init(OwnershipChecker* checker, SemanticAnalyzer* analyze
     checker->move_state.entries = NULL;
     checker->move_state.count = 0;
     checker->move_state.capacity = 0;
+    checker->suppress_diagnostics = false;
+}
+
+void ownership_checker_destroy(OwnershipChecker* checker) {
+    if (!checker) return;
+    free(checker->move_state.entries);
+    checker->move_state.entries = NULL;
+    checker->move_state.count = 0;
+    checker->move_state.capacity = 0;
+    checker->analyzer = NULL;
     checker->suppress_diagnostics = false;
 }
 

@@ -254,10 +254,23 @@ void init_asm_generator(AssemblyGenerator* gen, FILE* output, void* unused) {
 }
 
 void free_asm_generator(AssemblyGenerator* gen) {
+    for (int i = 0; i < gen->local_count; i++) free(gen->local_names[i]);
+    free(gen->local_names);
+    free(gen->local_offsets);
+    free(gen->local_is_ref);
+    gen->local_names = NULL;
+    gen->local_offsets = NULL;
+    gen->local_is_ref = NULL;
+    gen->local_count = 0;
+    gen->local_capacity = 0;
+
     for (int i = 0; i < gen->string_size; i++) {
         free(gen->string_literals[i]);
     }
     free(gen->string_literals);
+    gen->string_literals = NULL;
+    gen->string_size = 0;
+    gen->string_capacity = 0;
 }
 
 static void emit_asm(AssemblyGenerator* gen, const char* format, ...) {
@@ -1172,14 +1185,21 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
             emit_asm(gen, "    imul %s, rbx\n", reg);
             break;
         case TOKEN_SLASH:
-            emit_asm(gen, "    mov rdx, 0\n");
-            emit_asm(gen, "    idiv rbx\n");
-            emit_asm(gen, "    mov %s, rax\n", reg);
-            break;
         case TOKEN_PERCENT:
-            emit_asm(gen, "    mov rdx, 0\n");
-            emit_asm(gen, "    idiv rbx\n");
-            emit_asm(gen, "    mov %s, rdx\n", reg);  // Modulo result is in rdx
+            /* The expression value may be requested in any general register,
+             * but x86 DIV/IDIV always consumes RDX:RAX.  Keep the divisor in
+             * RBX, place the dividend in RAX, and prepare the high half using
+             * the operand's signedness. */
+            emit_asm(gen, "    mov rax, %s\n", reg);
+            if (type_is_unsigned(binary->left->data_type)) {
+                emit_asm(gen, "    xor edx, edx\n");
+                emit_asm(gen, "    div rbx\n");
+            } else {
+                emit_asm(gen, "    cqo\n");
+                emit_asm(gen, "    idiv rbx\n");
+            }
+            emit_asm(gen, "    mov %s, %s\n", reg,
+                     binary->operator == TOKEN_SLASH ? "rax" : "rdx");
             break;
         case TOKEN_EQUAL:
             emit_asm(gen, "    cmp %s, rbx\n", reg);
@@ -1193,22 +1213,26 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
             break;
         case TOKEN_LESS:
             emit_asm(gen, "    cmp %s, rbx\n", reg);
-            emit_asm(gen, "    setl al\n");
+            emit_asm(gen, type_is_unsigned(binary->left->data_type)
+                         ? "    setb al\n" : "    setl al\n");
             emit_asm(gen, "    movzx %s, al\n", reg);
             break;
         case TOKEN_LESS_EQUAL:
             emit_asm(gen, "    cmp %s, rbx\n", reg);
-            emit_asm(gen, "    setle al\n");
+            emit_asm(gen, type_is_unsigned(binary->left->data_type)
+                         ? "    setbe al\n" : "    setle al\n");
             emit_asm(gen, "    movzx %s, al\n", reg);
             break;
         case TOKEN_GREATER:
             emit_asm(gen, "    cmp %s, rbx\n", reg);
-            emit_asm(gen, "    setg al\n");
+            emit_asm(gen, type_is_unsigned(binary->left->data_type)
+                         ? "    seta al\n" : "    setg al\n");
             emit_asm(gen, "    movzx %s, al\n", reg);
             break;
         case TOKEN_GREATER_EQUAL:
             emit_asm(gen, "    cmp %s, rbx\n", reg);
-            emit_asm(gen, "    setge al\n");
+            emit_asm(gen, type_is_unsigned(binary->left->data_type)
+                         ? "    setae al\n" : "    setge al\n");
             emit_asm(gen, "    movzx %s, al\n", reg);
             break;
         case TOKEN_AND:
@@ -1234,7 +1258,8 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
             break;
         case TOKEN_RSHIFT:
             emit_asm(gen, "    mov rcx, rbx\n");
-            emit_asm(gen, "    sar %s, cl\n", reg);   /* arithmetic right shift */
+            emit_asm(gen, type_is_unsigned(binary->left->data_type)
+                         ? "    shr %s, cl\n" : "    sar %s, cl\n", reg);
             break;
         default:
             break;
@@ -1410,7 +1435,20 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
             // Load register arguments
             int reg_args = call->arg_count < ABI_I_REG_COUNT ? call->arg_count : ABI_I_REG_COUNT;
             for (int i = 0; i < reg_args; i++) {
+                /* Evaluating a later argument can use caller-saved registers,
+                 * including RAX/RDX for integer division. Preserve earlier
+                 * argument values until all register arguments are ready. */
+                if (i > 0) {
+                    if (i & 1) emit_asm(gen, "    sub rsp, 8  ; align saved call arguments\n");
+                    for (int j = 0; j < i; j++)
+                        emit_asm(gen, "    push %s  ; preserve argument %d\n", ABI_I_REGS[j], j);
+                }
                 generate_asm_expr(gen, call->arguments[i], ABI_I_REGS[i], symbols);
+                if (i > 0) {
+                    for (int j = i - 1; j >= 0; j--)
+                        emit_asm(gen, "    pop %s  ; restore argument %d\n", ABI_I_REGS[j], j);
+                    if (i & 1) emit_asm(gen, "    add rsp, 8  ; restore argument alignment\n");
+                }
             }
 
             // Handle float arguments
@@ -2095,11 +2133,18 @@ static void generate_asm_print(AssemblyGenerator* gen, Stmt* stmt, SymbolTable* 
         case TYPE_I16:
         case TYPE_I32:
         case TYPE_I64:
+            emit_asm(gen, "    lea %s, [rel fmt_int]\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    mov %s, rax\n", ABI_I_REGS[1]);
+#ifndef _WIN32
+            emit_asm(gen, "    xor eax, eax\n");
+#endif
+            emit_asm(gen, "    call printf\n");
+            break;
         case TYPE_U8:
         case TYPE_U16:
         case TYPE_U32:
         case TYPE_U64:
-            emit_asm(gen, "    lea %s, [rel fmt_int]\n", ABI_I_REGS[0]);
+            emit_asm(gen, "    lea %s, [rel fmt_uint]\n", ABI_I_REGS[0]);
             emit_asm(gen, "    mov %s, rax\n", ABI_I_REGS[1]);
 #ifndef _WIN32
             emit_asm(gen, "    xor eax, eax\n");
@@ -3177,6 +3222,7 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     
     // Format strings
     emit_asm(gen, "    fmt_int db \"%%lld\", 10, 0\n");
+    emit_asm(gen, "    fmt_uint db \"%%llu\", 10, 0\n");
     emit_asm(gen, "    fmt_float db \"%%.6f\", 10, 0\n");
     emit_asm(gen, "    fmt_str db \"%%s\", 10, 0\n");
     emit_asm(gen, "    fmt_true db \"True\", 10, 0\n");

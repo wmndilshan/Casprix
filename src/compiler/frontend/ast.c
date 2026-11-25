@@ -265,6 +265,7 @@ Stmt* create_function_stmt(char* name, Parameter* params, int param_count,
     stmt->as.function.return_type = ret_type;
     stmt->as.function.return_type_info = NULL;
     stmt->as.function.body = body;
+    stmt->as.function.is_async = false;
     stmt->as.function.type_params = NULL;
     stmt->as.function.type_param_count = 0;
     return stmt;
@@ -835,6 +836,12 @@ void free_stmt(Stmt* stmt) {
                 }
             }
             if (stmt->as.struct_stmt.fields) free(stmt->as.struct_stmt.fields);
+            for (int i = 0; i < stmt->as.struct_stmt.type_param_count; i++) {
+                free(stmt->as.struct_stmt.type_params[i].name);
+                free(stmt->as.struct_stmt.type_params[i].constraint);
+                free(stmt->as.struct_stmt.type_params[i].default_class);
+            }
+            free(stmt->as.struct_stmt.type_params);
             break;
         case STMT_ENUM:
             free(stmt->as.enum_stmt.name);
@@ -851,6 +858,12 @@ void free_stmt(Stmt* stmt) {
                 }
             }
             if (stmt->as.enum_stmt.variants) free(stmt->as.enum_stmt.variants);
+            for (int i = 0; i < stmt->as.enum_stmt.type_param_count; i++) {
+                free(stmt->as.enum_stmt.type_params[i].name);
+                free(stmt->as.enum_stmt.type_params[i].constraint);
+                free(stmt->as.enum_stmt.type_params[i].default_class);
+            }
+            free(stmt->as.enum_stmt.type_params);
             break;
         case STMT_UNION:
             free(stmt->as.union_stmt.name);

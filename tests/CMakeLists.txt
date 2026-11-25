@@ -617,6 +617,36 @@ endif()
 # CASPRIX_SOURCE_ROOT for inline runtime .c paths). Unique -o avoids parallel
 # tests clobbering each other's .asm/.o in a shared directory.
 if(BUILD_COMPILER AND TARGET casprix)
+    add_executable(test_frontend_lifecycle
+        compiler/test_frontend_lifecycle.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/cvm_engine.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+        ${CMAKE_SOURCE_DIR}/runtime/memory/arc.c
+    )
+    target_include_directories(test_frontend_lifecycle PRIVATE
+        ${CMAKE_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(test_frontend_lifecycle PRIVATE
+        casprix_compiler
+        casprix_compile_options
+        casprix_include_dirs
+        $<$<NOT:$<BOOL:${MSVC}>>:m>
+        $<$<NOT:$<BOOL:${MSVC}>>:pthread>
+    )
+    add_test(NAME compiler_frontend_lifecycle
+        COMMAND test_frontend_lifecycle
+            ${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_cvm_scalar_semantics.cpx
+            ${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_async.cpx
+            ${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_double_free.cpx
+            ${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_for_in.cpx
+            ${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_import_alias.cpx
+            ${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_frontend_parse_error.cpx
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    set_tests_properties(compiler_frontend_lifecycle PROPERTIES
+        LABELS "compiler;frontend;lifecycle")
+
     file(GLOB CPX_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_*.cpx")
 
     foreach(cpx_test ${CPX_TESTS})
@@ -663,6 +693,27 @@ if(BUILD_COMPILER AND TARGET casprix)
             -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_cvm_scalar_semantics.cpx
             -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_cvm_scalar_semantics.cmake
     )
+
+    add_test(
+        NAME compiler_native_integer_semantics
+        COMMAND ${CMAKE_COMMAND}
+            -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+            -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_native_integer_semantics.cpx
+            -DPRINT_SHIM=${CMAKE_CURRENT_SOURCE_DIR}/compiler/integer_semantics_print_shim.c
+            -DC_COMPILER=${CMAKE_C_COMPILER}
+            -DOUTPUT_BASE=${CMAKE_BINARY_DIR}/ctest/native_integer_semantics
+            -DWORKING_DIRECTORY=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_native_integer_semantics.cmake
+    )
+    if(BUILD_RUNTIME AND TARGET casprix_runtime)
+        set_tests_properties(compiler_native_integer_semantics PROPERTIES
+            ENVIRONMENT "CASPRIX_RUNTIME_LIB=$<TARGET_FILE:casprix_runtime>;CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR}")
+    else()
+        set_tests_properties(compiler_native_integer_semantics PROPERTIES
+            ENVIRONMENT "CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR}")
+    endif()
+    set_tests_properties(compiler_native_integer_semantics PROPERTIES
+        LABELS "compiler;integer;backend")
 
     # Permanent negative: conditional move then use after join (use-after-move).
     # Fixture is named fixture_*.cpx so the positive GLOB and suite runner skip it.

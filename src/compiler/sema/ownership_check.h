@@ -63,6 +63,7 @@ typedef struct {
     void* sym;         /* Symbol* — opaque here to avoid a symtable.h cycle */
     bool  moved;
     int   move_line;
+    int   scope_depth; /* Cached while the Symbol is live for safe scope pruning. */
 } OwnMoveEntry;
 
 typedef struct {
@@ -121,6 +122,7 @@ void own_state_forget_scope(OwnershipChecker* checker, int scope_level);
 
 // Initialize ownership checker
 void ownership_checker_init(OwnershipChecker* checker, SemanticAnalyzer* analyzer);
+void ownership_checker_destroy(OwnershipChecker* checker);
 
 // Check if a variable access is valid
 bool check_ownership_valid(OwnershipChecker* checker, const char* var_name, int line);

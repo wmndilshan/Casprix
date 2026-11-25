@@ -536,7 +536,10 @@ static MirValueId lower_binary(MirLowerCtx* ctx, Expr* expr) {
                                           : mir_build_div(&ctx->builder, lhs, rhs);
         case TOKEN_PERCENT: return mir_build_mod(&ctx->builder, lhs, rhs);
         case TOKEN_LSHIFT: return mir_build_shl(&ctx->builder, lhs, rhs);
-        case TOKEN_RSHIFT: return mir_build_shr(&ctx->builder, lhs, rhs);
+        case TOKEN_RSHIFT:
+            return type_is_unsigned(bin->left->data_type)
+                ? mir_build_ushr(&ctx->builder, lhs, rhs)
+                : mir_build_shr(&ctx->builder, lhs, rhs);
 
         case TOKEN_EQUAL:       return mir_build_cmp_eq(&ctx->builder, lhs, rhs);
         case TOKEN_NOT_EQUAL:  return mir_build_cmp_ne(&ctx->builder, lhs, rhs);
@@ -1590,6 +1593,11 @@ static void lower_print(MirLowerCtx* ctx, Stmt* stmt) {
     const char* print_fn = "nuwan_print_str";
     if (p->expression->data_type == TYPE_INT || p->expression->data_type == TYPE_I32 || p->expression->data_type == TYPE_I64) {
         print_fn = "nuwan_print_int";
+    } else if (p->expression->data_type == TYPE_U8 ||
+               p->expression->data_type == TYPE_U16 ||
+               p->expression->data_type == TYPE_U32 ||
+               p->expression->data_type == TYPE_U64) {
+        print_fn = "nuwan_print_uint";
     } else if (p->expression->data_type == TYPE_FLOAT || p->expression->data_type == TYPE_F32 || p->expression->data_type == TYPE_F64) {
         print_fn = "nuwan_print_float";
     } else if (p->expression->data_type == TYPE_BOOL) {

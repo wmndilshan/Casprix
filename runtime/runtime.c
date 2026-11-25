@@ -96,6 +96,15 @@ void nuwan_print_int(int64_t val) {
     (void)cpx_io_write_all_fd(1, buf, out.len);
 }
 
+void nuwan_print_uint(uint64_t val) {
+    char buf[48];
+    CpxFmtBuffer out;
+    cpx_fmt_init(&out, buf, sizeof(buf));
+    cpx_fmt_append_u64(&out, val);
+    cpx_fmt_putc(&out, '\n');
+    (void)cpx_io_write_all_fd(1, buf, out.len);
+}
+
 void nuwan_print_float(double val) {
     char buf[64];
     CpxFmtBuffer out;

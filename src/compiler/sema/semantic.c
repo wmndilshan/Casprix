@@ -72,7 +72,9 @@ void free_semantic_analyzer(SemanticAnalyzer* analyzer) {
     if (analyzer->symbols) {
         free_symbol_table(analyzer->symbols);
         free(analyzer->symbols);
+        analyzer->symbols = NULL;
     }
+    if (g_memory_model_inited) ownership_checker_destroy(&g_ownership_ctx);
     g_memory_model_inited = false;
 }
 
@@ -325,6 +327,10 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         expr->data_type = TYPE_ERROR;
         return;
     }
+
+    bool mixed_integer_signedness = type_is_integer(left_type) &&
+        type_is_integer(right_type) &&
+        type_is_unsigned(left_type) != type_is_unsigned(right_type);
     
     switch (binary->operator) {
         case TOKEN_RANGE:
@@ -344,7 +350,8 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             // String concatenation or numeric addition
             if (left_type == TYPE_STRING || right_type == TYPE_STRING) {
                 expr->data_type = TYPE_STRING;
-            } else if (type_is_numeric(left_type) && type_is_numeric(right_type)) {
+            } else if (type_is_numeric(left_type) && type_is_numeric(right_type) &&
+                       !mixed_integer_signedness) {
                 expr->data_type = get_result_type(left_type, right_type);
             } else {
                 report_type_error(expr->line, expr->column,
@@ -356,7 +363,8 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         case TOKEN_MINUS:
         case TOKEN_STAR:
         case TOKEN_SLASH:
-            if (type_is_numeric(left_type) && type_is_numeric(right_type)) {
+            if (type_is_numeric(left_type) && type_is_numeric(right_type) &&
+                !mixed_integer_signedness) {
                 expr->data_type = get_result_type(left_type, right_type);
             } else {
                 report_type_error(expr->line, expr->column,
@@ -366,7 +374,8 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
             break;
 
         case TOKEN_PERCENT:
-            if (type_is_integer(left_type) && type_is_integer(right_type)) {
+            if (type_is_integer(left_type) && type_is_integer(right_type) &&
+                !mixed_integer_signedness) {
                 expr->data_type = get_result_type(left_type, right_type);
             } else {
                 report_type_error(expr->line, expr->column,
@@ -379,7 +388,8 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         case TOKEN_LESS_EQUAL:
         case TOKEN_GREATER:
         case TOKEN_GREATER_EQUAL:
-            if (type_is_numeric(left_type) && type_is_numeric(right_type)) {
+            if (type_is_numeric(left_type) && type_is_numeric(right_type) &&
+                !mixed_integer_signedness) {
                 expr->data_type = TYPE_BOOL;
             } else {
                 report_type_error(expr->line, expr->column,
@@ -420,7 +430,16 @@ static void analyze_binary_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         case TOKEN_LSHIFT:
         case TOKEN_RSHIFT:
             if (type_is_integer(left_type) && type_is_integer(right_type)) {
-                expr->data_type = get_result_type(left_type, right_type);
+                if (binary->operator == TOKEN_LSHIFT ||
+                    binary->operator == TOKEN_RSHIFT) {
+                    expr->data_type = left_type;
+                } else if (!mixed_integer_signedness) {
+                    expr->data_type = get_result_type(left_type, right_type);
+                } else {
+                    report_type_error(expr->line, expr->column,
+                        "Bitwise operands must have matching signedness");
+                    expr->data_type = TYPE_ERROR;
+                }
             } else {
                 report_type_error(expr->line, expr->column,
                     "Bitwise operators require integer operands");
@@ -1107,6 +1126,7 @@ static void analyze_array_literal_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         }
     }
     expr->data_type = TYPE_CLASS;
+    if (expr->class_name) free(expr->class_name);
     expr->class_name = strdup("Array");
 }
 
@@ -1766,10 +1786,16 @@ static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr) {
     // but ideally we check if expression->data_type == TYPE_FUTURE.
     
     // If it's a future, the result of await is the element type of the future.
+    if (expr->type_info) {
+        free_type_info(expr->type_info);
+        expr->type_info = NULL;
+    }
+
     if (expr->as.await_expr.expression->data_type == TYPE_FUTURE) {
         if (expr->as.await_expr.expression->type_info && expr->as.await_expr.expression->type_info->element_type) {
             expr->data_type = expr->as.await_expr.expression->type_info->element_type->base;
-            expr->type_info = expr->as.await_expr.expression->type_info->element_type; // Copy type info for nested types
+            expr->type_info = clone_type_info(
+                expr->as.await_expr.expression->type_info->element_type);
         } else {
             expr->data_type = TYPE_VOID; // Default for Future<Void>
         }
@@ -1777,7 +1803,8 @@ static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         // If not a future, just pass through (auto-wrap synchronous values?)
         // Many languages allow 'await 5' -> 5.
         expr->data_type = expr->as.await_expr.expression->data_type;
-        expr->type_info = expr->as.await_expr.expression->type_info;
+        expr->type_info = clone_type_info(
+            expr->as.await_expr.expression->type_info);
     }
 }
 

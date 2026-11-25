@@ -162,6 +162,14 @@ static inline CvmReg cvm_safe_mod_i64(CvmReg lhs_u, CvmReg rhs_u) {
     return (CvmReg)(uint64_t)(lhs % rhs);
 }
 
+static inline CvmReg cvm_safe_div_u64(CvmReg lhs, CvmReg rhs) {
+    return rhs ? lhs / rhs : 0;
+}
+
+static inline CvmReg cvm_safe_mod_u64(CvmReg lhs, CvmReg rhs) {
+    return rhs ? lhs % rhs : 0;
+}
+
 static inline CvmReg cvm_safe_fptosi(double d) {
     if (!isfinite(d)) return 0;
     if (d >= (double)INT64_MAX) return (CvmReg)(uint64_t)INT64_MAX;
@@ -563,12 +571,18 @@ op_sub:  SET(inst->result, REG(inst->as.binary.lhs) - REG(inst->as.binary.rhs));
 op_mul:  SET(inst->result, REG(inst->as.binary.lhs) * REG(inst->as.binary.rhs)); NEXT_INST();
 op_div: {
     CvmReg d = REG(inst->as.binary.rhs);
-    SET(inst->result, cvm_safe_div_i64(REG(inst->as.binary.lhs), d));
+    CvmReg n = REG(inst->as.binary.lhs);
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    SET(inst->result, mir_type_is_unsigned(type)
+        ? cvm_safe_div_u64(n, d) : cvm_safe_div_i64(n, d));
     NEXT_INST();
 }
 op_mod: {
     CvmReg d = REG(inst->as.binary.rhs);
-    SET(inst->result, cvm_safe_mod_i64(REG(inst->as.binary.lhs), d));
+    CvmReg n = REG(inst->as.binary.lhs);
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    SET(inst->result, mir_type_is_unsigned(type)
+        ? cvm_safe_mod_u64(n, d) : cvm_safe_mod_i64(n, d));
     NEXT_INST();
 }
 op_neg:
@@ -591,10 +605,30 @@ op_ushr: SET(inst->result, REG(inst->as.binary.lhs) >> (REG(inst->as.binary.rhs)
 
 op_cmp_eq: SET(inst->result, REG(inst->as.binary.lhs) == REG(inst->as.binary.rhs) ? 1u : 0u); NEXT_INST();
 op_cmp_ne: SET(inst->result, REG(inst->as.binary.lhs) != REG(inst->as.binary.rhs) ? 1u : 0u); NEXT_INST();
-op_cmp_lt: SET(inst->result, (int64_t)REG(inst->as.binary.lhs) <  (int64_t)REG(inst->as.binary.rhs) ? 1u : 0u); NEXT_INST();
-op_cmp_le: SET(inst->result, (int64_t)REG(inst->as.binary.lhs) <= (int64_t)REG(inst->as.binary.rhs) ? 1u : 0u); NEXT_INST();
-op_cmp_gt: SET(inst->result, (int64_t)REG(inst->as.binary.lhs) >  (int64_t)REG(inst->as.binary.rhs) ? 1u : 0u); NEXT_INST();
-op_cmp_ge: SET(inst->result, (int64_t)REG(inst->as.binary.lhs) >= (int64_t)REG(inst->as.binary.rhs) ? 1u : 0u); NEXT_INST();
+op_cmp_lt: {
+    CvmReg lhs = REG(inst->as.binary.lhs), rhs = REG(inst->as.binary.rhs);
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    SET(inst->result, (mir_type_is_unsigned(type) ? lhs < rhs
+        : (int64_t)lhs < (int64_t)rhs) ? 1u : 0u); NEXT_INST();
+}
+op_cmp_le: {
+    CvmReg lhs = REG(inst->as.binary.lhs), rhs = REG(inst->as.binary.rhs);
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    SET(inst->result, (mir_type_is_unsigned(type) ? lhs <= rhs
+        : (int64_t)lhs <= (int64_t)rhs) ? 1u : 0u); NEXT_INST();
+}
+op_cmp_gt: {
+    CvmReg lhs = REG(inst->as.binary.lhs), rhs = REG(inst->as.binary.rhs);
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    SET(inst->result, (mir_type_is_unsigned(type) ? lhs > rhs
+        : (int64_t)lhs > (int64_t)rhs) ? 1u : 0u); NEXT_INST();
+}
+op_cmp_ge: {
+    CvmReg lhs = REG(inst->as.binary.lhs), rhs = REG(inst->as.binary.rhs);
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    SET(inst->result, (mir_type_is_unsigned(type) ? lhs >= rhs
+        : (int64_t)lhs >= (int64_t)rhs) ? 1u : 0u); NEXT_INST();
+}
 
 op_logic_and: SET(inst->result, (REG(inst->as.binary.lhs) && REG(inst->as.binary.rhs)) ? 1u : 0u); NEXT_INST();
 op_logic_or:  SET(inst->result, (REG(inst->as.binary.lhs) || REG(inst->as.binary.rhs)) ? 1u : 0u); NEXT_INST();
@@ -862,8 +896,8 @@ done:
                 case MIR_ADD: SET(inst->result, REG(inst->as.binary.lhs) + REG(inst->as.binary.rhs)); break;
                 case MIR_SUB: SET(inst->result, REG(inst->as.binary.lhs) - REG(inst->as.binary.rhs)); break;
                 case MIR_MUL: SET(inst->result, REG(inst->as.binary.lhs) * REG(inst->as.binary.rhs)); break;
-                case MIR_DIV: { CvmReg d = REG(inst->as.binary.rhs); SET(inst->result, cvm_safe_div_i64(REG(inst->as.binary.lhs), d)); break; }
-                case MIR_MOD: { CvmReg d = REG(inst->as.binary.rhs); SET(inst->result, cvm_safe_mod_i64(REG(inst->as.binary.lhs), d)); break; }
+                case MIR_DIV: { CvmReg d = REG(inst->as.binary.rhs), n = REG(inst->as.binary.lhs); MirType* t = mir_function_value_type(func, inst->as.binary.lhs); SET(inst->result, mir_type_is_unsigned(t) ? cvm_safe_div_u64(n, d) : cvm_safe_div_i64(n, d)); break; }
+                case MIR_MOD: { CvmReg d = REG(inst->as.binary.rhs), n = REG(inst->as.binary.lhs); MirType* t = mir_function_value_type(func, inst->as.binary.lhs); SET(inst->result, mir_type_is_unsigned(t) ? cvm_safe_mod_u64(n, d) : cvm_safe_mod_i64(n, d)); break; }
                 case MIR_NEG: SET(inst->result, (CvmReg)(-(int64_t)REG(inst->as.unary.operand))); break;
                 case MIR_FADD: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) + cvm_bits_to_f64(REG(inst->as.binary.rhs)))); break;
                 case MIR_FSUB: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) - cvm_bits_to_f64(REG(inst->as.binary.rhs)))); break;
@@ -879,10 +913,10 @@ done:
                 case MIR_USHR: SET(inst->result, REG(inst->as.binary.lhs) >> (REG(inst->as.binary.rhs) & 63)); break;
                 case MIR_CMP_EQ: SET(inst->result, REG(inst->as.binary.lhs) == REG(inst->as.binary.rhs) ? 1u : 0u); break;
                 case MIR_CMP_NE: SET(inst->result, REG(inst->as.binary.lhs) != REG(inst->as.binary.rhs) ? 1u : 0u); break;
-                case MIR_CMP_LT: SET(inst->result, (int64_t)REG(inst->as.binary.lhs) <  (int64_t)REG(inst->as.binary.rhs) ? 1u : 0u); break;
-                case MIR_CMP_LE: SET(inst->result, (int64_t)REG(inst->as.binary.lhs) <= (int64_t)REG(inst->as.binary.rhs) ? 1u : 0u); break;
-                case MIR_CMP_GT: SET(inst->result, (int64_t)REG(inst->as.binary.lhs) >  (int64_t)REG(inst->as.binary.rhs) ? 1u : 0u); break;
-                case MIR_CMP_GE: SET(inst->result, (int64_t)REG(inst->as.binary.lhs) >= (int64_t)REG(inst->as.binary.rhs) ? 1u : 0u); break;
+                case MIR_CMP_LT: { CvmReg a=REG(inst->as.binary.lhs), b=REG(inst->as.binary.rhs); MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,(mir_type_is_unsigned(t)?a<b:(int64_t)a<(int64_t)b)?1u:0u); break; }
+                case MIR_CMP_LE: { CvmReg a=REG(inst->as.binary.lhs), b=REG(inst->as.binary.rhs); MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,(mir_type_is_unsigned(t)?a<=b:(int64_t)a<=(int64_t)b)?1u:0u); break; }
+                case MIR_CMP_GT: { CvmReg a=REG(inst->as.binary.lhs), b=REG(inst->as.binary.rhs); MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,(mir_type_is_unsigned(t)?a>b:(int64_t)a>(int64_t)b)?1u:0u); break; }
+                case MIR_CMP_GE: { CvmReg a=REG(inst->as.binary.lhs), b=REG(inst->as.binary.rhs); MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,(mir_type_is_unsigned(t)?a>=b:(int64_t)a>=(int64_t)b)?1u:0u); break; }
                 case MIR_LOGIC_AND: SET(inst->result, (REG(inst->as.binary.lhs) && REG(inst->as.binary.rhs)) ? 1u : 0u); break;
                 case MIR_LOGIC_OR:  SET(inst->result, (REG(inst->as.binary.lhs) || REG(inst->as.binary.rhs)) ? 1u : 0u); break;
                 case MIR_LOGIC_NOT: SET(inst->result, !REG(inst->as.unary.operand) ? 1u : 0u); break;
@@ -1071,6 +1105,17 @@ static CvmReg cvm_intrin_print_int(CvmReg* args, int n) {
     return 0;
 }
 
+static CvmReg cvm_intrin_print_uint(CvmReg* args, int n) {
+    uint64_t v = (n > 0) ? (uint64_t)args[0] : 0;
+    char buf[48];
+    CpxFmtBuffer out;
+    cpx_fmt_init(&out, buf, sizeof(buf));
+    cpx_fmt_append_u64(&out, v);
+    cpx_fmt_putc(&out, '\n');
+    (void)cpx_io_write_all_fd(1, buf, out.len);
+    return 0;
+}
+
 static CvmReg cvm_intrin_print_float(CvmReg* args, int n) {
     double v = (n > 0) ? cvm_bits_to_f64(args[0]) : 0.0;
     char buf[64];
@@ -1105,6 +1150,7 @@ typedef struct {
 
 static const CvmIntrinsic CVM_INTRINSICS[] = {
     { "nuwan_print_int",   cvm_intrin_print_int   },
+    { "nuwan_print_uint",  cvm_intrin_print_uint  },
     { "nuwan_print_float", cvm_intrin_print_float },
     { "nuwan_print_bool",  cvm_intrin_print_bool  },
     { "nuwan_print_str",   cvm_intrin_print_str   },
