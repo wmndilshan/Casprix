@@ -800,6 +800,37 @@ static int mir_verify_inst_types(MirFunction* func, MirInst* inst, FILE* diag) {
             }
             break;
         }
+        case MIR_OBJ_ALLOC: {
+            int size = inst->as.obj_alloc.size;
+            int count = inst->as.obj_alloc.managed_field_count;
+            int* offsets = inst->as.obj_alloc.managed_offsets;
+            if (size <= 0 || count < 0 || (count > 0 && !offsets)) {
+                mir_verror(diag, "@%s: invalid object allocation metadata",
+                           func->name ? func->name : "?");
+                e++;
+                break;
+            }
+            for (int i = 0; i < count; i++) {
+                int off = offsets[i];
+                if (off < (int)sizeof(void*) ||
+                    off % (int)_Alignof(void*) != 0 ||
+                    off > size || (int)sizeof(void*) > size - off) {
+                    mir_verror(diag, "@%s: managed field offset %d is invalid for %d-byte object",
+                               func->name ? func->name : "?", off, size);
+                    e++;
+                    continue;
+                }
+                for (int j = 0; j < i; j++) {
+                    if (offsets[j] == off) {
+                        mir_verror(diag, "@%s: duplicate managed field offset %d",
+                                   func->name ? func->name : "?", off);
+                        e++;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
         default:
             break;
     }
@@ -929,6 +960,13 @@ int mir_verify_function(MirFunction* func, FILE* diag) {
     for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
         errors += mir_verify_block_shape(func, bb, diag);
         for (MirInst* inst = bb->first; inst; inst = inst->next) {
+            if ((unsigned)inst->opcode > (unsigned)MIR_DEBUGLOC) {
+                mir_verror(diag, "@%s: unknown MIR opcode %d in bb%u",
+                           func->name ? func->name : "?", (int)inst->opcode,
+                           bb->id);
+                errors++;
+                continue;
+            }
             errors += mir_verify_inst_value_ids(func, inst, diag);
             errors += mir_verify_inst_types(func, inst, diag);
         }

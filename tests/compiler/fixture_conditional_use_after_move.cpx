@@ -1,0 +1,30 @@
+// NEGATIVE: conditional move on one path, use after join (use-after-move).
+// The then arm moves `f` without returning; the else arm keeps ownership.
+// Using `f` after the join is illegal on the then path.
+class Foo {
+    mut val: int
+    func set_val(v: int) {
+        this.val = v
+    }
+}
+
+func test_borrow(cond: bool) -> int {
+    let f = new Foo()
+    f.set_val(42)
+
+    if cond {
+        let y = move f
+    } else {
+        f.set_val(10)
+    }
+
+    f.set_val(20)
+    return 0
+}
+
+func main() -> int {
+    test_borrow(true)
+    return 0
+}
+
+main()

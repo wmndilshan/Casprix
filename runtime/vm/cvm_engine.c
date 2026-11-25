@@ -38,6 +38,7 @@
 
 /* MIR headers first to avoid TokenType clashes with windows.h */
 #include "../../src/compiler/ir/mir.h"
+#include "../../src/compiler/ir/mir_backend_caps.h"
 #include "cvm_engine.h"
 #include "jit_bridge.h"
 #include "../io/direct_io.h"
@@ -71,6 +72,78 @@ static void cvm_diag(CvmState* vm, const char* fmt, ...) {
     size_t n = cpx_fmt_vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     (void)cpx_io_write_all_fd(2, buf, n);
+}
+
+static void cvm_trap_unsupported_inst(CvmState* vm, MirFunction* func,
+                                      MirBlock* block, MirInst* inst,
+                                      const char* dispatch) {
+    const char* opname = (int)inst->opcode >= 0 && inst->opcode <= MIR_DEBUGLOC
+        ? mir_opcode_name(inst->opcode) : "<unknown-opcode>";
+    cvm_diag(vm,
+             "[CVM] unsupported MIR opcode %s (%d) in %s:bb%u at %d:%d (%s dispatch)\n",
+             opname, (int)inst->opcode,
+             func && func->name ? func->name : "<anonymous>",
+             block ? block->id : 0, inst->src_line, inst->src_col,
+             dispatch ? dispatch : "unknown");
+    vm->trap_code = CVM_TRAP_UNSUPPORTED_MIR;
+}
+
+static bool cvm_class_layout_valid(size_t size, const int* offsets,
+                                   int n_managed);
+
+static bool cvm_function_supported(CvmState* vm, MirFunction* func,
+                                   const char* dispatch) {
+    for (MirBlock* block = func ? func->entry_block : NULL;
+         block; block = block->next_block) {
+        for (MirInst* inst = block->first; inst; inst = inst->next) {
+            if (!mir_cvm_opcode_supported(inst->opcode)) {
+                cvm_trap_unsupported_inst(vm, func, block, inst, dispatch);
+                return false;
+            }
+            if (inst->opcode == MIR_ARC_RETAIN ||
+                inst->opcode == MIR_ARC_RELEASE || inst->opcode == MIR_DROP) {
+                MirType* type = mir_function_value_type(func, inst->as.refop.ptr);
+                if (!type || (type->kind != MIR_TYPE_PTR &&
+                              type->kind != MIR_TYPE_REF &&
+                              type->kind != MIR_TYPE_MUT_REF)) {
+                    cvm_diag(vm, "[CVM] invalid ARC operand type for %s in %s:bb%u\n",
+                             mir_opcode_name(inst->opcode),
+                             func->name ? func->name : "<anonymous>", block->id);
+                    vm->trap_code = CVM_TRAP_UNSUPPORTED_MIR;
+                    return false;
+                }
+            }
+            if (inst->opcode == MIR_OBJ_ALLOC) {
+                if (inst->as.obj_alloc.size <= 0) {
+                    cvm_diag(vm, "[CVM] invalid object size in %s:bb%u at %d:%d\n",
+                             func->name ? func->name : "<anonymous>", block->id,
+                             inst->src_line, inst->src_col);
+                    vm->trap_code = CVM_TRAP_INVALID_OBJECT_LAYOUT;
+                    return false;
+                }
+                size_t size = (size_t)inst->as.obj_alloc.size;
+                if (size < 16u) size = 16u;
+                if (!cvm_class_layout_valid(size,
+                        inst->as.obj_alloc.managed_offsets,
+                        inst->as.obj_alloc.managed_field_count)) {
+                    cvm_diag(vm, "[CVM] invalid managed-field metadata in %s:bb%u at %d:%d\n",
+                             func->name ? func->name : "<anonymous>", block->id,
+                             inst->src_line, inst->src_col);
+                    vm->trap_code = CVM_TRAP_INVALID_OBJECT_LAYOUT;
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static bool cvm_module_supported(CvmState* vm, const char* dispatch) {
+    if (!vm || !vm->module) return false;
+    for (MirFunction* func = vm->module->func_list; func; func = func->next_func) {
+        if (!cvm_function_supported(vm, func, dispatch)) return false;
+    }
+    return true;
 }
 
 static inline CvmReg cvm_safe_div_i64(CvmReg lhs_u, CvmReg rhs_u) {
@@ -243,7 +316,7 @@ static void cvm_frame_free_allocas(CvmFrame* frame) {
     frame->alloca_cap = 0;
 }
 
-#if defined(__GNUC__) || defined(__clang__)
+#if !defined(CVM_FORCE_SWITCH) && (defined(__GNUC__) || defined(__clang__))
 #  define CVM_USE_COMPUTED_GOTO 1
 #else
 #  define CVM_USE_COMPUTED_GOTO 0
@@ -259,9 +332,8 @@ static void cvm_prepare_dispatch(CvmState* vm, MirModule* module, const void** t
         for (MirBlock* blk = func->entry_block; blk; blk = blk->next_block) {
             for (MirInst* inst = blk->first; inst; inst = inst->next) {
                 int oc = (int)inst->opcode;
-                if (oc >= 0 && oc < MIR_DEBUGLOC + 1) {
-                    inst->vm_data = (void*)table[oc];
-                }
+                inst->vm_data = (void*)table[
+                    oc >= 0 && oc <= MIR_DEBUGLOC ? oc : MIR_DEBUGLOC + 1];
             }
         }
     }
@@ -269,6 +341,7 @@ static void cvm_prepare_dispatch(CvmState* vm, MirModule* module, const void** t
 
 static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
                                 CvmReg* args, int n_args) {
+    if (!cvm_function_supported(vm, func, "CVM")) return 0;
     /* Allocate register file */
     int reg_count = func->next_value_id > 0 ? (int)func->next_value_id : 1;
     if (reg_count > CVM_MAX_REGS) reg_count = CVM_MAX_REGS;
@@ -341,7 +414,7 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
         /* [MIR_CONST_FLOAT]  */ &&op_const_float,
         /* [MIR_CONST_BOOL]   */ &&op_const_bool,
         /* [MIR_CONST_STRING] */ &&op_const_string,
-        /* [MIR_CONST_FUNC]   */ &&op_nop,
+        /* [MIR_CONST_FUNC]   */ &&op_unsupported,
         /* [MIR_CONST_NULL]   */ &&op_const_null,
         /* [MIR_GLOBAL_ADDR]  */ &&op_global_addr,
         /* [MIR_ADD]          */ &&op_add,
@@ -390,8 +463,8 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
         /* [MIR_RET_VOID]     */ &&op_ret_void,
         /* [MIR_UNREACHABLE]  */ &&op_unreachable,
         /* [MIR_CALL]         */ &&op_call,
-        /* [MIR_CALL_INDIRECT]*/ &&op_call_indirect,
-        /* [MIR_CALL_VIRTUAL] */ &&op_call_virtual,
+        /* [MIR_CALL_INDIRECT]*/ &&op_unsupported,
+        /* [MIR_CALL_VIRTUAL] */ &&op_unsupported,
         /* [MIR_PHI]          */ &&op_phi,
         /* [MIR_COPY]         */ &&op_copy,
         /* [MIR_ARC_RETAIN]   */ &&op_arc_retain,
@@ -401,34 +474,35 @@ static CvmReg cvm_exec_function(CvmState* vm, MirFunction* func,
         /* [MIR_BORROW_MUT]   */ &&op_borrow,
         /* [MIR_MOVE]         */ &&op_move,
         /* [MIR_DROP]         */ &&op_drop,
-        /* [MIR_STRUCT_INIT]  */ &&op_nop,
-        /* [MIR_EXTRACT]      */ &&op_extract,
-        /* [MIR_INSERT]       */ &&op_nop,
-        /* [MIR_VEC_LOAD]     */ &&op_nop,
-        /* [MIR_VEC_LOAD_UNALIGNED]  */ &&op_nop,
-        /* [MIR_VEC_STORE]           */ &&op_nop,
-        /* [MIR_VEC_STORE_UNALIGNED] */ &&op_nop,
-        /* [MIR_VEC_BROADCAST]       */ &&op_nop,
-        /* [MIR_VEC_ADD]             */ &&op_nop,
-        /* [MIR_VEC_SUB]             */ &&op_nop,
-        /* [MIR_VEC_MUL]             */ &&op_nop,
-        /* [MIR_VEC_DIV]             */ &&op_nop,
-        /* [MIR_VEC_MIN]             */ &&op_nop,
-        /* [MIR_VEC_MAX]             */ &&op_nop,
-        /* [MIR_VEC_AND]             */ &&op_nop,
-        /* [MIR_VEC_OR]              */ &&op_nop,
-        /* [MIR_VEC_XOR]             */ &&op_nop,
-        /* [MIR_VEC_FMA]             */ &&op_nop,
-        /* [MIR_VEC_REDUCE_SUM]      */ &&op_nop,
-        /* [MIR_VEC_DOT]             */ &&op_nop,
-        /* [MIR_VEC_CMP_EQ]          */ &&op_nop,
-        /* [MIR_VEC_CMP_LT]          */ &&op_nop,
-        /* [MIR_VEC_CMP_GT]          */ &&op_nop,
-        /* [MIR_VEC_SELECT]          */ &&op_nop,
+        /* [MIR_STRUCT_INIT]  */ &&op_unsupported,
+        /* [MIR_EXTRACT]      */ &&op_unsupported,
+        /* [MIR_INSERT]       */ &&op_unsupported,
+        /* [MIR_VEC_LOAD]     */ &&op_unsupported,
+        /* [MIR_VEC_LOAD_UNALIGNED]  */ &&op_unsupported,
+        /* [MIR_VEC_STORE]           */ &&op_unsupported,
+        /* [MIR_VEC_STORE_UNALIGNED] */ &&op_unsupported,
+        /* [MIR_VEC_BROADCAST]       */ &&op_unsupported,
+        /* [MIR_VEC_ADD]             */ &&op_unsupported,
+        /* [MIR_VEC_SUB]             */ &&op_unsupported,
+        /* [MIR_VEC_MUL]             */ &&op_unsupported,
+        /* [MIR_VEC_DIV]             */ &&op_unsupported,
+        /* [MIR_VEC_MIN]             */ &&op_unsupported,
+        /* [MIR_VEC_MAX]             */ &&op_unsupported,
+        /* [MIR_VEC_AND]             */ &&op_unsupported,
+        /* [MIR_VEC_OR]              */ &&op_unsupported,
+        /* [MIR_VEC_XOR]             */ &&op_unsupported,
+        /* [MIR_VEC_FMA]             */ &&op_unsupported,
+        /* [MIR_VEC_REDUCE_SUM]      */ &&op_unsupported,
+        /* [MIR_VEC_DOT]             */ &&op_unsupported,
+        /* [MIR_VEC_CMP_EQ]          */ &&op_unsupported,
+        /* [MIR_VEC_CMP_LT]          */ &&op_unsupported,
+        /* [MIR_VEC_CMP_GT]          */ &&op_unsupported,
+        /* [MIR_VEC_SELECT]          */ &&op_unsupported,
         /* [MIR_NOP]                 */ &&op_nop,
-        /* [MIR_UNDEF]               */ &&op_nop,
-        /* [MIR_SUSPEND]             */ &&op_nop,
+        /* [MIR_UNDEF]               */ &&op_unsupported,
+        /* [MIR_SUSPEND]             */ &&op_unsupported,
         /* [MIR_DEBUGLOC]            */ &&op_nop,
+        /* Unknown opcode sentinel. */ &&op_unsupported,
     };
 
     /* One-time initialization of the module for direct threading. */
@@ -458,6 +532,10 @@ block_start:
 
 op_nop:
     NEXT_INST();
+
+op_unsupported:
+    cvm_trap_unsupported_inst(vm, func, cur_block, inst, "computed-goto");
+    goto done;
 
 op_const_int:
     SET(inst->result, (CvmReg)(uint64_t)inst->as.imm_i64);
@@ -687,21 +765,6 @@ op_call: {
     NEXT_INST();
 }
 
-op_call_indirect: {
-    /* Indirect call: resolve callee via register (func pointer as name ptr) */
-    CvmReg result = cvm_dispatch_call(vm, frame,
-                                      inst->as.call.func_name,
-                                      inst->as.call.args,
-                                      inst->as.call.n_args);
-    if (inst->result != MIR_VALUE_NONE) SET(inst->result, result);
-    NEXT_INST();
-}
-
-op_call_virtual:
-    /* Virtual call: treat as unresolved for now — emit 0 */
-    SET(inst->result, 0);
-    NEXT_INST();
-
 op_phi: {
     /* Predecessor-aware PHI: pick the incoming value on the edge whose
      * source block is the one we actually transitioned from (prev_block),
@@ -766,18 +829,6 @@ op_drop: {
     /* DROP of a managed object reference releases one strong ownership. */
     void* obj = (void*)(uintptr_t)REG(inst->as.refop.ptr);
     cvm_arc_release_managed(vm, obj);
-    NEXT_INST();
-}
-
-op_extract: {
-    /* Extract field from aggregate (stored as pointer to slots) */
-    uint8_t* base = (uint8_t*)(uintptr_t)REG(inst->as.field_op.aggregate);
-    if (base) {
-        uint64_t v; memcpy(&v, base + (ptrdiff_t)inst->as.field_op.field_idx * 8, 8);
-        SET(inst->result, v);
-    } else {
-        SET(inst->result, 0);
-    }
     NEXT_INST();
 }
 
@@ -911,13 +962,8 @@ done:
                     cvm_arc_release_managed(vm, obj);
                     break;
                 }
-                case MIR_EXTRACT: {
-                    uint8_t* b = (uint8_t*)(uintptr_t)REG(inst->as.field_op.aggregate);
-                    if (b) { uint64_t v; memcpy(&v, b + (ptrdiff_t)inst->as.field_op.field_idx*8, 8); SET(inst->result, v); }
-                    break;
-                }
                 case MIR_CALL:
-                case MIR_CALL_INDIRECT: {
+                {
                     CvmReg r = cvm_dispatch_call(vm, frame,
                                                  inst->as.call.func_name,
                                                  inst->as.call.args,
@@ -972,8 +1018,12 @@ done:
                 case MIR_UNREACHABLE:
                     vm->trap_code = 4;
                     goto done_sw;
+                case MIR_NOP:
+                case MIR_DEBUGLOC:
+                    break;
                 default:
-                    break;  /* skip unknown / vec / nop */
+                    cvm_trap_unsupported_inst(vm, func, cur_block, inst, "switch");
+                    goto done_sw;
             }
             if (CVM_UNLIKELY(vm->trap_code)) goto done_sw;
         }
@@ -1107,6 +1157,8 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
         return 0;
     }
 
+    if (!cvm_function_supported(vm, callee, "CVM")) return 0;
+
     /* Tiering check */
     CvmProfile* prof = cvm_get_profile(vm, callee);
     if (!prof) return 0;
@@ -1196,9 +1248,10 @@ static void cvm_arc_release_managed(CvmState* vm, void* obj) {
 
 /* Shared per-class layout (managed field offsets). */
 typedef struct CvmClassInfo {
-    const char* name;
+    char*       name;
     int         size;
     int         n_managed;
+    size_t      object_refs;
     int*        field_offsets; /* byte offsets from object base */
     struct CvmClassInfo* next;
 } CvmClassInfo;
@@ -1212,6 +1265,37 @@ typedef struct CvmObjHeader {
 
 static CvmClassInfo* g_cvm_class_infos = NULL;
 
+static bool cvm_class_layout_valid(size_t size, const int* offsets,
+                                   int n_managed) {
+    if (n_managed < 0 || (n_managed > 0 && !offsets)) return false;
+    for (int i = 0; i < n_managed; i++) {
+        int off = offsets[i];
+        if (off < (int)sizeof(void*) ||
+            off % (int)_Alignof(void*) != 0 ||
+            (size_t)off > size || sizeof(void*) > size - (size_t)off)
+            return false;
+        for (int j = 0; j < i; j++) {
+            if (offsets[j] == off) return false;
+        }
+    }
+    return true;
+}
+
+static void cvm_class_info_release(CvmClassInfo* info) {
+    CvmClassInfo** link;
+    if (!info || info->object_refs == 0) return;
+    if (--info->object_refs != 0) return;
+    for (link = &g_cvm_class_infos; *link; link = &(*link)->next) {
+        if (*link == info) {
+            *link = info->next;
+            free(info->field_offsets);
+            free(info->name);
+            free(info);
+            return;
+        }
+    }
+}
+
 static CvmClassInfo* cvm_obj_info(void* obj) {
     CvmObjHeader* hdr;
     if (!obj) return NULL;
@@ -1224,13 +1308,11 @@ static CvmClassInfo* cvm_obj_info(void* obj) {
 static void cvm_class_cycle_clear(void* obj, void (*collect_white_child)(void* child)) {
     CvmObjHeader* hdr;
     CvmClassInfo* info;
-    CvmState* owner_vm;
     int i;
     if (!obj) return;
     hdr = *(CvmObjHeader**)obj;
     if (!hdr || !hdr->info) return;
     info = hdr->info;
-    owner_vm = hdr->owner_vm;
     for (i = 0; i < info->n_managed; i++) {
         void** slot = (void**)((char*)obj + info->field_offsets[i]);
         void* child = *slot;
@@ -1245,7 +1327,6 @@ static void cvm_class_cycle_clear(void* obj, void (*collect_white_child)(void* c
         }
         if (arc_is_deallocating(child)) continue;
         (void)arc_release_survived(child);
-        if (owner_vm) cvm_heap_object_untrack(owner_vm, child);
     }
 }
 
@@ -1279,8 +1360,8 @@ static void cvm_class_dtor(void* obj) {
          * skip to avoid UAF. Normal destruction still releases children. */
         if (cycle_finalize) continue;
         (void)arc_release_survived(child);
-        if (owner_vm) cvm_heap_object_untrack(owner_vm, child);
     }
+    cvm_class_info_release(info);
 }
 
 static void cvm_class_scan(void* obj, void (*visit)(void* field_ptr)) {
@@ -1298,43 +1379,43 @@ static void cvm_class_scan(void* obj, void (*visit)(void* field_ptr)) {
 static CvmClassInfo* cvm_class_info_get(const char* name, int size,
                                        const int* offsets, int n_managed) {
     CvmClassInfo* info;
+    const char* canonical_name = name ? name : "$anon";
+    if (size <= 0 || !cvm_class_layout_valid((size_t)size, offsets, n_managed))
+        return NULL;
     for (info = g_cvm_class_infos; info; info = info->next) {
-        if (info->name && name && strcmp(info->name, name) == 0 &&
-            info->size == size && info->n_managed == n_managed) {
+        if (strcmp(info->name, canonical_name) == 0 && info->size == size &&
+            info->n_managed == n_managed &&
+            (n_managed == 0 ||
+             memcmp(info->field_offsets, offsets,
+                    (size_t)n_managed * sizeof(int)) == 0)) {
+            if (info->object_refs == SIZE_MAX) return NULL;
+            info->object_refs++;
             return info;
         }
     }
     info = (CvmClassInfo*)calloc(1, sizeof(CvmClassInfo));
     if (!info) return NULL;
     {
-        const char* src = name ? name : "$anon";
-        size_t nlen = strlen(src) + 1;
+        size_t nlen = strlen(canonical_name) + 1;
         char* copy = (char*)malloc(nlen);
         if (!copy) {
             free(info);
             return NULL;
         }
-        memcpy(copy, src, nlen);
+        memcpy(copy, canonical_name, nlen);
         info->name = copy;
     }
     info->size = size;
-    info->n_managed = n_managed > 0 ? n_managed : 0;
-    if (info->n_managed > 0 && offsets) {
-        int kept = 0;
+    info->n_managed = n_managed;
+    info->object_refs = 1;
+    if (n_managed > 0) {
         info->field_offsets = (int*)malloc((size_t)info->n_managed * sizeof(int));
         if (!info->field_offsets) {
             free((void*)info->name);
             free(info);
             return NULL;
         }
-        /* Reject out-of-bounds / header-overlapping field descriptors. */
-        for (int i = 0; i < info->n_managed; i++) {
-            int off = offsets[i];
-            if (off < (int)sizeof(void*) || off + (int)sizeof(void*) > size)
-                continue;
-            info->field_offsets[kept++] = off;
-        }
-        info->n_managed = kept;
+        memcpy(info->field_offsets, offsets, (size_t)info->n_managed * sizeof(int));
     }
     info->next = g_cvm_class_infos;
     g_cvm_class_infos = info;
@@ -1349,22 +1430,33 @@ static void* cvm_heap_object_alloc_ex(CvmState* vm, size_t size,
     CvmClassInfo* info;
     if (size < 16) size = 16;
 
+    if (size > INT_MAX || !cvm_class_layout_valid(size, managed_offsets, n_managed)) {
+        cvm_diag(vm, "[CVM] invalid managed-field layout for class '%s' (size=%llu, fields=%d)\n",
+                 class_name ? class_name : "$anon",
+                 (unsigned long long)size, n_managed);
+        vm->trap_code = CVM_TRAP_INVALID_OBJECT_LAYOUT;
+        return NULL;
+    }
+
     info = cvm_class_info_get(class_name ? class_name : "$anon",
                               (int)size, managed_offsets, n_managed);
+    if (!info) return NULL;
     if (info && info->n_managed > 0) {
         mem = arc_alloc_full(size, cvm_class_dtor, cvm_class_scan);
         if (mem) arc_set_cycle_clear(mem, cvm_class_cycle_clear);
     } else if (info) {
         mem = arc_alloc_full(size, cvm_class_dtor, NULL);
-    } else {
-        mem = arc_alloc(size);
     }
-    if (!mem) return NULL;
+    if (!mem) {
+        cvm_class_info_release(info);
+        return NULL;
+    }
 
     if (info) {
         CvmObjHeader* hdr = (CvmObjHeader*)calloc(1, sizeof(CvmObjHeader));
         if (!hdr) {
             arc_release(mem);
+            cvm_class_info_release(info);
             return NULL;
         }
         hdr->info = info;
@@ -1428,6 +1520,8 @@ void cvm_state_destroy(CvmState* vm) {
 }
 
 int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
+    if (!vm || !vm->module) return 0;
+    if (!cvm_module_supported(vm, "CVM")) return 0;
     MirFunction* func = mir_module_find_function(vm->module, entry);
     if (!func) {
         cvm_diag(vm, "[CVM] entry function '%s' not found\n", entry);
@@ -1465,6 +1559,7 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
 
 CvmReg cvm_call_function(CvmState* vm, MirFunction* func,
                           CvmReg* args, int n_args) {
+    if (!vm || !func || !cvm_function_supported(vm, func, "CVM")) return 0;
     CvmProfile* prof = cvm_get_profile(vm, func);
     if (!prof) return 0;
     prof->call_count++;

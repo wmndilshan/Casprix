@@ -9,14 +9,16 @@ func test_borrow(cond: bool) -> int {
     let f = new Foo()
     f.set_val(42)
 
+    // Path-sensitive: the then arm moves and returns, so the join only
+    // sees the else path where `f` remains owned.
     if cond {
         let y = move f
+        return y.val
     } else {
         f.set_val(10)
     }
 
-    f.set_val(20) // invalid use-after-move!
-
+    f.set_val(20)
     return 0
 }
 

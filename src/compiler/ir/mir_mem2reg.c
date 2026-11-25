@@ -19,6 +19,94 @@
 /* ================================================================
  * Limits
  * ================================================================ */
+/* Operand enumeration mirrors optimizer DCE; local to keep mem2reg-only
+ * library targets independent of the optimizer object. */
+static bool value_used_in_inst(MirInst* inst, MirValueId val) {
+    switch (inst->opcode) {
+        case MIR_ADD: case MIR_SUB: case MIR_MUL: case MIR_DIV: case MIR_MOD:
+        case MIR_FADD: case MIR_FSUB: case MIR_FMUL: case MIR_FDIV:
+        case MIR_BAND: case MIR_BOR: case MIR_BXOR: case MIR_SHL: case MIR_SHR:
+        case MIR_USHR:
+        case MIR_CMP_EQ: case MIR_CMP_NE: case MIR_CMP_LT: case MIR_CMP_LE:
+        case MIR_CMP_GT: case MIR_CMP_GE:
+        case MIR_LOGIC_AND: case MIR_LOGIC_OR:
+            return inst->as.binary.lhs == val || inst->as.binary.rhs == val;
+
+        case MIR_NEG: case MIR_FNEG: case MIR_BNOT: case MIR_LOGIC_NOT:
+        case MIR_CAST: case MIR_BITCAST: case MIR_TRUNC:
+        case MIR_ZEXT: case MIR_SEXT: case MIR_SITOFP: case MIR_FPTOSI:
+            return inst->as.unary.operand == val;
+
+        case MIR_LOAD:
+            return inst->as.mem.ptr == val;
+        case MIR_STORE:
+            return inst->as.mem.ptr == val || inst->as.mem.value == val;
+        case MIR_GET_FIELD_PTR:
+        case MIR_GET_ELEM_PTR:
+            return inst->as.gep.base == val || inst->as.gep.index == val;
+
+        case MIR_CONDBR:
+            return inst->as.condbr.cond == val;
+        case MIR_RET:
+            return inst->as.ret.value == val;
+        case MIR_SWITCH:
+            return inst->as.sw.discriminant == val;
+
+        case MIR_CALL:
+        case MIR_CALL_INDIRECT:
+            if (inst->as.call.callee == val) return true;
+            for (int i = 0; i < inst->as.call.n_args; i++)
+                if (inst->as.call.args[i] == val) return true;
+            return false;
+
+        case MIR_CALL_VIRTUAL:
+            if (inst->as.vcall.self_obj == val) return true;
+            for (int i = 0; i < inst->as.vcall.n_args; i++)
+                if (inst->as.vcall.args[i] == val) return true;
+            return false;
+
+        case MIR_PHI:
+            for (int i = 0; i < inst->as.phi.n_edges; i++)
+                if (inst->as.phi.edges[i].value == val) return true;
+            return false;
+
+        case MIR_COPY: case MIR_BORROW: case MIR_BORROW_MUT: case MIR_MOVE:
+            return inst->as.transfer.source == val;
+
+        case MIR_ARC_RETAIN: case MIR_ARC_RELEASE: case MIR_DROP:
+            return inst->as.refop.ptr == val;
+
+        case MIR_STRUCT_INIT:
+            for (int i = 0; i < inst->as.struct_init.n_fields; i++)
+                if (inst->as.struct_init.fields[i] == val) return true;
+            return false;
+
+        case MIR_EXTRACT:
+            return inst->as.field_op.aggregate == val;
+        case MIR_INSERT:
+            return inst->as.field_op.aggregate == val ||
+                   inst->as.field_op.insert_val == val;
+
+        /* Generic vector (all share the `vec` variant with up to 3
+         * SSA sources; MIR_VALUE_NONE indicates an unused slot). */
+        case MIR_VEC_LOAD: case MIR_VEC_LOAD_UNALIGNED:
+        case MIR_VEC_STORE: case MIR_VEC_STORE_UNALIGNED:
+        case MIR_VEC_BROADCAST: case MIR_VEC_REDUCE_SUM:
+        case MIR_VEC_ADD: case MIR_VEC_SUB: case MIR_VEC_MUL: case MIR_VEC_DIV:
+        case MIR_VEC_MIN: case MIR_VEC_MAX:
+        case MIR_VEC_AND: case MIR_VEC_OR:  case MIR_VEC_XOR:
+        case MIR_VEC_FMA: case MIR_VEC_DOT:
+        case MIR_VEC_CMP_EQ: case MIR_VEC_CMP_LT: case MIR_VEC_CMP_GT:
+        case MIR_VEC_SELECT:
+            return inst->as.vec.a == val || inst->as.vec.b == val ||
+                   inst->as.vec.c == val;
+
+        default:
+            return false;
+    }
+}
+
+
 #define MAX_BLOCKS     4096
 #define MAX_ALLOCAS    1024
 
@@ -897,6 +985,40 @@ int mir_mem2reg(MirFunction* func, MirMem2RegStats* stats) {
             }
         }
         next_alloca:;
+    }
+
+    /* The entry MIR_UNDEF definitions above are reaching-definition seeds,
+     * not runtime values. Remove dead phi chains to a fixed point, then drop
+     * only undefined seeds with no remaining SSA users. Live phis and seeds
+     * remain in MIR and are rejected at executable-backend validation. */
+    bool removed_dead_ssa = true;
+    while (removed_dead_ssa) {
+        removed_dead_ssa = false;
+        for (MirBlock* bb = func->block_list; bb; bb = bb->next_block) {
+            MirInst* inst = bb->first;
+            while (inst) {
+                MirInst* next = inst->next;
+                if ((inst->opcode == MIR_PHI || inst->opcode == MIR_UNDEF) &&
+                    inst->result != MIR_VALUE_NONE) {
+                    bool used = false;
+                    for (MirBlock* use_bb = func->block_list; use_bb && !used;
+                         use_bb = use_bb->next_block) {
+                        for (MirInst* use = use_bb->first; use; use = use->next) {
+                            if (value_used_in_inst(use, inst->result)) {
+                                used = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!used && (inst->opcode == MIR_UNDEF ||
+                                  inst->opcode == MIR_PHI)) {
+                        unlink_inst(bb, inst);
+                        removed_dead_ssa = true;
+                    }
+                }
+                inst = next;
+            }
+        }
     }
 
     /* ── Cleanup ── */
