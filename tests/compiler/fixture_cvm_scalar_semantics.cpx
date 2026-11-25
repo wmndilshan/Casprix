@@ -1,0 +1,43 @@
+func add(a: i64, b: i64) -> i64 { return a + b }
+
+func factorial(n: i64) -> i64 {
+    if n <= 1 { return 1 }
+    return n * factorial(n - 1)
+}
+
+func main() -> i64 {
+    print(1234567890123 + 9)
+    print(add(17, 25))
+    print(3 << 5)
+    print(1024 >> 4)
+
+    mut i: i64 = 0
+    mut sum: i64 = 0
+    while i < 10 {
+        sum = sum + i
+        i = i + 1
+    }
+    print(sum)
+
+    mut a: i64 = 1
+    mut b: i64 = 1
+    mut k: i64 = 0
+    while k < 7 {
+        let next: i64 = a + b
+        a = b
+        b = next
+        k = k + 1
+    }
+    print(b)
+
+    print(factorial(6))
+
+    mut merged: i64 = 17
+    if sum == 45 {
+        merged = merged + 100
+    } else {
+        merged = merged - 100
+    }
+    print(merged)
+    return 0
+}

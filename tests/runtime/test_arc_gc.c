@@ -32,17 +32,27 @@ static void test_node_scanner(void* obj, void (*visitor)(void* field_ptr)) {
     }
 }
 
+static void test_node_cycle_clear(void* obj, void (*collect_white_child)(void* child)) {
+    TestNode* node = (TestNode*)obj;
+    TestNode* child = node->strong_ref;
+    node->strong_ref = NULL;
+    if (!child) return;
+    if (arc_get_header(child)->color == ARC_COLOR_WHITE) {
+        if (collect_white_child) collect_white_child(child);
+    } else if (!arc_is_deallocating(child)) {
+        arc_release(child);
+    }
+}
+
 static void test_node_destructor(void* obj) {
     TestNode* node = (TestNode*)obj;
 
     g_destructor_calls++;
-    /* Cycle finalization tears down the white set; do not release children. */
+    /* Edges should already be cleared on the cycle path. */
     if (!arc_is_cycle_finalizing(obj) && node->strong_ref) {
         arc_release(node->strong_ref);
-        node->strong_ref = NULL;
-    } else {
-        node->strong_ref = NULL;
     }
+    node->strong_ref = NULL;
     if (node->has_weak_ref) {
         arc_weak_release(&node->weak_ref);
         node->has_weak_ref = false;
@@ -128,6 +138,8 @@ static void test_cycle_collection_exactly_once(void) {
         mem_shutdown(mm);
         return;
     }
+    arc_set_cycle_clear(a, test_node_cycle_clear);
+    arc_set_cycle_clear(b, test_node_cycle_clear);
 
     node_set_strong(a, b);
     node_set_strong(b, a);

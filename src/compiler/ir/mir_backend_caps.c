@@ -69,13 +69,6 @@ static bool opcode_supported_mir_c_native(MirOpcode op) {
     return opcode_supported_emit_c(op) && op != MIR_OBJ_ALLOC;
 }
 
-static bool opcode_supported_cvm(MirOpcode op) {
-    /* CVM interprets the MIR instruction set directly; unsupported ops trap
-     * at runtime. Treat ARC/object ops as supported. */
-    (void)op;
-    return true;
-}
-
 static bool opcode_supported_mir_x86_asm(MirOpcode op) {
     /* Current x86 MIR backend only lowers MIR_VEC_*; scalars are comments. */
     return mir_opcode_is_vec(op) || op == MIR_NOP || op == MIR_DEBUGLOC;
@@ -85,7 +78,7 @@ static bool opcode_ok(MirCapabilityProfile profile, MirOpcode op) {
     switch (profile) {
         case MIR_CAP_EMIT_C:      return opcode_supported_emit_c(op);
         case MIR_CAP_MIR_C_NATIVE: return opcode_supported_mir_c_native(op);
-        case MIR_CAP_CVM:         return opcode_supported_cvm(op);
+        case MIR_CAP_CVM:         return mir_cvm_opcode_supported(op);
         case MIR_CAP_MIR_X86_ASM: return opcode_supported_mir_x86_asm(op);
         case MIR_CAP_VM_BYTECODE:
             /* Only opcodes with complete (non-placeholder) encodings. */
@@ -104,9 +97,37 @@ static bool opcode_ok(MirCapabilityProfile profile, MirOpcode op) {
             /* Standalone JIT packaging is incomplete. */
             return false;
         case MIR_CAP_LEGACY_NATIVE:
-        default:
             return true;
+        default:
+            return false;
     }
+}
+
+static bool instruction_supported(MirFunction* func, MirInst* inst,
+                                  MirCapabilityProfile profile) {
+    if (!opcode_ok(profile, inst->opcode)) return false;
+    if (profile != MIR_CAP_CVM) return true;
+
+    if (inst->opcode == MIR_ARC_RETAIN || inst->opcode == MIR_ARC_RELEASE ||
+        inst->opcode == MIR_DROP) {
+        MirType* type = mir_function_value_type(func, inst->as.refop.ptr);
+        if (!type || (type->kind != MIR_TYPE_PTR && type->kind != MIR_TYPE_REF &&
+                      type->kind != MIR_TYPE_MUT_REF)) return false;
+    }
+    if (inst->opcode == MIR_OBJ_ALLOC) {
+        int size = inst->as.obj_alloc.size;
+        int count = inst->as.obj_alloc.managed_field_count;
+        int* offsets = inst->as.obj_alloc.managed_offsets;
+        if (size <= 0 || count < 0 || (count > 0 && !offsets)) return false;
+        for (int i = 0; i < count; i++) {
+            int off = offsets[i];
+            if (off < (int)sizeof(void*) || off % (int)_Alignof(void*) != 0 ||
+                off > size || (int)sizeof(void*) > size - off) return false;
+            for (int j = 0; j < i; j++)
+                if (offsets[j] == off) return false;
+        }
+    }
+    return true;
 }
 
 bool mir_backend_caps_validate(MirModule* module, MirCapabilityProfile profile,
@@ -117,14 +138,15 @@ bool mir_backend_caps_validate(MirModule* module, MirCapabilityProfile profile,
     for (MirFunction* f = module->func_list; f; f = f->next_func) {
         for (MirBlock* bb = f->entry_block; bb; bb = bb->next_block) {
             for (MirInst* inst = bb->first; inst; inst = inst->next) {
-                if (opcode_ok(profile, inst->opcode)) continue;
+                if (instruction_supported(f, inst, profile)) continue;
                 fprintf(diag,
                         "MIR_CAPABILITY: backend '%s' does not support opcode %s (%d) "
-                        "in function '%s'\n",
+                        "or its operand metadata in function '%s', bb%u at %d:%d\n",
                         mir_capability_profile_name(profile),
                         mir_opcode_name(inst->opcode),
                         (int)inst->opcode,
-                        f->name ? f->name : "<anon>");
+                        f->name ? f->name : "<anon>", bb->id,
+                        inst->src_line, inst->src_col);
                 return false;
             }
         }

@@ -429,6 +429,56 @@ if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_vm_jit.c")
         LABELS "vm;jit")
 endif()
 
+# Ensure unsupported MIR is rejected consistently by capability checks and
+# both CVM dispatch configurations.
+if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_mir_backend_capabilities.c")
+    set(_cvm_cap_sources
+        compiler/test_mir_backend_capabilities.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/cvm_engine.c
+        ${CMAKE_SOURCE_DIR}/runtime/vm/jit_bridge.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/direct_io.c
+        ${CMAKE_SOURCE_DIR}/runtime/io/fast_format.c
+        ${CMAKE_SOURCE_DIR}/runtime/memory/arc.c
+        ${CMAKE_SOURCE_DIR}/runtime/memory/cycle_gc.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_builder.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_printer.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_opt.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_mem2reg.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_inline.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_async.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_consteval.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_borrow.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/ir/mir_backend_caps.c
+        ${CMAKE_SOURCE_DIR}/src/compiler/opt/simd.c)
+    foreach(_dispatch IN ITEMS computed_goto switch)
+        set(_target test_mir_backend_capabilities_${_dispatch})
+        add_executable(${_target} ${_cvm_cap_sources})
+        target_include_directories(${_target} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/runtime)
+        target_link_libraries(${_target} PRIVATE casprix_compile_options casprix_include_dirs
+            $<$<NOT:$<BOOL:${MSVC}>>:m>)
+        if(_dispatch STREQUAL "switch")
+            target_compile_definitions(${_target} PRIVATE CVM_FORCE_SWITCH=1)
+        endif()
+        add_test(NAME CVM_backend_capabilities_${_dispatch} COMMAND ${_target})
+        set_tests_properties(CVM_backend_capabilities_${_dispatch} PROPERTIES
+            TIMEOUT 30 LABELS "vm;capability")
+    endforeach()
+    set(_cvm_support_sources ${_cvm_cap_sources})
+    list(REMOVE_AT _cvm_support_sources 0)
+    add_executable(test_cvm_class_metadata
+        compiler/test_cvm_class_metadata.c ${_cvm_support_sources})
+    target_include_directories(test_cvm_class_metadata PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/runtime)
+    target_link_libraries(test_cvm_class_metadata PRIVATE casprix_compile_options
+        casprix_include_dirs $<$<NOT:$<BOOL:${MSVC}>>:m>)
+    add_test(NAME CVM_class_metadata_identity COMMAND test_cvm_class_metadata)
+    set_tests_properties(CVM_class_metadata_identity PROPERTIES
+        TIMEOUT 30 LABELS "vm;memory;metadata")
+endif()
+
 # ── JIT capacity bail-out test ─────────────────────────────────────────────────
 # Verifies jit_function_is_supported() refuses functions that exceed the
 # trampoline's argument capacity or the fixed register map, so JIT tier-up
@@ -602,6 +652,16 @@ if(BUILD_COMPILER AND TARGET casprix)
             -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_c_backend_high_level.cpx
             -DOUTPUT_BASE=${CMAKE_BINARY_DIR}/ctest/c_backend_high_level
             -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_c_backend_high_level.cmake
+    )
+
+    # O0 mem2reg regression: dead undefined reaching-definition seeds must not
+    # reject ordinary scalar CVM execution, while results remain full-width.
+    add_test(
+        NAME CVM_o0_scalar_semantics
+        COMMAND ${CMAKE_COMMAND}
+            -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+            -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_cvm_scalar_semantics.cpx
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_cvm_scalar_semantics.cmake
     )
 
     # Permanent negative: conditional move then use after join (use-after-move).

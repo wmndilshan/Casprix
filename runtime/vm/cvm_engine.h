@@ -67,6 +67,9 @@ typedef struct CvmJitBridge CvmJitBridge;
 #  define CVM_MAX_CALL_DEPTH  512
 #endif
 
+#define CVM_TRAP_UNSUPPORTED_MIR       8
+#define CVM_TRAP_INVALID_OBJECT_LAYOUT 9
+
 /* ─────────────────────────────────────────────────────────────
  * Register type
  * ───────────────────────────────────────────────────────────── */

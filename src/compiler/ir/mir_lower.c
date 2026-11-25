@@ -535,6 +535,8 @@ static MirValueId lower_binary(MirLowerCtx* ctx, Expr* expr) {
         case TOKEN_SLASH: return is_float ? mir_build_fdiv(&ctx->builder, lhs, rhs)
                                           : mir_build_div(&ctx->builder, lhs, rhs);
         case TOKEN_PERCENT: return mir_build_mod(&ctx->builder, lhs, rhs);
+        case TOKEN_LSHIFT: return mir_build_shl(&ctx->builder, lhs, rhs);
+        case TOKEN_RSHIFT: return mir_build_shr(&ctx->builder, lhs, rhs);
 
         case TOKEN_EQUAL:       return mir_build_cmp_eq(&ctx->builder, lhs, rhs);
         case TOKEN_NOT_EQUAL:  return mir_build_cmp_ne(&ctx->builder, lhs, rhs);
