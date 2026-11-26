@@ -14,13 +14,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <stdint.h>
 
 #ifdef _WIN32
 #include <direct.h>
+#include <process.h>
 #define casprix_getcwd(buf, sz) _getcwd((buf), (int)(sz))
 #else
 #include <unistd.h>
 #define casprix_getcwd(buf, sz) getcwd((buf), (sz))
+#include <sys/types.h>
 #endif
 
 #include "casprix/common.h"
@@ -39,6 +43,7 @@
 #include "compiler/ir/mir_backend.h"
 #include "compiler/ir/mir_backend_caps.h"
 #include "util/tools.h"
+#include "util/process.h"
 #include "util/module.h"
 
 /* CVM interpreter — for `--execute` (in-process run, no bytecode file). */
@@ -169,6 +174,155 @@ static MirBackend* create_mir_backend(const char* output_path) {
 /* Forward decls for helpers defined below pipeline_compile. */
 static bool find_source_root_for_runtime(char* out, size_t outsz);
 static bool find_prebuilt_lib_path(const char* name, char* out, size_t outsz);
+
+#ifndef CASPRIX_EXTERNAL_SANITIZER_FLAGS
+#define CASPRIX_EXTERNAL_SANITIZER_FLAGS ""
+#endif
+#ifndef CASPRIX_SANITIZER_CONFIG
+#define CASPRIX_SANITIZER_CONFIG ""
+#endif
+#ifndef CASPRIX_RUNTIME_ABI
+#define CASPRIX_RUNTIME_ABI "unknown"
+#endif
+
+typedef struct {
+    const char* args[80];
+    size_t count;
+} DriverArgv;
+
+static bool argv_add(DriverArgv* args, const char* value) {
+    if (!args || !value || args->count + 1 >= sizeof(args->args) / sizeof(args->args[0]))
+        return false;
+    args->args[args->count++] = value;
+    args->args[args->count] = NULL;
+    return true;
+}
+
+static void log_external_command(const DriverArgv* args) {
+    if (!g_config.verbose || !args) return;
+    fprintf(stderr, "Command:");
+    for (size_t i = 0; i < args->count; ++i) fprintf(stderr, " \"%s\"", args->args[i]);
+    fputc('\n', stderr);
+}
+
+static bool runtime_archive_matches_build(const char* archive_path) {
+    if (!archive_path || !*archive_path) return false;
+    size_t n = strlen(archive_path);
+    static const char suffix[] = ".casprix-sanitizers";
+    char* metadata = (char*)malloc(n + sizeof(suffix));
+    if (!metadata) return false;
+    memcpy(metadata, archive_path, n);
+    memcpy(metadata + n, suffix, sizeof(suffix));
+    FILE* file = fopen(metadata, "rb");
+    free(metadata);
+    if (!file) return CASPRIX_SANITIZER_CONFIG[0] == '\0';
+
+    char line[512];
+    bool version_ok = false, sanitizers_ok = false, abi_ok = false;
+    if (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        version_ok = strcmp(line, "casprix-runtime-v1") == 0;
+    }
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (strncmp(line, "sanitizers=", 11) == 0)
+            sanitizers_ok = strcmp(line + 11, CASPRIX_SANITIZER_CONFIG) == 0;
+        else if (strncmp(line, "abi=", 4) == 0)
+            abi_ok = strcmp(line + 4, CASPRIX_RUNTIME_ABI) == 0;
+    }
+    fclose(file);
+    return version_ok && sanitizers_ok && abi_ok;
+}
+
+static bool write_sanitizer_probe(const char* path) {
+    FILE* file = fopen(path, "wb");
+    if (!file) return false;
+    static const char source[] =
+        "#if defined(__GNUC__)\n"
+        "__attribute__((noinline))\n"
+        "#endif\n"
+        "static int probe(int value) { return value + 1; }\n"
+        "int main(int argc, char **argv) { (void)argv; return probe(argc) == -17; }\n";
+    bool ok = fwrite(source, 1, sizeof(source) - 1, file) == sizeof(source) - 1;
+    if (fclose(file) != 0) ok = false;
+    return ok;
+}
+
+static bool external_sanitizer_toolchain_works(const char* compiler) {
+    if (!CASPRIX_EXTERNAL_SANITIZER_FLAGS[0]) return true;
+    static unsigned long counter = 0;
+    char base[1024], source[1080], output[1120], temp_output[1200];
+    const char* temp_dir = getenv(
+#ifdef _WIN32
+        "TEMP"
+#else
+        "TMPDIR"
+#endif
+    );
+    if (!temp_dir || !*temp_dir) {
+#ifdef _WIN32
+        temp_dir = ".";
+#else
+        temp_dir = "/tmp";
+#endif
+    }
+#ifdef _WIN32
+    long pid = (long)_getpid();
+    const char* separator = "\\";
+#else
+    long pid = (long)getpid();
+    const char* separator = "/";
+#endif
+    int n = snprintf(base, sizeof(base), "%s%scasprix-sanitizer-probe-%ld-%lu",
+                     temp_dir, separator, pid, ++counter);
+    if (n < 0 || (size_t)n >= sizeof(base) ||
+        snprintf(source, sizeof(source), "%s.c", base) >= (int)sizeof(source) ||
+        snprintf(output, sizeof(output), "%s.out", base) >= (int)sizeof(output))
+        return false;
+    if (!casprix_reserve_sibling_temp(output, temp_output, sizeof(temp_output))) return false;
+    if (!write_sanitizer_probe(source)) {
+        remove(temp_output);
+        return false;
+    }
+
+    DriverArgv args = {0};
+    argv_add(&args, compiler);
+    argv_add(&args, CASPRIX_EXTERNAL_SANITIZER_FLAGS);
+    argv_add(&args, "-fno-omit-frame-pointer");
+    argv_add(&args, "-g");
+    argv_add(&args, source);
+    argv_add(&args, "-o");
+    argv_add(&args, temp_output);
+#ifndef _WIN32
+    argv_add(&args, "-no-pie");
+#endif
+    log_external_command(&args);
+    int result = casprix_run_process(args.args, false);
+    remove(source);
+    remove(temp_output);
+    if (result != 0) {
+        fprintf(stderr,
+            "Casprix sanitizer capability error: external compiler '%s' cannot compile and link '%s'.\n"
+            "Requested configuration: %s. Install a matching sanitizer runtime or use a supported external compiler.\n",
+            compiler, CASPRIX_SANITIZER_CONFIG, CASPRIX_SANITIZER_CONFIG);
+        return false;
+    }
+    return true;
+}
+
+static bool make_final_executable_path(const char* base, char* final_path, size_t size) {
+#ifdef _WIN32
+    int n = snprintf(final_path, size, "%s.exe", base);
+#else
+    int n = snprintf(final_path, size, "%s", base);
+#endif
+    return n >= 0 && (size_t)n < size;
+}
+
+static void cleanup_native_intermediates(const char* asm_path, const char* obj_path) {
+    if (obj_path) remove(obj_path);
+    if (!g_config.keep_asm_file && asm_path) remove(asm_path);
+}
 
 /* ============================================================================
  * pipeline_compile
@@ -560,57 +714,98 @@ int pipeline_compile(const char* source_path, const char* output_file_path) {
                 }
             }
 
-            if (!check_tool_available(TOOL_GCC, NULL)) {
-                printf("\n  [ERROR] Host C compiler (GCC) required for MIR→C→native.\n");
-                result = 74; goto done;
-            }
             {
                 const char* gcc = get_tool_command(TOOL_GCC);
                 const char* opt_flags = g_config.optimize ? "-O2" : "-g";
-                char command[4096];
                 char rt_path[1024] = "";
-                char runtime_flags[1536] = "";
-                char inline_sources[4096] = "";
+                char root[1024] = "";
+                char inline_sources[4][1200];
+                size_t source_count = 0;
+                char final_path[1200], temp_path[1300];
                 bool have_rt = find_prebuilt_lib_path("libcasprix_runtime.a",
                                                      rt_path, sizeof(rt_path));
-                if (have_rt) {
-#ifdef _WIN32
-                    snprintf(runtime_flags, sizeof(runtime_flags),
-                             " \"%s\" -lws2_32 -lpthread -ladvapi32", rt_path);
-#else
-                    snprintf(runtime_flags, sizeof(runtime_flags),
-                             " \"%s\" -lm -lpthread", rt_path);
-#endif
-                } else {
-                    char root[1024];
-                    if (find_source_root_for_runtime(root, sizeof(root))) {
-                        snprintf(inline_sources, sizeof(inline_sources),
-                                 "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
-                                 "\"%s/runtime/memory/ownership.c\" \"%s/runtime/object.c\"",
-                                 root, root, root, root);
+                if (have_rt && !runtime_archive_matches_build(rt_path)) {
+                    fprintf(stderr,
+                        "Casprix runtime compatibility error: '%s' does not match this compiler's sanitizer/target configuration (%s, %s).\n",
+                        rt_path, CASPRIX_SANITIZER_CONFIG, CASPRIX_RUNTIME_ABI);
+                    if (!g_config.keep_asm_file) remove(c_path);
+                    result = 74; goto done;
+                }
+                if (!external_sanitizer_toolchain_works(gcc)) {
+                    if (!g_config.keep_asm_file) remove(c_path);
+                    result = 74; goto done;
+                }
+                if (!make_final_executable_path(exe_path, final_path, sizeof(final_path)) ||
+                    !casprix_reserve_sibling_temp(final_path, temp_path, sizeof(temp_path))) {
+                    fprintf(stderr, "Casprix: could not reserve a temporary executable beside '%s'.\n",
+                            exe_path);
+                    if (!g_config.keep_asm_file) remove(c_path);
+                    result = 74; goto done;
+                }
+                if (!have_rt && find_source_root_for_runtime(root, sizeof(root))) {
+                    static const char* suffixes[] = {
+                        "runtime/memory/arc.c", "runtime/memory/cycle_gc.c",
+                        "runtime/memory/ownership.c", "runtime/object.c"
+                    };
+                    for (size_t i = 0; i < 4; ++i) {
+                        snprintf(inline_sources[i], sizeof(inline_sources[i]),
+                                 "%s/%s", root, suffixes[i]);
+                        source_count++;
                     }
                 }
 
+                DriverArgv args = {0};
+                argv_add(&args, gcc);
+                argv_add(&args, opt_flags);
+                if (CASPRIX_EXTERNAL_SANITIZER_FLAGS[0]) {
+                    argv_add(&args, CASPRIX_EXTERNAL_SANITIZER_FLAGS);
+                    argv_add(&args, "-fno-omit-frame-pointer");
+                }
 #ifdef _WIN32
-                snprintf(command, sizeof(command),
-                         "%s %s \"%s\" %s -o \"%s.exe\"%s",
-                         gcc, opt_flags, c_path, inline_sources,
-                         exe_path, runtime_flags);
+                argv_add(&args, c_path);
+                for (size_t i = 0; i < source_count; ++i) argv_add(&args, inline_sources[i]);
+                argv_add(&args, "-o");
+                argv_add(&args, temp_path);
+                if (have_rt) argv_add(&args, rt_path);
+                argv_add(&args, "-lws2_32");
+                argv_add(&args, "-lpthread");
+                argv_add(&args, "-ladvapi32");
 #else
-                snprintf(command, sizeof(command),
-                         "%s %s -no-pie \"%s\" %s -o \"%s\"%s -lm",
-                         gcc, opt_flags, c_path, inline_sources,
-                         exe_path, runtime_flags);
+                argv_add(&args, "-no-pie");
+                argv_add(&args, c_path);
+                for (size_t i = 0; i < source_count; ++i) argv_add(&args, inline_sources[i]);
+                argv_add(&args, "-o");
+                argv_add(&args, temp_path);
+                if (have_rt) argv_add(&args, rt_path);
+                argv_add(&args, "-lm");
+                argv_add(&args, "-lpthread");
 #endif
-                if (g_config.verbose) CPX_INFO("Command: %s", command);
-                if (system(command) != 0) {
-                    printf("\n  [ERROR] Host C compile of MIR-generated C failed.\n");
+                log_external_command(&args);
+                int tool_result = casprix_run_process(args.args, false);
+                if (tool_result != 0) {
+                    fprintf(stderr,
+                        "Casprix: host C compilation/link failed (tool exit %d); no executable was published.\n",
+                        tool_result);
+                    remove(temp_path);
+                    if (!g_config.keep_asm_file) remove(c_path);
+                    result = 74; goto done;
+                }
+                if (!casprix_publish_file(temp_path, final_path)) {
+                    fprintf(stderr,
+                        "Casprix: could not publish completed executable '%s' (errno %d).\n",
+                        final_path, errno);
+                    remove(temp_path);
+                    if (!g_config.keep_asm_file) remove(c_path);
                     result = 74; goto done;
                 }
             }
             if (!g_config.keep_asm_file) remove(c_path);
             g_config.codegen_produced_final_artifact = true;
-            printf("  Output: %s.exe (via MIR→C→host-cc)\n", exe_path);
+            {
+                char final_path[1200];
+                if (make_final_executable_path(exe_path, final_path, sizeof(final_path)))
+                    printf("  Output: %s (via MIR→C→host-cc)\n", final_path);
+            }
             debug_phase_end("Code Generation (MIR Backend)");
             result = 0; goto done;
         }
@@ -671,23 +866,30 @@ done:
  * ========================================================================== */
 
 int pipeline_assemble(const char* asm_file_path, const char* obj_file_path) {
-    char command[8192];
+    DriverArgv args = {0};
+    argv_add(&args, get_tool_command(TOOL_NASM));
 #ifdef _WIN32
-    snprintf(command, sizeof(command),
-             "nasm -f win64 \"%s\" -o \"%s\"", asm_file_path, obj_file_path);
+    argv_add(&args, "-f");
+    argv_add(&args, "win64");
 #else
-    snprintf(command, sizeof(command),
-             "nasm -f elf64 \"%s\" -o \"%s\"", asm_file_path, obj_file_path);
+    argv_add(&args, "-f");
+    argv_add(&args, "elf64");
 #endif
+    argv_add(&args, asm_file_path);
+    argv_add(&args, "-o");
+    argv_add(&args, obj_file_path);
     perf_start(&g_diag.perf, "Assembly", STAGE_NONE);
     if (!g_config.compact_output) debug_phase_start("ASSEMBLY");
     if (!g_config.compact_output) CPX_INFO("Running NASM assembler...");
-    if (g_config.verbose) CPX_INFO("Command: %s", command);
-    int result = system(command);
+    log_external_command(&args);
+    int result = casprix_run_process(args.args, false);
     perf_end(&g_diag.perf);
     if (result != 0) {
-        if (!g_config.compact_output) CPX_ERROR("Assembly failed (exit %d)", result);
-        return 1;
+        if (!g_config.compact_output)
+            CPX_ERROR("NASM invocation failed (exit %d)", result);
+        remove(obj_file_path);
+        if (!g_config.keep_asm_file) remove(asm_file_path);
+        return 74;
     }
     if (!g_config.compact_output) CPX_INFO("Object file: %s", obj_file_path);
     if (!g_config.compact_output) debug_phase_end("Assembly");
@@ -810,12 +1012,6 @@ static bool find_prebuilt_lib_path(const char* name, char* out, size_t outsz) {
 
 int pipeline_link(const char* obj_file_path, const char* asm_file_path,
                   const char* exe_path) {
-    if (!check_tool_available(TOOL_GCC, NULL)) {
-        CPX_ERROR("GCC not found for linking");
-        download_tool(TOOL_GCC, NULL);
-        return 1;
-    }
-
     const char* gcc       = get_tool_command(TOOL_GCC);
     const char* opt_flags = g_config.optimize ? "-O2" : "-g";
 
@@ -840,103 +1036,120 @@ int pipeline_link(const char* obj_file_path, const char* asm_file_path,
     bool need_ai_core = g_link_needs_ai_core;
     bool have_skia = have_skia_gui && have_skia_c;
 
-    char runtime_flags[1536] = "";
-    char inline_sources[4096] = "";
-
     if (need_skia && !have_skia) {
         printf("  [ERROR] Skia GUI program detected, but libskia_gui.a/libskia_c.a were not found.\n");
-        return 1;
+        cleanup_native_intermediates(asm_file_path, obj_file_path);
+        return 74;
+    }
+    if (have_rt && !runtime_archive_matches_build(rt_path)) {
+        fprintf(stderr,
+            "Casprix runtime compatibility error: '%s' does not match this compiler's sanitizer/target configuration (%s, %s).\n",
+            rt_path, CASPRIX_SANITIZER_CONFIG, CASPRIX_RUNTIME_ABI);
+        cleanup_native_intermediates(asm_file_path, obj_file_path);
+        return 74;
+    }
+    if (!external_sanitizer_toolchain_works(gcc)) {
+        cleanup_native_intermediates(asm_file_path, obj_file_path);
+        return 74;
     }
 
-    if (have_rt) {
-        if (need_skia) {
-            snprintf(runtime_flags, sizeof(runtime_flags),
-                     " \"%s\" \"%s\" \"%s\" -lgdi32 -luser32 -lole32 -loleaut32 -lmsimg32 -lws2_32 -lpthread -ladvapi32",
-                     rt_path, skia_gui_path, skia_c_path);
-        } else {
+    char final_path[1200], temp_path[1300];
+    if (!make_final_executable_path(exe_path, final_path, sizeof(final_path)) ||
+        !casprix_reserve_sibling_temp(final_path, temp_path, sizeof(temp_path))) {
+        fprintf(stderr, "Casprix: could not reserve a temporary executable beside '%s'.\n", exe_path);
+        cleanup_native_intermediates(asm_file_path, obj_file_path);
+        return 74;
+    }
+
+    DriverArgv args = {0};
+    argv_add(&args, gcc);
+    argv_add(&args, opt_flags);
+    if (CASPRIX_EXTERNAL_SANITIZER_FLAGS[0]) {
+        argv_add(&args, CASPRIX_EXTERNAL_SANITIZER_FLAGS);
+        argv_add(&args, "-fno-omit-frame-pointer");
+    }
 #ifdef _WIN32
-            snprintf(runtime_flags, sizeof(runtime_flags),
-                     " \"%s\" -lws2_32 -lpthread -ladvapi32",
-                     rt_path);
+    argv_add(&args, obj_file_path);
 #else
-            snprintf(runtime_flags, sizeof(runtime_flags),
-                     " \"%s\" -lm -lpthread",
-                     rt_path);
+    argv_add(&args, "-no-pie");
+    argv_add(&args, obj_file_path);
 #endif
-        }
-    } else {
-        /* No prebuilt runtime: compile a minimal subset next to the repo root. */
-        char root[1024];
-        if (find_source_root_for_runtime(root, sizeof(root))) {
-            if (need_ai_core) {
-                snprintf(inline_sources, sizeof(inline_sources),
-                         "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
-                         "\"%s/runtime/memory/ownership.c\" \"%s/runtime/object.c\" "
-                         "\"%s/runtime/ai/core/tensor.c\" \"%s/runtime/ai/core/autograd.c\" "
-                         "\"%s/runtime/ai/core/bindings.c\"",
-                         root, root, root, root, root, root, root);
+
+    char root[1024] = "";
+    char inline_sources[7][1200];
+    if (!have_rt) {
+        bool have_root = find_source_root_for_runtime(root, sizeof(root));
+        static const char* basic_sources[] = {
+            "runtime/memory/arc.c", "runtime/memory/cycle_gc.c",
+            "runtime/memory/ownership.c", "runtime/object.c"
+        };
+        static const char* ai_sources[] = {
+            "runtime/ai/core/tensor.c", "runtime/ai/core/autograd.c",
+            "runtime/ai/core/bindings.c"
+        };
+        size_t basic_count = sizeof(basic_sources) / sizeof(basic_sources[0]);
+        for (size_t i = 0; i < basic_count + (need_ai_core ? 3u : 0u); ++i) {
+            const char* suffix = i < basic_count ? basic_sources[i] : ai_sources[i - basic_count];
+            if (have_root) {
+                snprintf(inline_sources[i], sizeof(inline_sources[i]),
+                         "%s/%s", root, suffix);
+                argv_add(&args, inline_sources[i]);
             } else {
-                snprintf(inline_sources, sizeof(inline_sources),
-                         "\"%s/runtime/memory/arc.c\" \"%s/runtime/memory/cycle_gc.c\" "
-                         "\"%s/runtime/memory/ownership.c\" \"%s/runtime/object.c\"",
-                         root, root, root, root);
+                argv_add(&args, suffix);
             }
-        } else {
-            snprintf(inline_sources, sizeof(inline_sources),
-                     "runtime/memory/arc.c runtime/memory/cycle_gc.c "
-                     "runtime/memory/ownership.c runtime/object.c%s",
-                     need_ai_core
-                         ? " runtime/ai/core/tensor.c runtime/ai/core/autograd.c runtime/ai/core/bindings.c"
-                         : "");
         }
-
-        if (need_skia) {
-#ifdef _WIN32
-            snprintf(runtime_flags, sizeof(runtime_flags),
-                     " \"%s\" \"%s\" -lgdi32 -luser32 -lole32 -loleaut32 -lmsimg32",
-                     skia_gui_path, skia_c_path);
-#else
-            snprintf(runtime_flags, sizeof(runtime_flags),
-                     " \"%s\" \"%s\"",
-                     skia_gui_path, skia_c_path);
-#endif
-        }
-        if (need_ai_core)
-            snprintf(runtime_flags + strlen(runtime_flags),
-                     sizeof(runtime_flags) - strlen(runtime_flags), " -lm");
     }
 
-    char stdlib_flags[256] = "";
-    if (have_std)
-        snprintf(stdlib_flags, sizeof(stdlib_flags), " \"%s\"", std_path);
+    argv_add(&args, "-o");
+    argv_add(&args, temp_path);
+    if (have_rt) argv_add(&args, rt_path);
+    if (need_skia) {
+        argv_add(&args, skia_gui_path);
+        argv_add(&args, skia_c_path);
+    }
+    if (have_std) argv_add(&args, std_path);
 
-    char command[4096];
 #ifdef _WIN32
-    snprintf(command, sizeof(command),
-             "%s %s \"%s\" %s -o \"%s.exe\"%s%s",
-             gcc, opt_flags, obj_file_path, inline_sources,
-             exe_path, runtime_flags, stdlib_flags);
+    if (need_skia) {
+        argv_add(&args, "-lgdi32"); argv_add(&args, "-luser32");
+        argv_add(&args, "-lole32"); argv_add(&args, "-loleaut32");
+        argv_add(&args, "-lmsimg32");
+    }
+    if (have_rt) {
+        argv_add(&args, "-lws2_32"); argv_add(&args, "-lpthread");
+        argv_add(&args, "-ladvapi32");
+    }
 #else
-    snprintf(command, sizeof(command),
-             "%s %s -no-pie \"%s\" %s -o \"%s\"%s%s -lm",
-             gcc, opt_flags, obj_file_path, inline_sources,
-             exe_path, runtime_flags, stdlib_flags);
+    argv_add(&args, "-lm");
+    if (have_rt) argv_add(&args, "-lpthread");
 #endif
+    if (need_ai_core && !have_rt) argv_add(&args, "-lm");
 
     perf_start(&g_diag.perf, "Linking", STAGE_LINK);
     if (!g_config.compact_output) debug_phase_start("LINKING");
     if (!g_config.compact_output) CPX_INFO("Running GCC linker...");
-    if (g_config.verbose) CPX_INFO("Command: %s", command);
-    int result = system(command);
+    log_external_command(&args);
+    int result = casprix_run_process(args.args, false);
     perf_end(&g_diag.perf);
     if (result != 0) {
-        if (!g_config.compact_output) CPX_ERROR("Linking failed (exit %d)", result);
-        return 1;
+        fprintf(stderr,
+            "Casprix: external native link failed (tool exit %d); existing output was preserved.\n",
+            result);
+        remove(temp_path);
+        cleanup_native_intermediates(asm_file_path, obj_file_path);
+        return 74;
+    }
+    if (!casprix_publish_file(temp_path, final_path)) {
+        fprintf(stderr, "Casprix: could not publish completed executable '%s' (errno %d).\n",
+                final_path, errno);
+        remove(temp_path);
+        cleanup_native_intermediates(asm_file_path, obj_file_path);
+        return 74;
     }
 #ifdef _WIN32
-    if (!g_config.compact_output) CPX_INFO("Executable created: %s.exe", exe_path);
+    if (!g_config.compact_output) CPX_INFO("Executable created: %s", final_path);
 #else
-    if (!g_config.compact_output) CPX_INFO("Executable created: %s", exe_path);
+    if (!g_config.compact_output) CPX_INFO("Executable created: %s", final_path);
 #endif
     if (!g_config.compact_output) debug_phase_end("Linking");
 

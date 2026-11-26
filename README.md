@@ -61,6 +61,37 @@ ctest --test-dir build --output-on-failure
 The root `Makefile` remains a fast compiler-only development path. CMake is
 the authoritative full-toolchain build.
 
+### Sanitizer builds
+
+Sanitizers are opt-in. Configure a fresh build with one supported set:
+
+```bash
+cmake -S . -B build/asan-ubsan -G Ninja \
+  -DCASPRIX_SANITIZERS=address,undefined -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/asan-ubsan --parallel
+ctest --test-dir build/asan-ubsan --output-on-failure
+```
+
+`CASPRIX_SANITIZERS` accepts `address`, `undefined`, or `address,undefined`.
+It instruments the Casprix compiler and the C sources in its runtime archive.
+Native executable generation also passes the same sanitizer set to the
+external C compiler driver for generated-C compilation and final linking. The
+external driver defaults to GCC; `CASPRIX_CC` may name a compatible GCC or
+Clang executable. CMake checks its own compiler/linker support at configure
+time, and Casprix probes the selected external driver before native linking.
+Unsupported configurations fail with a diagnostic rather than dropping the
+requested instrumentation. The selected runtime archive carries sidecar
+metadata; Casprix rejects a sanitizer or target mismatch.
+
+`--emit-c` only writes C source. Instrumentation is applied when that source is
+later compiled with the requested `-fsanitize` flags. Legacy Native emits
+assembly directly: sanitizer flags link the runtime and instrument the C
+runtime, but do not add ASan or UBSan checks to arbitrary NASM instructions.
+On Linux, AddressSanitizer also provides leak detection; CTest sets
+`ASAN_OPTIONS=detect_leaks=1:halt_on_error=1` and
+`UBSAN_OPTIONS=halt_on_error=1` for sanitizer builds. Toolchains without the
+requested sanitizer runtime are unsupported for that configuration.
+
 ## Language example
 
 ```cpx

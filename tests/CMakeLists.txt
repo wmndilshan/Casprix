@@ -368,6 +368,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_simd_virt.c")
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/include
     )
+    target_link_libraries(test_simd_virt PRIVATE
+        casprix_compile_options
+        casprix_include_dirs
+    )
     add_test(NAME test_simd_virt COMMAND test_simd_virt)
 endif()
 
@@ -717,6 +721,8 @@ if(BUILD_COMPILER AND TARGET casprix)
             -DINVALID_SOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_native_integer_divzero.cpx
             -DPRINT_SHIM=${CMAKE_CURRENT_SOURCE_DIR}/compiler/integer_semantics_print_shim.c
             -DC_COMPILER=${CMAKE_C_COMPILER}
+            -DSANITIZER_FLAGS=${CASPRIX_SANITIZER_FLAGS}
+            -DHOST_WINDOWS=${WIN32}
             -DOUTPUT_BASE=${CMAKE_BINARY_DIR}/ctest/native_integer_semantics
             -DWORKING_DIRECTORY=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_native_integer_semantics.cmake
@@ -730,6 +736,24 @@ if(BUILD_COMPILER AND TARGET casprix)
     endif()
     set_tests_properties(compiler_native_integer_semantics PROPERTIES
         TIMEOUT 600 LABELS "compiler;integer;backend")
+
+    set(_native_failure_runtime_arg "-DRUNTIME_LIB=")
+    if(BUILD_RUNTIME AND TARGET casprix_runtime)
+        set(_native_failure_runtime_arg "-DRUNTIME_LIB=$<TARGET_FILE:casprix_runtime>")
+    endif()
+    add_test(NAME compiler_native_link_failure_integrity
+        COMMAND ${CMAKE_COMMAND}
+            -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+            -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_native_link_failure.cpx
+            -DOUTPUT_BASE=${CMAKE_BINARY_DIR}/ctest/native_sanitizer_failure/output
+            -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}
+            -DHOST_WINDOWS=${WIN32}
+            -DSANITIZER_CONFIG=${CASPRIX_SANITIZERS}
+            ${_native_failure_runtime_arg}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_native_link_failure.cmake
+    )
+    set_tests_properties(compiler_native_link_failure_integrity PROPERTIES
+        TIMEOUT 120 LABELS "compiler;toolchain;native;failure")
 
     # Permanent negative: conditional move then use after join (use-after-move).
     # Fixture is named fixture_*.cpx so the positive GLOB and suite runner skip it.
@@ -877,6 +901,38 @@ if(BUILD_COMPILER AND BUILD_TESTS AND TARGET casprix)
         LABELS "compiler;integer;mir")
 endif()
 
+if(BUILD_TESTS AND CASPRIX_SANITIZERS)
+    add_test(NAME compiler_sanitizer_detection_controls
+        COMMAND ${CMAKE_COMMAND}
+            -DC_COMPILER=${CMAKE_C_COMPILER}
+            -DSANITIZER_CONFIG=${CASPRIX_SANITIZERS}
+            -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/compiler
+            -DOUTPUT_DIR=${CMAKE_BINARY_DIR}/ctest/sanitizer_controls
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_sanitizer_controls.cmake)
+    set_tests_properties(compiler_sanitizer_detection_controls PROPERTIES
+        TIMEOUT 120 LABELS "compiler;toolchain;sanitizer")
+endif()
+
 message(STATUS "  Test suite:    ${CMAKE_CURRENT_SOURCE_DIR}")
 message(STATUS "    Runtime tests:  registered with CTest")
 message(STATUS "    Compiler tests: runner.c + CPX test files")
+
+# CMake limits TEST properties to tests declared in the current directory.
+# Apply the sanitizer runtime settings here, after platform-conditional test
+# registration has completed.
+if(CASPRIX_SANITIZERS)
+    get_property(_casprix_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_test_target IN LISTS _casprix_test_targets)
+        get_target_property(_test_target_type "${_test_target}" TYPE)
+        if(_test_target_type STREQUAL "EXECUTABLE")
+            target_link_libraries("${_test_target}" PRIVATE casprix_compile_options)
+        endif()
+    endforeach()
+
+    get_property(_casprix_registered_tests DIRECTORY PROPERTY TESTS)
+    foreach(_test IN LISTS _casprix_registered_tests)
+        set_property(TEST "${_test}" APPEND PROPERTY ENVIRONMENT
+            "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1"
+            "UBSAN_OPTIONS=halt_on_error=1")
+    endforeach()
+endif()

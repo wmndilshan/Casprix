@@ -49,6 +49,16 @@ true
 18446744073709551615]=])
 get_filename_component(output_dir "${OUTPUT_BASE}" DIRECTORY)
 file(MAKE_DIRECTORY "${output_dir}")
+set(native_executable_suffix "")
+if(DEFINED HOST_WINDOWS AND HOST_WINDOWS)
+    set(native_executable_suffix ".exe")
+elseif(WIN32)
+    set(native_executable_suffix ".exe")
+endif()
+set(sanitizer_flags)
+if(DEFINED SANITIZER_FLAGS AND NOT SANITIZER_FLAGS STREQUAL "")
+    separate_arguments(sanitizer_flags NATIVE_COMMAND "${SANITIZER_FLAGS}")
+endif()
 
 foreach(level IN ITEMS 0 2)
     foreach(backend IN ITEMS legacy cvm generated_c mir_native)
@@ -63,7 +73,7 @@ foreach(level IN ITEMS 0 2)
             if(NOT compile_result EQUAL 0)
                 message(FATAL_ERROR "Legacy O${level} compilation failed (${compile_result}):\n${compile_err}\n${compile_out}")
             endif()
-            set(run_path "${base}.exe")
+            set(run_path "${base}${native_executable_suffix}")
         elseif(backend STREQUAL "cvm")
             execute_process(
                 COMMAND "${CASPRIX_EXE}" --execute --opt-level=${level} "${SOURCE_FILE}"
@@ -86,6 +96,7 @@ foreach(level IN ITEMS 0 2)
             endif()
             execute_process(
                 COMMAND "${C_COMPILER}" -O${level} "${base}.c"
+                        ${sanitizer_flags}
                         "${PRINT_SHIM}" -o "${base}.exe"
                 WORKING_DIRECTORY "${WORKING_DIRECTORY}"
                 RESULT_VARIABLE compile_result OUTPUT_VARIABLE compile_out ERROR_VARIABLE compile_err
@@ -105,7 +116,7 @@ foreach(level IN ITEMS 0 2)
             if(NOT compile_result EQUAL 0)
                 message(FATAL_ERROR "C-mediated MIR-native O${level} compilation failed (${compile_result}):\n${compile_err}\n${compile_out}")
             endif()
-            set(run_path "${base}.exe")
+            set(run_path "${base}${native_executable_suffix}")
         endif()
 
         if(NOT backend STREQUAL "cvm")
@@ -222,7 +233,7 @@ func main() -> i64 { mut enter: bool = true; if enter { print(op(1i64, 0i64)) } 
                 if(NOT compile_result EQUAL 0)
                     message(FATAL_ERROR "Legacy invalid O${level} compile failed: ${compile_err}${compile_out}")
                 endif()
-                set(run_path "${base}.exe")
+                set(run_path "${base}${native_executable_suffix}")
             elseif(backend STREQUAL "cvm")
                 execute_process(COMMAND "${CASPRIX_EXE}" --execute --opt-level=${level} "${invalid_source}"
                     WORKING_DIRECTORY "${WORKING_DIRECTORY}" RESULT_VARIABLE run_result
@@ -234,7 +245,9 @@ func main() -> i64 { mut enter: bool = true; if enter { print(op(1i64, 0i64)) } 
                 if(NOT emit_result EQUAL 0)
                     message(FATAL_ERROR "Generated C invalid O${level} emission failed: ${emit_err}${emit_out}")
                 endif()
-                execute_process(COMMAND "${C_COMPILER}" -O${level} "${base}.c" "${PRINT_SHIM}" -o "${base}.exe"
+                # Sanitizer flags instrument the emitted C as well as its final link.
+                execute_process(COMMAND "${C_COMPILER}" -O${level} "${base}.c"
+                    ${sanitizer_flags} "${PRINT_SHIM}" -o "${base}.exe"
                     WORKING_DIRECTORY "${WORKING_DIRECTORY}" RESULT_VARIABLE compile_result
                     OUTPUT_VARIABLE compile_out ERROR_VARIABLE compile_err TIMEOUT 30)
                 if(NOT compile_result EQUAL 0)
@@ -248,7 +261,7 @@ func main() -> i64 { mut enter: bool = true; if enter { print(op(1i64, 0i64)) } 
                 if(NOT compile_result EQUAL 0)
                     message(FATAL_ERROR "MIR-native invalid O${level} compile failed: ${compile_err}${compile_out}")
                 endif()
-                set(run_path "${base}.exe")
+                set(run_path "${base}${native_executable_suffix}")
             endif()
 
             if(NOT backend STREQUAL "cvm")
