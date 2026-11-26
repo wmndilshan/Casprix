@@ -740,6 +740,8 @@ AndroidSnackbar* android_snackbar_create(SGNode* parent_root) {
     sb->text_node->flags          |= SG_VISIBLE;
 
     sg_node_add_child(sb->root, sb->text_node);
+    /* The snackbar root owns the attached text node after this handoff. */
+    sg_node_destroy(sb->text_node);
 
     if (parent_root)
         sg_node_add_child(parent_root, sb->root);

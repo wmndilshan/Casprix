@@ -1277,6 +1277,9 @@ static Expr* primary(Parser* parser) {
     if (match(parser, TOKEN_LPAREN)) {
         Expr* expr = expression(parser);
         while (match(parser, TOKEN_COMMA)) {
+            /* Parenthesized comma expressions currently keep the final
+             * expression. Release the discarded AST before replacing it. */
+            free_expr(expr);
             expr = expression(parser);
         }
         consume(parser, TOKEN_RPAREN, "Expected ')' after expression");

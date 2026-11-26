@@ -324,8 +324,8 @@ enum {
 
 SGNode* sg_node_create(SGNodeType type);
 SGNode* sg_node_create_in_scene(SGScene* scene, SGNodeType type);
-void    sg_node_destroy(SGNode* node);              /* Release one owner/reference */
-void    sg_node_destroy_tree(SGNode* node);         /* Release root of subtree */
+void    sg_node_destroy(SGNode* node);              /* Release caller's one owner/reference */
+void    sg_node_destroy_tree(SGNode* node);         /* Release caller's root reference */
 void    sg_node_destroy_single(SGNode* node);       /* Destroy only this node */
 void    sg_node_retain(SGNode* node);
 void    sg_node_set_cleanup(SGNode* node, SGNodeCleanupFn cleanup);
@@ -334,7 +334,11 @@ void    sg_node_set_cleanup(SGNode* node, SGNodeCleanupFn cleanup);
  * Tree Operations
  * ======================================================================== */
 
-/* Attach 'child' as the last child of 'parent'.
+/* Attach 'child' as the last child of 'parent'. A successful attachment
+ * retains a parent reference; it does not consume the caller's reference.
+ * Callers that do not need an independent reference must release it with
+ * sg_node_destroy after attaching. Removing the child releases the parent's
+ * reference and leaves any caller-owned reference intact.
  * Returns 0 on success, -1 if the attachment was rejected because it would
  * create a cycle (child is 'parent' itself or an ancestor of 'parent') or the
  * arguments are NULL. Existing callers that ignore the return value are

@@ -661,6 +661,7 @@ if(BUILD_COMPILER AND TARGET casprix)
             ${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_double_free.cpx
             ${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_for_in.cpx
             ${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_import_alias.cpx
+            ${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_parser_comma_lifecycle.cpx
             ${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_frontend_parse_error.cpx
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(compiler_frontend_lifecycle PROPERTIES

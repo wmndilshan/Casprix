@@ -188,7 +188,8 @@ uint32_t sg_color_lighten(uint32_t color, int amount) {
     int r = ((color >> 16) & 0xFF) + amount; if (r > 255) r = 255;
     int g = ((color >>  8) & 0xFF) + amount; if (g > 255) g = 255;
     int b = ((color      ) & 0xFF) + amount; if (b > 255) b = 255;
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    return ((uint32_t)a << 24) | ((uint32_t)r << 16) |
+           ((uint32_t)g << 8) | (uint32_t)b;
 }
 
 uint32_t sg_color_darken(uint32_t color, int amount) {
@@ -196,7 +197,8 @@ uint32_t sg_color_darken(uint32_t color, int amount) {
     int r = ((color >> 16) & 0xFF) - amount; if (r < 0) r = 0;
     int g = ((color >>  8) & 0xFF) - amount; if (g < 0) g = 0;
     int b = ((color      ) & 0xFF) - amount; if (b < 0) b = 0;
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    return ((uint32_t)a << 24) | ((uint32_t)r << 16) |
+           ((uint32_t)g << 8) | (uint32_t)b;
 }
 
 uint32_t sg_color_with_alpha(uint32_t color, int alpha) {
