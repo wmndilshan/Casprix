@@ -71,6 +71,8 @@ int main(void) {
     SGNode* in = widget_text_input("Email", NULL);
     set_bounds(in, 16, 40, 300, 46);
     sg_node_add_child(root, in);
+    /* The parent retains the input; release the constructor's owner reference. */
+    sg_node_destroy(in);
 
     uint32_t norm_bg     = in->style.background;
     uint32_t norm_border = in->style.border_color;
@@ -241,6 +243,38 @@ int main(void) {
           "NUMERIC: ASCII digits with an optional leading '-'");
     CHECK(widget_text_validate(WIDGET_VALIDATE_REQUIRED, 0, NULL) == 0,
           "NULL text is treated as empty");
+
+    printf("\n== Case I: repeated scene and text-input ownership ==\n");
+    for (int cycle = 0; cycle < 100; cycle++) {
+        SGNode* cycle_root = sg_node_create(SG_NODE_CONTAINER);
+        SGNode* detached = sg_node_create(SG_NODE_RECT);
+        SGNode* adopted = sg_node_create(SG_NODE_RECT);
+        SGNode* cycle_input = widget_text_input("Cycle", NULL);
+        CHECK(cycle_root && detached && adopted && cycle_input,
+              "lifecycle cycle allocations succeed");
+        if (!cycle_root || !detached || !adopted || !cycle_input) {
+            sg_node_destroy_tree(cycle_root);
+            sg_node_destroy(detached);
+            sg_node_destroy(adopted);
+            sg_node_destroy(cycle_input);
+            break;
+        }
+
+        /* Detach releases the parent's reference; the caller then releases
+         * its still-live node reference explicitly. */
+        sg_node_add_child(cycle_root, detached);
+        sg_node_remove_child(cycle_root, detached);
+        sg_node_destroy(detached);
+
+        /* Relinquish adopted-node caller references and let root teardown
+         * recursively release the parent references. */
+        sg_node_add_child(cycle_root, adopted);
+        sg_node_destroy(adopted);
+        sg_node_add_child(cycle_root, cycle_input);
+        sg_node_destroy(cycle_input);
+        widget_text_input_set_value(cycle_input, "iteration");
+        sg_node_destroy_tree(cycle_root);
+    }
 
     printf("\n%s (%d failure%s)\n", g_fail ? "FAILURES" : "ALL PASS",
            g_fail, g_fail == 1 ? "" : "s");

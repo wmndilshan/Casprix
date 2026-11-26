@@ -16,6 +16,7 @@
 #include "scene_graph.h"
 #include "widgets.h"
 #include "events.h"
+#include "style.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -49,6 +50,14 @@ static void set_bounds(SGNode* n, float x, float y, float w, float h) {
     n->bounds.x = x; n->bounds.y = y; n->bounds.w = w; n->bounds.h = h;
 }
 
+/* sg_node_add_child retains; this test relinquishes each child's constructor
+ * reference so destroying the root exercises the documented tree ownership. */
+static int add_owned_child(SGNode* parent, SGNode* child) {
+    int result = sg_node_add_child(parent, child);
+    if (result == 0) sg_node_destroy(child);
+    return result;
+}
+
 /* Locate the surfaced node with a given label (helper for id lookup). */
 static int32_t id_with_label(const char* want) {
     int32_t count = cpx_a11y_node_count();
@@ -60,6 +69,15 @@ static int32_t id_with_label(const char* want) {
 }
 
 int main(void) {
+    CHECK(sg_color_lighten(0xFF000000u, 10) == 0xFF0A0A0Au,
+          "lighten preserves ARGB ordering and raises zero channels");
+    CHECK(sg_color_lighten(0x00FFFFFFu, 10) == 0x00FFFFFFu,
+          "lighten saturates 255 channels without changing alpha");
+    CHECK(sg_color_darken(0xFFFFFFFFu, 255) == 0xFF000000u,
+          "darken preserves opaque alpha while clamping RGB to zero");
+    CHECK(sg_color_darken(0x00000000u, 1) == 0x00000000u,
+          "darken preserves zero alpha and zero channels");
+
     /* ---------------------------------------------------------------- *
      * Scene:  root(container)
      *           title            SG_NODE_TEXT "Settings"      -> HEADER
@@ -77,31 +95,31 @@ int main(void) {
     SGNode* title = widget_text("Settings", NULL, 0xFF000000);
     sg_node_set_a11y_role(title, SG_A11Y_ROLE_HEADER);
     set_bounds(title, 16, 24, 200, 32);
-    sg_node_add_child(root, title);
+    add_owned_child(root, title);
 
     SGNode* form = sg_node_create(SG_NODE_CONTAINER);
     form->a11y_hidden = 1;                     /* decorative-only wrapper */
     set_bounds(form, 16, 80, 368, 400);
-    sg_node_add_child(root, form);
+    add_owned_child(root, form);
 
     SGNode* btnSave = widget_button("Save", NULL, on_click, NULL);
     set_bounds(btnSave, 16, 80, 120, 44);
-    sg_node_add_child(form, btnSave);
+    add_owned_child(form, btnSave);
 
     SGNode* btnDelete = widget_button("Delete", NULL, on_click, NULL);
     widget_button_set_enabled(btnDelete, 0);   /* -> BUTTON_DISABLED */
     btnDelete->state_flags |= SG_STATE_DISABLED;
     set_bounds(btnDelete, 16, 140, 120, 44);
-    sg_node_add_child(form, btnDelete);
+    add_owned_child(form, btnDelete);
 
     SGNode* btnIcon = widget_button("+", NULL, on_click, NULL);
     sg_node_set_a11y_label(btnIcon, "Add item");
     set_bounds(btnIcon, 16, 200, 44, 44);
-    sg_node_add_child(form, btnIcon);
+    add_owned_child(form, btnIcon);
 
     SGNode* email = widget_text_input("Email", NULL);
     set_bounds(email, 16, 260, 336, 46);
-    sg_node_add_child(form, email);
+    add_owned_child(form, email);
 
     int change_after_build = g_change_calls;
 
@@ -215,9 +233,9 @@ int main(void) {
     set_bounds(card, 0, 500, 400, 120);
     SGNode* line1 = widget_text("Name: Ada", NULL, 0xFF000000);
     SGNode* line2 = widget_text("Email: ada@x", NULL, 0xFF000000);
-    sg_node_add_child(card, line1);
-    sg_node_add_child(card, line2);
-    sg_node_add_child(root, card);
+    add_owned_child(card, line1);
+    add_owned_child(card, line2);
+    add_owned_child(root, card);
 
     int32_t idCard = -1;
     cnt = cpx_a11y_node_count();
@@ -239,7 +257,7 @@ int main(void) {
     printf("\n== Case 4: structural-change notification ==\n");
     int before = g_change_calls;
     SGNode* extra = widget_text("Toast!", NULL, 0xFF000000);
-    sg_node_add_child(root, extra);            /* structural mutation */
+    add_owned_child(root, extra);              /* structural mutation */
     CHECK(g_change_calls > before,
           "sg_node_add_child fired the structural-change callback");
 
@@ -284,7 +302,7 @@ int main(void) {
     cpx_a11y_set_content_changed_cb(a11y_test_consumer);
     {
         SGNode* n7 = widget_text("Later", NULL, 0xFF000000);
-        sg_node_add_child(root, n7);         /* structural mutation */
+        add_owned_child(root, n7);            /* structural mutation */
         CHECK(g_consumer_hits >= 1,
               "structural mutation -> sg hook -> bridge -> content-changed consumer");
 

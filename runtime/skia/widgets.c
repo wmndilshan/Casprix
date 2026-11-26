@@ -52,7 +52,8 @@ static uint32_t color_lighten(uint32_t c, int amount) {
     int r = ((c >> 16) & 0xFF) + amount; if (r > 255) r = 255;
     int g = ((c >>  8) & 0xFF) + amount; if (g > 255) g = 255;
     int b = ((c      ) & 0xFF) + amount; if (b > 255) b = 255;
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    return ((uint32_t)a << 24) | ((uint32_t)r << 16) |
+           ((uint32_t)g << 8) | (uint32_t)b;
 }
 
 static uint32_t color_darken(uint32_t c, int amount) {
@@ -60,7 +61,19 @@ static uint32_t color_darken(uint32_t c, int amount) {
     int r = ((c >> 16) & 0xFF) - amount; if (r < 0) r = 0;
     int g = ((c >>  8) & 0xFF) - amount; if (g < 0) g = 0;
     int b = ((c      ) & 0xFF) - amount; if (b < 0) b = 0;
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    return ((uint32_t)a << 24) | ((uint32_t)r << 16) |
+           ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+/* Composite widgets own the references returned by their child constructors.
+ * The tree takes its own reference on attachment, so drop the temporary
+ * constructor reference after a successful attach. */
+static int widget_add_owned_child(SGNode* parent, SGNode* child) {
+    int result = sg_node_add_child(parent, child);
+    /* On success the parent retains its own reference; on failure this
+     * disposes of the still-unparented child. */
+    sg_node_destroy(child);
+    return result;
 }
 
 typedef struct {
@@ -388,7 +401,7 @@ SGNode* widget_button_modern(const char* label, SkiaFont font, ButtonVariant var
      * itself carries the label — so hide the child from the a11y tree. */
     SGNode* text_node = widget_text(label, font, 0xFFFFFFFF);
     text_node->a11y_hidden = 1;
-    sg_node_add_child(btn, text_node);
+    widget_add_owned_child(btn, text_node);
 
     /* Widget state */
     ButtonWidgetState* state = (ButtonWidgetState*)calloc(1, sizeof(ButtonWidgetState));
@@ -1196,13 +1209,13 @@ SGNode* widget_checkbox(const char* label, SkiaFont font, int initial_checked) {
     indicator->min_height = 8.0f;
     indicator->style.border_radius = 3.0f;
     indicator->style.background = SKIA_COLOR_TRANSPARENT;
-    sg_node_add_child(box, indicator);
-    sg_node_add_child(row, box);
+    widget_add_owned_child(box, indicator);
+    widget_add_owned_child(row, box);
 
     /* Label */
     if (label) {
         SGNode* text = widget_text(label, font, SG_COLOR_TEXT);
-        sg_node_add_child(row, text);
+        widget_add_owned_child(row, text);
     }
 
     /* State */
@@ -1255,7 +1268,7 @@ SGNode* widget_toggle(int initial_checked) {
     track->style.border_width = 1.0f;
     track->min_width = 44.0f;
     track->min_height = 26.0f;
-    sg_node_add_child(root, track);
+    widget_add_owned_child(root, track);
 
     thumb->style.border_radius = 11.0f;
     thumb->style.background = SKIA_COLOR_WHITE;
@@ -1265,7 +1278,7 @@ SGNode* widget_toggle(int initial_checked) {
     thumb->min_height = 22.0f;
     thumb->transform.tx = initial_checked ? 20.0f : 2.0f;
     thumb->transform.ty = 2.0f;
-    sg_node_add_child(root, thumb);
+    widget_add_owned_child(root, thumb);
 
     state = (CheckboxWidgetState*)calloc(1, sizeof(CheckboxWidgetState));
     state->type = WIDGET_CHECKBOX;
@@ -1382,7 +1395,7 @@ SGNode* widget_slider(double min_val, double max_val, double initial) {
     track->style.background = SG_COLOR_DIVIDER;
     track->style.border_radius = 999.0f;
     track->align_self = SG_ALIGN_CENTER;
-    sg_node_add_child(node, track);
+    widget_add_owned_child(node, track);
 
     /* Fill */
     SGNode* fill = sg_node_create(SG_NODE_RECT);
@@ -1390,7 +1403,7 @@ SGNode* widget_slider(double min_val, double max_val, double initial) {
     fill->style.background = SG_COLOR_PRIMARY;
     fill->style.border_radius = 999.0f;
     fill->align_self = SG_ALIGN_START;
-    sg_node_add_child(node, fill);
+    widget_add_owned_child(node, fill);
 
     /* Thumb */
     SGNode* thumb = sg_node_create(SG_NODE_RECT);
@@ -1398,7 +1411,7 @@ SGNode* widget_slider(double min_val, double max_val, double initial) {
     thumb->min_height = 18.0f;
     thumb->style.background = SG_COLOR_SURFACE;
     thumb->style.border_radius = 9.0f;
-    sg_node_add_child(node, thumb);
+    widget_add_owned_child(node, thumb);
 
     /* State */
     SliderWidgetState* state = (SliderWidgetState*)calloc(1, sizeof(SliderWidgetState));
@@ -1677,7 +1690,7 @@ SGNode* widget_progress_bar(double min_val, double max_val, double value) {
     track->style.background = SG_COLOR_DIVIDER;
     track->style.border_radius = 999.0f;
     track->flex_grow = 1.0f;
-    sg_node_add_child(node, track);
+    widget_add_owned_child(node, track);
     
     /* Progress fill */
     SGNode* fill = sg_node_create(SG_NODE_RECT);
@@ -1685,7 +1698,7 @@ SGNode* widget_progress_bar(double min_val, double max_val, double value) {
     fill->style.border_radius = 999.0f;
     fill->align_self = SG_ALIGN_START;
     widget_set_primary_shadow(fill, 4.0f, 12.0f, 0x102563EB);
-    sg_node_add_child(node, fill);
+    widget_add_owned_child(node, fill);
     
     /* State */
     ProgressBarState* state = (ProgressBarState*)calloc(1, sizeof(ProgressBarState));
@@ -1931,12 +1944,12 @@ SGNode* widget_tabs(const char** labels, int count, TabChangeCallback on_change,
         SkiaFont font = skia_font_create("Arial", 14.0f);
         SGNode* label = widget_text(labels[i], font, (i == 0) ? SG_COLOR_PRIMARY_DARK : SG_COLOR_TEXT_SECONDARY);
         label->ownership_flags |= SG_NODE_OWNS_FONT;
-        sg_node_add_child(tab, label);
+        widget_add_owned_child(tab, label);
         
         /* Click handler */
         sg_node_on(tab, SG_EVENT_CLICK, tabs_on_click, (void*)(intptr_t)i);
         
-        sg_node_add_child(container, tab);
+        widget_add_owned_child(container, tab);
     }
     
     /* State */
@@ -2061,12 +2074,12 @@ SGNode* widget_menu(const char** items, int count, MenuItemCallback on_select, v
         SkiaFont font = skia_font_create("Arial", 14.0f);
         SGNode* label = widget_text(items[i], font, SG_COLOR_TEXT);
         label->ownership_flags |= SG_NODE_OWNS_FONT;
-        sg_node_add_child(item, label);
+        widget_add_owned_child(item, label);
         
         sg_node_on(item, SG_EVENT_CLICK, menu_item_on_click, (void*)(intptr_t)i);
         sg_node_on(item, SG_EVENT_MOUSE_ENTER, menu_item_on_mouse_enter, NULL);
         sg_node_on(item, SG_EVENT_MOUSE_LEAVE, menu_item_on_mouse_leave, NULL);
-        sg_node_add_child(menu, item);
+        widget_add_owned_child(menu, item);
     }
     
     /* State */
@@ -2148,7 +2161,7 @@ SGNode* widget_tabpanel(const char* l1, SGNode* c1,
 
     /* Root column: header row + all content nodes (visibility toggled) */
     SGNode* root = widget_column(0.0f);
-    sg_node_add_child(root, header);
+    widget_add_owned_child(root, header);
     for (int i = 0; i < count; i++)
         sg_node_add_child(root, contents[i]);
 

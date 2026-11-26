@@ -98,6 +98,14 @@ static int run_backend_asm(MirModule* m, const char* asm_path) {
     return 0;
 }
 
+static void destroy_statements(Stmt** statements, int count) {
+    if (!statements) return;
+    for (int i = 0; i < count; i++) {
+        free_stmt(statements[i]);
+    }
+    free(statements);
+}
+
 static int verify_corpus_file(const char* cpx_path, const char* out_dir) {
     char mir_path[1024];
     char asm_path[1024];
@@ -125,8 +133,10 @@ static int verify_corpus_file(const char* cpx_path, const char* out_dir) {
     init_parser(&parser, &lexer);
     int stmt_count = 0;
     Stmt** stmts = parse(&parser, &stmt_count);
+    parser_destroy(&parser);
     if (!stmts || parser.had_error) {
         fprintf(stderr, "MIR_VERIFY: parse failed for %s\n", cpx_path);
+        destroy_statements(stmts, stmt_count);
         free(src);
         return 1;
     }
@@ -136,7 +146,7 @@ static int verify_corpus_file(const char* cpx_path, const char* out_dir) {
     if (!analyze_program(&sema, stmts, stmt_count) || had_error) {
         fprintf(stderr, "MIR_VERIFY: semantic analysis failed for %s\n", cpx_path);
         free_semantic_analyzer(&sema);
-        free(stmts);
+        destroy_statements(stmts, stmt_count);
         free(src);
         return 1;
     }
@@ -145,7 +155,7 @@ static int verify_corpus_file(const char* cpx_path, const char* out_dir) {
     if (!mod) {
         fprintf(stderr, "MIR_VERIFY: MIR lowering failed for %s\n", cpx_path);
         free_semantic_analyzer(&sema);
-        free(stmts);
+        destroy_statements(stmts, stmt_count);
         free(src);
         return 1;
     }
@@ -159,7 +169,7 @@ static int verify_corpus_file(const char* cpx_path, const char* out_dir) {
         fprintf(stderr, "MIR_VERIFY: mir_verify_module failed for %s\n", cpx_path);
         mir_module_destroy(mod);
         free_semantic_analyzer(&sema);
-        free(stmts);
+        destroy_statements(stmts, stmt_count);
         free(src);
         return 1;
     }
@@ -169,7 +179,7 @@ static int verify_corpus_file(const char* cpx_path, const char* out_dir) {
         fprintf(stderr, "MIR_VERIFY: cannot write %s\n", mir_path);
         mir_module_destroy(mod);
         free_semantic_analyzer(&sema);
-        free(stmts);
+        destroy_statements(stmts, stmt_count);
         free(src);
         return 1;
     }
@@ -179,7 +189,7 @@ static int verify_corpus_file(const char* cpx_path, const char* out_dir) {
     if (verify_module_lower_mapping(mod) != 0) {
         mir_module_destroy(mod);
         free_semantic_analyzer(&sema);
-        free(stmts);
+        destroy_statements(stmts, stmt_count);
         free(src);
         return 1;
     }
@@ -188,14 +198,14 @@ static int verify_corpus_file(const char* cpx_path, const char* out_dir) {
         fprintf(stderr, "MIR_VERIFY: backend emit failed for %s\n", cpx_path);
         mir_module_destroy(mod);
         free_semantic_analyzer(&sema);
-        free(stmts);
+        destroy_statements(stmts, stmt_count);
         free(src);
         return 1;
     }
 
     mir_module_destroy(mod);
     free_semantic_analyzer(&sema);
-    free(stmts);
+    destroy_statements(stmts, stmt_count);
     free(src);
     return 0;
 }

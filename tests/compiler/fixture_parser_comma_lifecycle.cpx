@@ -1,0 +1,6 @@
+func retain_second<T, U>(first: T, second: U) -> U {
+    return (first, second)
+}
+
+let value = retain_second<int, string>(1, "retained")
+print(value)

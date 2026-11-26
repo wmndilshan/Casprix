@@ -145,6 +145,8 @@ int main(void) {
     android_app_destroy(app);
     android_activity_destroy(home);
     android_activity_destroy(details);
+    /* The activity manager borrows activity roots; release each creator ref. */
+    sg_node_destroy_tree(home_root);
     sg_node_destroy_tree(details_root);
     android_viewmodel_destroy(vm);
     android_intent_destroy(intent);
