@@ -76,6 +76,19 @@ static MirFunction* build_loady(MirModule* m) {
     return f;
 }
 
+static MirFunction* build_checked_div(MirModule* m) {
+    MirType* i64t = mir_type_i64(m);
+    MirParam p[2];
+    p[0].name = "a"; p[0].type = i64t; p[0].value_id = 0;
+    p[1].name = "b"; p[1].type = i64t; p[1].value_id = 0;
+    MirFunction* f = mir_module_add_function(m, "checked_div", i64t, p, 2);
+    MirBlock* entry = mir_function_add_block(f, "entry");
+    MirBuilder b; mir_builder_init(&b, m, f); mir_builder_set_block(&b, entry);
+    MirValueId q = mir_build_div(&b, f->params[0].value_id, f->params[1].value_id);
+    mir_build_ret(&b, q);
+    return f;
+}
+
 int main(void) {
     printf("=== JIT self-recursive-call + JIT_DENIED tests ===\n");
 
@@ -104,6 +117,7 @@ int main(void) {
 
         CHECK(all_ok, "self-recursive fib: every result matches interpreter");
         CHECK(pr->tier == CVM_TIER_NATIVE, "self-recursive fib: profile reached CVM_TIER_NATIVE");
+        CHECK(vm->jit_calls > 0, "self-recursive fib: native-tier calls were observed");
         CHECK(last == want, "self-recursive fib: final native result correct");
 
         /* a few larger inputs through the now-native code */
@@ -144,6 +158,38 @@ int main(void) {
         CHECK(pr->call_count > CVM_JIT_THRESHOLD + 64 * 10,
               "hot LOAD fn: call_count kept climbing (function still runs, just not JITd)");
 
+        cvm_state_destroy(vm);
+        cjb_destroy(jit);
+        mir_module_destroy(m);
+    }
+
+    /* Checked arithmetic must remain interpreted after real hotness tier-up.
+     * The fib test above is the supported native-tier control case. */
+    {
+        MirModule* m = mir_module_create("checked_arithmetic_fallback");
+        MirFunction* fn = build_checked_div(m);
+        CvmJitBridge* jit = cjb_create();
+        CvmState* vm = cvm_state_create(m, jit);
+        int64_t args[2] = { 84, 7 };
+        bool valid = true;
+        for (int i = 0; i < CVM_JIT_THRESHOLD + 64; i++) {
+            if (cvm_run(vm, "checked_div", args, 2) != 12 || vm->trap_code != 0) {
+                valid = false;
+                break;
+            }
+        }
+        CvmProfile* pr = cvm_get_profile(vm, fn);
+        CHECK(valid, "checked division produces correct results past hotness threshold");
+        CHECK(pr && pr->call_count >= CVM_JIT_THRESHOLD,
+              "checked division call counter crossed configured JIT threshold");
+        CHECK(pr && pr->tier == CVM_TIER_INTERPRET,
+              "checked division stayed on interpreter fallback");
+        CHECK(jit->functions_compiled == 0,
+              "checked division was never submitted to unsafe native tier");
+        args[0] = 1; args[1] = 0;
+        (void)cvm_run(vm, "checked_div", args, 2);
+        CHECK(vm->trap_code == CVM_TRAP_DIVISION_BY_ZERO,
+              "hot checked division still raises the exact division-by-zero trap");
         cvm_state_destroy(vm);
         cjb_destroy(jit);
         mir_module_destroy(m);

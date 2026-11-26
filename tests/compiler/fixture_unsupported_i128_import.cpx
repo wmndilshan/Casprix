@@ -1,0 +1,2 @@
+import "tests/compiler/fixture_unsupported_i128_imported"
+func main() -> i64 { return 0 }

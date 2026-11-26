@@ -39,6 +39,7 @@
 /* MIR headers first to avoid TokenType clashes with windows.h */
 #include "../../src/compiler/ir/mir.h"
 #include "../../src/compiler/ir/mir_backend_caps.h"
+#include "../../src/compiler/ir/integer_semantics.h"
 #include "cvm_engine.h"
 #include "jit_bridge.h"
 #include "../io/direct_io.h"
@@ -146,28 +147,80 @@ static bool cvm_module_supported(CvmState* vm, const char* dispatch) {
     return true;
 }
 
-static inline CvmReg cvm_safe_div_i64(CvmReg lhs_u, CvmReg rhs_u) {
-    int64_t lhs = (int64_t)lhs_u;
-    int64_t rhs = (int64_t)rhs_u;
-    if (rhs == 0) return 0;
-    if (lhs == INT64_MIN && rhs == -1) return (CvmReg)(uint64_t)INT64_MIN;
-    return (CvmReg)(uint64_t)(lhs / rhs);
+static bool cvm_function_has_checked_integer_op(MirFunction* func) {
+    for (MirBlock* block = func ? func->entry_block : NULL; block; block = block->next_block)
+        for (MirInst* inst = block->first; inst; inst = inst->next)
+            if (inst->opcode == MIR_DIV || inst->opcode == MIR_MOD ||
+                inst->opcode == MIR_SHL || inst->opcode == MIR_SHR ||
+                inst->opcode == MIR_USHR)
+                return true;
+    return false;
 }
 
-static inline CvmReg cvm_safe_mod_i64(CvmReg lhs_u, CvmReg rhs_u) {
-    int64_t lhs = (int64_t)lhs_u;
-    int64_t rhs = (int64_t)rhs_u;
-    if (rhs == 0) return 0;
-    if (lhs == INT64_MIN && rhs == -1) return 0;
-    return (CvmReg)(uint64_t)(lhs % rhs);
+static unsigned cvm_integer_width(MirType* type) {
+    unsigned bytes = mir_type_size(type);
+    unsigned width = bytes <= 8 ? bytes * 8 : 0;
+    return cpx_int_width_valid(width) ? width : 0;
 }
 
-static inline CvmReg cvm_safe_div_u64(CvmReg lhs, CvmReg rhs) {
-    return rhs ? lhs / rhs : 0;
+static bool cvm_integer_result(CvmState* vm, CpxIntResult result, MirType* type,
+                              CvmReg* out) {
+    if (result.status != CPX_INT_OK) {
+        vm->trap_code = CVM_TRAP_UNSUPPORTED_MIR;
+        return false;
+    }
+    *out = cpx_int_normalize(result.bits, cvm_integer_width(type),
+                             !mir_type_is_unsigned(type));
+    return true;
 }
 
-static inline CvmReg cvm_safe_mod_u64(CvmReg lhs, CvmReg rhs) {
-    return rhs ? lhs % rhs : 0;
+static bool cvm_integer_wrap(CvmState* vm, CvmReg lhs, CvmReg rhs,
+                             MirType* type, MirOpcode opcode, CvmReg* out) {
+    unsigned width = cvm_integer_width(type);
+    CpxIntResult result;
+    if (opcode == MIR_ADD) result = cpx_int_add_checked(lhs, rhs, width);
+    else if (opcode == MIR_SUB) result = cpx_int_sub_checked(lhs, rhs, width);
+    else result = cpx_int_mul_checked(lhs, rhs, width);
+    return cvm_integer_result(vm, result, type, out);
+}
+
+static bool cvm_integer_divmod(CvmState* vm, CvmReg lhs_bits, CvmReg rhs_bits,
+                               MirType* type, bool remainder, CvmReg* out) {
+    unsigned width = cvm_integer_width(type);
+    bool is_unsigned = mir_type_is_unsigned(type);
+    CpxIntResult result = cpx_int_divmod(lhs_bits, rhs_bits, width,
+        !is_unsigned, remainder);
+    if (result.status != CPX_INT_OK) {
+        switch (result.status) {
+            case CPX_INT_DIVISION_BY_ZERO: vm->trap_code = CVM_TRAP_DIVISION_BY_ZERO; break;
+            case CPX_INT_REMAINDER_BY_ZERO: vm->trap_code = CVM_TRAP_REMAINDER_BY_ZERO; break;
+            case CPX_INT_SIGNED_OVERFLOW: vm->trap_code = CVM_TRAP_INTEGER_OVERFLOW; break;
+            default: vm->trap_code = CVM_TRAP_UNSUPPORTED_MIR; break;
+        }
+        return false;
+    }
+    *out = cpx_int_normalize(result.bits, width, !is_unsigned);
+    return true;
+}
+
+static bool cvm_integer_shift(CvmState* vm, CvmReg value, CvmReg count_bits,
+                              MirType* type, MirOpcode opcode, CvmReg* out) {
+    CpxIntResult shifted = cpx_int_shift(value,
+        cpx_int_bits_to_i64(count_bits), cvm_integer_width(type),
+        opcode == MIR_SHR && !mir_type_is_unsigned(type), opcode == MIR_SHL);
+    if (shifted.status != CPX_INT_OK) {
+        vm->trap_code = shifted.status == CPX_INT_INVALID_SHIFT
+            ? CVM_TRAP_INVALID_SHIFT : CVM_TRAP_UNSUPPORTED_MIR;
+        return false;
+    }
+    *out = cpx_int_normalize(shifted.bits, cvm_integer_width(type),
+                             !mir_type_is_unsigned(type));
+    return true;
+}
+
+static int cvm_integer_compare(CvmReg lhs, CvmReg rhs, MirType* type) {
+    unsigned width = cvm_integer_width(type);
+    return cpx_int_compare(lhs, rhs, width, !mir_type_is_unsigned(type));
 }
 
 static inline CvmReg cvm_safe_fptosi(double d) {
@@ -566,28 +619,42 @@ op_const_null:
     SET(inst->result, 0);
     NEXT_INST();
 
-op_add:  SET(inst->result, REG(inst->as.binary.lhs) + REG(inst->as.binary.rhs)); NEXT_INST();
-op_sub:  SET(inst->result, REG(inst->as.binary.lhs) - REG(inst->as.binary.rhs)); NEXT_INST();
-op_mul:  SET(inst->result, REG(inst->as.binary.lhs) * REG(inst->as.binary.rhs)); NEXT_INST();
+op_add:
+op_sub:
+op_mul: {
+    MirType* t = mir_function_value_type(func, inst->as.binary.lhs);
+    CvmReg result;
+    if (!cvm_integer_wrap(vm, REG(inst->as.binary.lhs), REG(inst->as.binary.rhs),
+                          t, inst->opcode, &result)) goto done;
+    SET(inst->result, result);
+    NEXT_INST();
+}
 op_div: {
     CvmReg d = REG(inst->as.binary.rhs);
     CvmReg n = REG(inst->as.binary.lhs);
     MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
-    SET(inst->result, mir_type_is_unsigned(type)
-        ? cvm_safe_div_u64(n, d) : cvm_safe_div_i64(n, d));
+    CvmReg result;
+    if (!cvm_integer_divmod(vm, n, d, type, false, &result)) goto done;
+    SET(inst->result, result);
     NEXT_INST();
 }
 op_mod: {
     CvmReg d = REG(inst->as.binary.rhs);
     CvmReg n = REG(inst->as.binary.lhs);
     MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
-    SET(inst->result, mir_type_is_unsigned(type)
-        ? cvm_safe_mod_u64(n, d) : cvm_safe_mod_i64(n, d));
+    CvmReg result;
+    if (!cvm_integer_divmod(vm, n, d, type, true, &result)) goto done;
+    SET(inst->result, result);
     NEXT_INST();
 }
-op_neg:
-    SET(inst->result, (CvmReg)(-(int64_t)REG(inst->as.unary.operand)));
+op_neg: {
+    MirType* t = mir_function_value_type(func, inst->as.unary.operand);
+    CvmReg result;
+    if (!cvm_integer_result(vm, cpx_int_negate_checked(
+            REG(inst->as.unary.operand), cvm_integer_width(t)), t, &result)) goto done;
+    SET(inst->result, result);
     NEXT_INST();
+}
 
 op_fadd: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) + cvm_bits_to_f64(REG(inst->as.binary.rhs)))); NEXT_INST();
 op_fsub: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) - cvm_bits_to_f64(REG(inst->as.binary.rhs)))); NEXT_INST();
@@ -595,39 +662,68 @@ op_fmul: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.l
 op_fdiv: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) / cvm_bits_to_f64(REG(inst->as.binary.rhs)))); NEXT_INST();
 op_fneg: SET(inst->result, cvm_f64_to_bits(-cvm_bits_to_f64(REG(inst->as.unary.operand)))); NEXT_INST();
 
-op_band: SET(inst->result, REG(inst->as.binary.lhs) & REG(inst->as.binary.rhs)); NEXT_INST();
-op_bor:  SET(inst->result, REG(inst->as.binary.lhs) | REG(inst->as.binary.rhs)); NEXT_INST();
-op_bxor: SET(inst->result, REG(inst->as.binary.lhs) ^ REG(inst->as.binary.rhs)); NEXT_INST();
-op_bnot: SET(inst->result, ~REG(inst->as.unary.operand)); NEXT_INST();
-op_shl:  SET(inst->result, REG(inst->as.binary.lhs) << (REG(inst->as.binary.rhs) & 63)); NEXT_INST();
-op_shr:  SET(inst->result, (CvmReg)((int64_t)REG(inst->as.binary.lhs) >> (REG(inst->as.binary.rhs) & 63))); NEXT_INST();
-op_ushr: SET(inst->result, REG(inst->as.binary.lhs) >> (REG(inst->as.binary.rhs) & 63)); NEXT_INST();
+op_band:
+op_bor:
+op_bxor: {
+    MirType* t = mir_function_value_type(func, inst->as.binary.lhs);
+    char op = inst->opcode == MIR_BAND ? '&' : inst->opcode == MIR_BOR ? '|' : '^';
+    CvmReg result;
+    if (!cvm_integer_result(vm, cpx_int_bitwise_checked(REG(inst->as.binary.lhs),
+            REG(inst->as.binary.rhs), cvm_integer_width(t), op), t, &result)) goto done;
+    SET(inst->result, result);
+    NEXT_INST();
+}
+op_bnot: {
+    MirType* t = mir_function_value_type(func, inst->as.unary.operand);
+    CvmReg result;
+    if (!cvm_integer_result(vm, cpx_int_bitwise_checked(REG(inst->as.unary.operand),
+            0, cvm_integer_width(t), '~'), t, &result)) goto done;
+    SET(inst->result, result);
+    NEXT_INST();
+}
+op_shl: {
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    CvmReg result;
+    if (!cvm_integer_shift(vm, REG(inst->as.binary.lhs), REG(inst->as.binary.rhs), type, MIR_SHL, &result)) goto done;
+    SET(inst->result, result);
+    NEXT_INST();
+}
+op_shr: {
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    CvmReg result;
+    if (!cvm_integer_shift(vm, REG(inst->as.binary.lhs), REG(inst->as.binary.rhs), type, MIR_SHR, &result)) goto done;
+    SET(inst->result, result);
+    NEXT_INST();
+}
+op_ushr: {
+    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+    CvmReg result;
+    if (!cvm_integer_shift(vm, REG(inst->as.binary.lhs), REG(inst->as.binary.rhs), type, MIR_USHR, &result)) goto done;
+    SET(inst->result, result);
+    NEXT_INST();
+}
 
 op_cmp_eq: SET(inst->result, REG(inst->as.binary.lhs) == REG(inst->as.binary.rhs) ? 1u : 0u); NEXT_INST();
 op_cmp_ne: SET(inst->result, REG(inst->as.binary.lhs) != REG(inst->as.binary.rhs) ? 1u : 0u); NEXT_INST();
 op_cmp_lt: {
     CvmReg lhs = REG(inst->as.binary.lhs), rhs = REG(inst->as.binary.rhs);
     MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
-    SET(inst->result, (mir_type_is_unsigned(type) ? lhs < rhs
-        : (int64_t)lhs < (int64_t)rhs) ? 1u : 0u); NEXT_INST();
+    SET(inst->result, cvm_integer_compare(lhs, rhs, type) < 0 ? 1u : 0u); NEXT_INST();
 }
 op_cmp_le: {
     CvmReg lhs = REG(inst->as.binary.lhs), rhs = REG(inst->as.binary.rhs);
     MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
-    SET(inst->result, (mir_type_is_unsigned(type) ? lhs <= rhs
-        : (int64_t)lhs <= (int64_t)rhs) ? 1u : 0u); NEXT_INST();
+    SET(inst->result, cvm_integer_compare(lhs, rhs, type) <= 0 ? 1u : 0u); NEXT_INST();
 }
 op_cmp_gt: {
     CvmReg lhs = REG(inst->as.binary.lhs), rhs = REG(inst->as.binary.rhs);
     MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
-    SET(inst->result, (mir_type_is_unsigned(type) ? lhs > rhs
-        : (int64_t)lhs > (int64_t)rhs) ? 1u : 0u); NEXT_INST();
+    SET(inst->result, cvm_integer_compare(lhs, rhs, type) > 0 ? 1u : 0u); NEXT_INST();
 }
 op_cmp_ge: {
     CvmReg lhs = REG(inst->as.binary.lhs), rhs = REG(inst->as.binary.rhs);
     MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
-    SET(inst->result, (mir_type_is_unsigned(type) ? lhs >= rhs
-        : (int64_t)lhs >= (int64_t)rhs) ? 1u : 0u); NEXT_INST();
+    SET(inst->result, cvm_integer_compare(lhs, rhs, type) >= 0 ? 1u : 0u); NEXT_INST();
 }
 
 op_logic_and: SET(inst->result, (REG(inst->as.binary.lhs) && REG(inst->as.binary.rhs)) ? 1u : 0u); NEXT_INST();
@@ -893,30 +989,39 @@ done:
                 case MIR_CONST_BOOL:  SET(inst->result, inst->as.imm_bool ? 1u : 0u); break;
                 case MIR_CONST_STRING:SET(inst->result, (CvmReg)(uintptr_t)inst->as.imm_string); break;
                 case MIR_CONST_NULL:  SET(inst->result, 0); break;
-                case MIR_ADD: SET(inst->result, REG(inst->as.binary.lhs) + REG(inst->as.binary.rhs)); break;
-                case MIR_SUB: SET(inst->result, REG(inst->as.binary.lhs) - REG(inst->as.binary.rhs)); break;
-                case MIR_MUL: SET(inst->result, REG(inst->as.binary.lhs) * REG(inst->as.binary.rhs)); break;
-                case MIR_DIV: { CvmReg d = REG(inst->as.binary.rhs), n = REG(inst->as.binary.lhs); MirType* t = mir_function_value_type(func, inst->as.binary.lhs); SET(inst->result, mir_type_is_unsigned(t) ? cvm_safe_div_u64(n, d) : cvm_safe_div_i64(n, d)); break; }
-                case MIR_MOD: { CvmReg d = REG(inst->as.binary.rhs), n = REG(inst->as.binary.lhs); MirType* t = mir_function_value_type(func, inst->as.binary.lhs); SET(inst->result, mir_type_is_unsigned(t) ? cvm_safe_mod_u64(n, d) : cvm_safe_mod_i64(n, d)); break; }
-                case MIR_NEG: SET(inst->result, (CvmReg)(-(int64_t)REG(inst->as.unary.operand))); break;
+                case MIR_ADD: case MIR_SUB: case MIR_MUL: {
+                    MirType* t = mir_function_value_type(func, inst->as.binary.lhs);
+                    CvmReg result;
+                    if (!cvm_integer_wrap(vm, REG(inst->as.binary.lhs), REG(inst->as.binary.rhs), t, inst->opcode, &result)) goto done_sw;
+                    SET(inst->result, result); break;
+                }
+                case MIR_DIV: case MIR_MOD: {
+                    CvmReg d = REG(inst->as.binary.rhs), n = REG(inst->as.binary.lhs), result;
+                    MirType* t = mir_function_value_type(func, inst->as.binary.lhs);
+                    if (!cvm_integer_divmod(vm, n, d, t, inst->opcode == MIR_MOD, &result)) goto done_sw;
+                    SET(inst->result, result); break;
+                }
+                case MIR_NEG: { MirType* t = mir_function_value_type(func, inst->as.unary.operand); CvmReg result; if (!cvm_integer_result(vm, cpx_int_negate_checked(REG(inst->as.unary.operand), cvm_integer_width(t)), t, &result)) goto done_sw; SET(inst->result, result); break; }
                 case MIR_FADD: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) + cvm_bits_to_f64(REG(inst->as.binary.rhs)))); break;
                 case MIR_FSUB: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) - cvm_bits_to_f64(REG(inst->as.binary.rhs)))); break;
                 case MIR_FMUL: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) * cvm_bits_to_f64(REG(inst->as.binary.rhs)))); break;
                 case MIR_FDIV: SET(inst->result, cvm_f64_to_bits(cvm_bits_to_f64(REG(inst->as.binary.lhs)) / cvm_bits_to_f64(REG(inst->as.binary.rhs)))); break;
                 case MIR_FNEG: SET(inst->result, cvm_f64_to_bits(-cvm_bits_to_f64(REG(inst->as.unary.operand)))); break;
-                case MIR_BAND: SET(inst->result, REG(inst->as.binary.lhs) & REG(inst->as.binary.rhs)); break;
-                case MIR_BOR:  SET(inst->result, REG(inst->as.binary.lhs) | REG(inst->as.binary.rhs)); break;
-                case MIR_BXOR: SET(inst->result, REG(inst->as.binary.lhs) ^ REG(inst->as.binary.rhs)); break;
-                case MIR_BNOT: SET(inst->result, ~REG(inst->as.unary.operand)); break;
-                case MIR_SHL:  SET(inst->result, REG(inst->as.binary.lhs) << (REG(inst->as.binary.rhs) & 63)); break;
-                case MIR_SHR:  SET(inst->result, (CvmReg)((int64_t)REG(inst->as.binary.lhs) >> (REG(inst->as.binary.rhs) & 63))); break;
-                case MIR_USHR: SET(inst->result, REG(inst->as.binary.lhs) >> (REG(inst->as.binary.rhs) & 63)); break;
+                case MIR_BAND: case MIR_BOR: case MIR_BXOR: { MirType* t = mir_function_value_type(func, inst->as.binary.lhs); char op = inst->opcode == MIR_BAND ? '&' : inst->opcode == MIR_BOR ? '|' : '^'; CvmReg result; if (!cvm_integer_result(vm, cpx_int_bitwise_checked(REG(inst->as.binary.lhs), REG(inst->as.binary.rhs), cvm_integer_width(t), op), t, &result)) goto done_sw; SET(inst->result, result); break; }
+                case MIR_BNOT: { MirType* t = mir_function_value_type(func, inst->as.unary.operand); CvmReg result; if (!cvm_integer_result(vm, cpx_int_bitwise_checked(REG(inst->as.unary.operand), 0, cvm_integer_width(t), '~'), t, &result)) goto done_sw; SET(inst->result, result); break; }
+                case MIR_SHL: case MIR_SHR: case MIR_USHR: {
+                    MirType* t = mir_function_value_type(func, inst->as.binary.lhs);
+                    CvmReg shifted;
+                    if (!cvm_integer_shift(vm, REG(inst->as.binary.lhs), REG(inst->as.binary.rhs), t, inst->opcode, &shifted)) goto done_sw;
+                    SET(inst->result, shifted);
+                    break;
+                }
                 case MIR_CMP_EQ: SET(inst->result, REG(inst->as.binary.lhs) == REG(inst->as.binary.rhs) ? 1u : 0u); break;
                 case MIR_CMP_NE: SET(inst->result, REG(inst->as.binary.lhs) != REG(inst->as.binary.rhs) ? 1u : 0u); break;
-                case MIR_CMP_LT: { CvmReg a=REG(inst->as.binary.lhs), b=REG(inst->as.binary.rhs); MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,(mir_type_is_unsigned(t)?a<b:(int64_t)a<(int64_t)b)?1u:0u); break; }
-                case MIR_CMP_LE: { CvmReg a=REG(inst->as.binary.lhs), b=REG(inst->as.binary.rhs); MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,(mir_type_is_unsigned(t)?a<=b:(int64_t)a<=(int64_t)b)?1u:0u); break; }
-                case MIR_CMP_GT: { CvmReg a=REG(inst->as.binary.lhs), b=REG(inst->as.binary.rhs); MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,(mir_type_is_unsigned(t)?a>b:(int64_t)a>(int64_t)b)?1u:0u); break; }
-                case MIR_CMP_GE: { CvmReg a=REG(inst->as.binary.lhs), b=REG(inst->as.binary.rhs); MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,(mir_type_is_unsigned(t)?a>=b:(int64_t)a>=(int64_t)b)?1u:0u); break; }
+                case MIR_CMP_LT: { MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,cvm_integer_compare(REG(inst->as.binary.lhs),REG(inst->as.binary.rhs),t)<0?1u:0u); break; }
+                case MIR_CMP_LE: { MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,cvm_integer_compare(REG(inst->as.binary.lhs),REG(inst->as.binary.rhs),t)<=0?1u:0u); break; }
+                case MIR_CMP_GT: { MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,cvm_integer_compare(REG(inst->as.binary.lhs),REG(inst->as.binary.rhs),t)>0?1u:0u); break; }
+                case MIR_CMP_GE: { MirType* t=mir_function_value_type(func,inst->as.binary.lhs); SET(inst->result,cvm_integer_compare(REG(inst->as.binary.lhs),REG(inst->as.binary.rhs),t)>=0?1u:0u); break; }
                 case MIR_LOGIC_AND: SET(inst->result, (REG(inst->as.binary.lhs) && REG(inst->as.binary.rhs)) ? 1u : 0u); break;
                 case MIR_LOGIC_OR:  SET(inst->result, (REG(inst->as.binary.lhs) || REG(inst->as.binary.rhs)) ? 1u : 0u); break;
                 case MIR_LOGIC_NOT: SET(inst->result, !REG(inst->as.unary.operand) ? 1u : 0u); break;
@@ -1210,7 +1315,8 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
     if (!prof) return 0;
     prof->call_count++;
 
-    if (prof->tier == CVM_TIER_NATIVE && prof->native_fn) {
+    if (prof->tier == CVM_TIER_NATIVE && prof->native_fn &&
+        !cvm_function_has_checked_integer_op(callee)) {
         vm->jit_calls++;
         /* Delegate to JIT bridge */
         CvmReg jit_regs[64];
@@ -1224,6 +1330,7 @@ static CvmReg cvm_dispatch_call(CvmState* vm, CvmFrame* caller_frame,
      * CVM_TIER_JIT_DENIED functions are skipped forever (no repeated attempts
      * on a hot but permanently-ineligible function). */
     if (prof->tier == CVM_TIER_INTERPRET && vm->jit &&
+        !cvm_function_has_checked_integer_op(callee) &&
         (prof->call_count == CVM_JIT_THRESHOLD ||
          (prof->call_count > CVM_JIT_THRESHOLD && (prof->call_count & 63) == 0))) {
         /* Trigger compilation */
@@ -1582,7 +1689,8 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
     prof->call_count++;
 
     /* Tiering check — same logic as cvm_dispatch_call */
-    if (prof->tier == CVM_TIER_NATIVE && prof->native_fn) {
+    if (prof->tier == CVM_TIER_NATIVE && prof->native_fn &&
+        !cvm_function_has_checked_integer_op(func)) {
         vm->jit_calls++;
         CvmReg jit_regs[64];
         memcpy(jit_regs, reg_args, (size_t)cnt * sizeof(CvmReg));
@@ -1591,6 +1699,7 @@ int64_t cvm_run(CvmState* vm, const char* entry, int64_t* args, int n_args) {
         return (int64_t)jit_regs[0];
     }
     if (prof->tier == CVM_TIER_INTERPRET && vm->jit &&
+        !cvm_function_has_checked_integer_op(func) &&
         (prof->call_count == CVM_JIT_THRESHOLD ||
          (prof->call_count > CVM_JIT_THRESHOLD && (prof->call_count & 63) == 0))) {
         prof->tier = CVM_TIER_JIT_PENDING;

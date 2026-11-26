@@ -285,6 +285,65 @@ static void c_emit_binary(CBackendData* data, MirInst* inst, const char* op) {
     fprintf(data->out, ");\n");
 }
 
+static unsigned c_integer_width(MirType* type) {
+    if (!type) return 0;
+    switch (type->kind) {
+        case MIR_TYPE_I8: case MIR_TYPE_U8: return 8;
+        case MIR_TYPE_I16: case MIR_TYPE_U16: return 16;
+        case MIR_TYPE_I32: case MIR_TYPE_U32: return 32;
+        case MIR_TYPE_I64: case MIR_TYPE_U64: return 64;
+        default: return 0;
+    }
+}
+
+static bool c_integer_is_signed(MirType* type) {
+    return type && type->kind >= MIR_TYPE_I8 && type->kind <= MIR_TYPE_I64;
+}
+
+static uint64_t c_integer_literal_bits(int64_t value) {
+    return value >= 0 ? (uint64_t)value
+                      : UINT64_MAX - (uint64_t)(-(value + 1));
+}
+
+static void c_emit_integer_binary(CBackendData* data, MirInst* inst, char op) {
+    char type_buf[64];
+    MirType* lhs_type = mir_function_value_type(data->current_func, inst->as.binary.lhs);
+    MirType* rhs_type = mir_function_value_type(data->current_func, inst->as.binary.rhs);
+    unsigned width = c_integer_width(inst->type);
+    bool is_signed = c_integer_is_signed(inst->type);
+    bool arithmetic_signed = is_signed && inst->opcode != MIR_USHR;
+    bool count_signed = c_integer_is_signed(rhs_type);
+    char suffix[32];
+    if (is_signed) snprintf(suffix, sizeof(suffix), ", %u)", width);
+    else suffix[0] = '\0';
+    c_type_name(inst->type, type_buf, sizeof(type_buf));
+    fprintf(data->out, "    cpx_v%u = ", inst->result);
+    if (is_signed) fprintf(data->out, "(%s)cpx_int_signed_value(cpx_int_binary((uint64_t)(", type_buf);
+    else fprintf(data->out, "(%s)cpx_int_binary((uint64_t)(", type_buf);
+    c_emit_value(data->out, data->current_func, inst->as.binary.lhs, lhs_type);
+    fprintf(data->out, "), (uint64_t)(");
+    c_emit_value(data->out, data->current_func, inst->as.binary.rhs, rhs_type);
+    fprintf(data->out, "), %u, %s, %s, '%c')%s;\n",
+            width, arithmetic_signed ? "true" : "false",
+            count_signed ? "true" : "false", op, suffix);
+}
+
+static void c_emit_integer_unary(CBackendData* data, MirInst* inst, char op) {
+    char type_buf[64];
+    unsigned width = c_integer_width(inst->type);
+    bool is_signed = c_integer_is_signed(inst->type);
+    char suffix[32];
+    if (is_signed) snprintf(suffix, sizeof(suffix), ", %u)", width);
+    else suffix[0] = '\0';
+    c_type_name(inst->type, type_buf, sizeof(type_buf));
+    fprintf(data->out, "    cpx_v%u = ", inst->result);
+    if (is_signed) fprintf(data->out, "(%s)cpx_int_signed_value(cpx_int_unary((uint64_t)(", type_buf);
+    else fprintf(data->out, "(%s)cpx_int_unary((uint64_t)(", type_buf);
+    c_emit_value(data->out, data->current_func, inst->as.unary.operand, inst->type);
+    fprintf(data->out, "), %u, %s, '%c')%s;\n",
+            width, is_signed ? "true" : "false", op, suffix);
+}
+
 static void c_emit_phi_assignments(CBackendData* data, MirBlock* block) {
     for (MirInst* inst = block->first; inst && inst->opcode == MIR_PHI; inst = inst->next) {
         for (int i = 0; i < inst->as.phi.n_edges; i++) {
@@ -307,7 +366,37 @@ static bool c_begin_module(MirBackend* self, MirModule* module) {
     fprintf(data->out, "#include <stdbool.h>\n");
     fprintf(data->out, "#include <stdint.h>\n");
     fprintf(data->out, "#include <stdlib.h>\n");
+    fprintf(data->out, "#include <stdio.h>\n");
     fprintf(data->out, "#include <string.h>\n\n");
+    fprintf(data->out,
+        "static void cpx_arithmetic_fail(const char* why) { fprintf(stderr, \"Casprix arithmetic failure: %%s\\n\", why); abort(); }\n"
+        "static uint64_t cpx_int_mask(unsigned w) { return w == 64 ? UINT64_MAX : ((UINT64_C(1) << w) - 1); }\n"
+        "static uint64_t cpx_int_binary(uint64_t a, uint64_t b, unsigned w, bool s, bool cs, char op) {\n"
+        "    uint64_t m = cpx_int_mask(w), sign = UINT64_C(1) << (w - 1); a &= m; b &= m;\n"
+        "    switch (op) {\n"
+        "    case '+': return (a + b) & m; case '-': return (a - b) & m; case '*': return (a * b) & m;\n"
+        "    case '&': return a & b; case '|': return a | b; case '^': return a ^ b;\n"
+        "    case '/': case '%%': {\n"
+        "        if (!b) cpx_arithmetic_fail(op == '/' ? \"division by zero\" : \"remainder by zero\");\n"
+        "        if (!s) return op == '/' ? a / b : a %% b;\n"
+        "        if (a == sign && b == m) cpx_arithmetic_fail(\"signed division overflow\");\n"
+        "        bool an = (a & sign) != 0, bn = (b & sign) != 0;\n"
+        "        uint64_t am = an ? (UINT64_C(0) - a) & m : a, bm = bn ? (UINT64_C(0) - b) & m : b;\n"
+        "        uint64_t q = op == '/' ? am / bm : am %% bm; bool neg = op == '/' ? (an != bn) : an;\n"
+        "        return (neg ? UINT64_C(0) - q : q) & m; }\n"
+        "    case '<': case '>': {\n"
+        "        if (op == '<') {\n"
+        "            if ((b & (cs ? (UINT64_C(1) << 63) : 0)) || b >= w) cpx_arithmetic_fail(\"invalid shift count\");\n"
+        "            return (a << (unsigned)b) & m;\n"
+        "        }\n"
+        "        if ((b & (cs ? (UINT64_C(1) << 63) : 0)) || b >= w) cpx_arithmetic_fail(\"invalid shift count\");\n"
+        "        if (!s || !(a & sign) || b == 0) return a >> (unsigned)b;\n"
+        "        return ((a >> (unsigned)b) | (m ^ (m >> (unsigned)b))) & m; }\n"
+        "    default: cpx_arithmetic_fail(\"unsupported integer operation\"); return 0; }\n"
+        "}\n"
+        "static uint64_t cpx_int_unary(uint64_t a, unsigned w, bool s, char op) { uint64_t m = cpx_int_mask(w); (void)s; a &= m; return op == '-' ? (UINT64_C(0) - a) & m : (~a) & m; }\n"
+        "static int64_t cpx_int_signed_value(uint64_t a, unsigned w) { uint64_t m = cpx_int_mask(w), sign = UINT64_C(1) << (w - 1); a &= m; return (a & sign) ? -1 - (int64_t)(m - a) : (int64_t)a; }\n"
+        "\n");
     /* Managed-object helpers: declarations for ARC; calloc stub for alloc
      * when not linked against the Casprix runtime. Full runtime linkage is
      * required for correct retain/release semantics at execution time. */
@@ -404,9 +493,23 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
     switch (inst->opcode) {
         case MIR_CONST_INT:
             c_type_name(inst->type, type_buf, sizeof(type_buf));
-            fprintf(data->out, "    cpx_v%u = (%s)%lld;\n", inst->result,
-                    type_buf,
-                    (long long)inst->as.imm_i64);
+            if (mir_type_is_integer(inst->type)) {
+                unsigned width = c_integer_width(inst->type);
+                uint64_t bits = c_integer_literal_bits(inst->as.imm_i64);
+                fprintf(data->out, "    cpx_v%u = (%s)", inst->result, type_buf);
+                if (c_integer_is_signed(inst->type)) {
+                    fprintf(data->out,
+                            "cpx_int_signed_value(UINT64_C(0x%016llx), %u);\n",
+                            (unsigned long long)bits, width);
+                } else {
+                    fprintf(data->out, "UINT64_C(0x%016llx);\n",
+                            (unsigned long long)bits);
+                }
+            } else {
+                fprintf(data->out, "    cpx_v%u = (%s)%lld;\n", inst->result,
+                        type_buf,
+                        (long long)inst->as.imm_i64);
+            }
             break;
         case MIR_CONST_FLOAT:
             c_type_name(inst->type, type_buf, sizeof(type_buf));
@@ -532,21 +635,30 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
             fprintf(data->out, ");\n");
             break;
         }
-        case MIR_ADD:      c_emit_binary(data, inst, "+"); break;
-        case MIR_SUB:      c_emit_binary(data, inst, "-"); break;
-        case MIR_MUL:      c_emit_binary(data, inst, "*"); break;
-        case MIR_DIV:      c_emit_binary(data, inst, "/"); break;
-        case MIR_MOD:      c_emit_binary(data, inst, "%"); break;
+        case MIR_ADD:
+        case MIR_SUB:
+        case MIR_MUL:
+        case MIR_DIV:
+        case MIR_MOD:
+        case MIR_BAND:
+        case MIR_BOR:
+        case MIR_BXOR:
+        case MIR_SHL:
+        case MIR_SHR:
+        case MIR_USHR: {
+            char op = inst->opcode == MIR_ADD ? '+' : inst->opcode == MIR_SUB ? '-' :
+                      inst->opcode == MIR_MUL ? '*' : inst->opcode == MIR_DIV ? '/' :
+                      inst->opcode == MIR_MOD ? '%' : inst->opcode == MIR_BAND ? '&' :
+                      inst->opcode == MIR_BOR ? '|' : inst->opcode == MIR_BXOR ? '^' :
+                      inst->opcode == MIR_SHL ? '<' : '>';
+            if (c_integer_width(inst->type)) c_emit_integer_binary(data, inst, op);
+            else c_emit_binary(data, inst, inst->opcode == MIR_ADD ? "+" : inst->opcode == MIR_SUB ? "-" : inst->opcode == MIR_MUL ? "*" : inst->opcode == MIR_DIV ? "/" : inst->opcode == MIR_MOD ? "%" : inst->opcode == MIR_BAND ? "&" : inst->opcode == MIR_BOR ? "|" : inst->opcode == MIR_BXOR ? "^" : inst->opcode == MIR_SHL ? "<<" : ">>");
+            break;
+        }
         case MIR_FADD:     c_emit_binary(data, inst, "+"); break;
         case MIR_FSUB:     c_emit_binary(data, inst, "-"); break;
         case MIR_FMUL:     c_emit_binary(data, inst, "*"); break;
         case MIR_FDIV:     c_emit_binary(data, inst, "/"); break;
-        case MIR_BAND:     c_emit_binary(data, inst, "&"); break;
-        case MIR_BOR:      c_emit_binary(data, inst, "|"); break;
-        case MIR_BXOR:     c_emit_binary(data, inst, "^"); break;
-        case MIR_SHL:      c_emit_binary(data, inst, "<<"); break;
-        case MIR_SHR:
-        case MIR_USHR:     c_emit_binary(data, inst, ">>"); break;
         case MIR_LOGIC_AND:c_emit_binary(data, inst, "&&"); break;
         case MIR_LOGIC_OR: c_emit_binary(data, inst, "||"); break;
         case MIR_CMP_EQ:   c_emit_binary(data, inst, "=="); break;
@@ -557,10 +669,13 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
         case MIR_CMP_GE:   c_emit_binary(data, inst, ">="); break;
         case MIR_NEG:
         case MIR_FNEG:
-            c_type_name(inst->type, type_buf, sizeof(type_buf));
-            fprintf(data->out, "    cpx_v%u = (%s)(-", inst->result, type_buf);
-            c_emit_value(data->out, func, inst->as.unary.operand, inst->type);
-            fprintf(data->out, ");\n");
+            if (inst->opcode == MIR_NEG && c_integer_width(inst->type)) c_emit_integer_unary(data, inst, '-');
+            else {
+                c_type_name(inst->type, type_buf, sizeof(type_buf));
+                fprintf(data->out, "    cpx_v%u = (%s)(-", inst->result, type_buf);
+                c_emit_value(data->out, func, inst->as.unary.operand, inst->type);
+                fprintf(data->out, ");\n");
+            }
             break;
         case MIR_LOGIC_NOT:
             c_type_name(inst->type, type_buf, sizeof(type_buf));
@@ -569,10 +684,13 @@ static void c_emit_inst(MirBackend* self, MirInst* inst, MirFunction* func) {
             fprintf(data->out, ");\n");
             break;
         case MIR_BNOT:
-            c_type_name(inst->type, type_buf, sizeof(type_buf));
-            fprintf(data->out, "    cpx_v%u = (%s)(~", inst->result, type_buf);
-            c_emit_value(data->out, func, inst->as.unary.operand, inst->type);
-            fprintf(data->out, ");\n");
+            if (c_integer_width(inst->type)) c_emit_integer_unary(data, inst, '~');
+            else {
+                c_type_name(inst->type, type_buf, sizeof(type_buf));
+                fprintf(data->out, "    cpx_v%u = (%s)(~", inst->result, type_buf);
+                c_emit_value(data->out, func, inst->as.unary.operand, inst->type);
+                fprintf(data->out, ");\n");
+            }
             break;
         case MIR_CAST:
         case MIR_BITCAST:

@@ -1,5 +1,6 @@
 #include "compiler/frontend/lexer.h"
 #include "support/error.h"
+#include <errno.h>
 
 void init_lexer(Lexer* lexer, const char* source) {
     // Skip UTF-8 BOM if present
@@ -220,6 +221,14 @@ static void numeric_suffix(Lexer* lexer, bool is_float) {
     }
 }
 
+/* The AST stores integer literal payloads in int64_t, including unsigned
+ * literals. Decode the two's-complement bit pattern without an
+ * implementation-defined uint64_t-to-int64_t conversion. */
+static int64_t integer_bits_to_i64(uint64_t bits) {
+    if (bits <= (uint64_t)INT64_MAX) return (int64_t)bits;
+    return -1 - (int64_t)(UINT64_MAX - bits);
+}
+
 static Token number(Lexer* lexer) {
     // Check for hex literal: 0x... or 0X...
     // At this point, the first digit has already been consumed by advance() in scan_token
@@ -237,7 +246,13 @@ static Token number(Lexer* lexer) {
         char* str = ALLOCATE(char, token.length + 1);
         memcpy(str, token.start, token.length);
         str[token.length] = '\0';
-        token.literal.int_value = (int64_t)strtoull(str, NULL, 16);
+        errno = 0;
+        unsigned long long parsed = strtoull(str, NULL, 16);
+        if (errno == ERANGE) {
+            free(str);
+            return error_token(lexer, "Integer literal exceeds the 64-bit range");
+        }
+        token.literal.int_value = integer_bits_to_i64((uint64_t)parsed);
         free(str);
         return token;
     }
@@ -257,7 +272,13 @@ static Token number(Lexer* lexer) {
         char* str = ALLOCATE(char, token.length + 1);
         memcpy(str, token.start, token.length);
         str[token.length] = '\0';
-        token.literal.int_value = (int64_t)strtoull(str + 2, NULL, 2);
+        errno = 0;
+        unsigned long long parsed = strtoull(str + 2, NULL, 2);
+        if (errno == ERANGE) {
+            free(str);
+            return error_token(lexer, "Integer literal exceeds the 64-bit range");
+        }
+        token.literal.int_value = integer_bits_to_i64((uint64_t)parsed);
         free(str);
         return token;
     }
@@ -293,7 +314,13 @@ static Token number(Lexer* lexer) {
         char* str = ALLOCATE(char, token.length + 1);
         memcpy(str, token.start, token.length);
         str[token.length] = '\0';
-        token.literal.int_value = atoll(str);
+        errno = 0;
+        unsigned long long parsed = strtoull(str, NULL, 10);
+        if (errno == ERANGE) {
+            free(str);
+            return error_token(lexer, "Integer literal exceeds the 64-bit range");
+        }
+        token.literal.int_value = integer_bits_to_i64((uint64_t)parsed);
         free(str);
 
         return token;

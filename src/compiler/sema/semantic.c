@@ -11,6 +11,25 @@
 
 static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_stmt(SemanticAnalyzer* analyzer, Stmt* stmt);
+
+static bool reject_unsupported_integer_type(DataType type, int line, int column) {
+    if (type != TYPE_I128 && type != TYPE_U128) return false;
+    char message[96];
+    snprintf(message, sizeof(message), "Unsupported integer type '%s' (MIR supports integers through 64 bits)",
+             type == TYPE_I128 ? "i128" : "u128");
+    report_type_error(line, column, message);
+    return true;
+}
+
+static bool reject_unsupported_type_info(const TypeInfo* info, int line, int column) {
+    if (!info) return false;
+    bool rejected = reject_unsupported_integer_type(info->base, line, column);
+    rejected |= reject_unsupported_type_info(info->element_type, line, column);
+    rejected |= reject_unsupported_type_info(info->return_type, line, column);
+    for (int i = 0; i < info->param_count; ++i)
+        rejected |= reject_unsupported_type_info(info->param_types ? info->param_types[i] : NULL, line, column);
+    return rejected;
+}
 static void analyze_static_access_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_lambda_expr(SemanticAnalyzer* analyzer, Expr* expr);
 static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr);
@@ -1694,6 +1713,9 @@ static void analyze_expr(SemanticAnalyzer* analyzer, Expr* expr) {
         return;
     }
 
+    (void)reject_unsupported_integer_type(expr->data_type, expr->line, expr->column);
+    (void)reject_unsupported_type_info(expr->type_info, expr->line, expr->column);
+
     switch (expr->type) {
         case EXPR_BINARY:
             analyze_binary_expr(analyzer, expr);
@@ -1811,11 +1833,15 @@ static void analyze_await_expr(SemanticAnalyzer* analyzer, Expr* expr) {
 static void analyze_declaration_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     DeclarationStmt* decl = &stmt->as.declaration;
 
+    bool unsupported_type = reject_unsupported_integer_type(decl->type, stmt->line, stmt->column);
+    unsupported_type |= reject_unsupported_type_info(decl->type_info, stmt->line, stmt->column);
+
     if (!decl->name) {
         report_semantic_error(stmt->line, stmt->column,
             "Invalid variable declaration");
         return;
     }
+    if (unsupported_type) return;
 
     /* Immutable local bindings must be initialized at their declaration.
      * Besides preventing reads of indeterminate storage, this keeps `let`
@@ -2690,6 +2716,13 @@ static void analyze_try_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
 
 static void analyze_function_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     FunctionStmt* func = &stmt->as.function;
+
+    bool unsupported_type = reject_unsupported_integer_type(func->return_type, stmt->line, stmt->column);
+    unsupported_type |= reject_unsupported_type_info(func->return_type_info, stmt->line, stmt->column);
+    for (int i = 0; i < func->param_count; ++i)
+        unsupported_type |= reject_unsupported_integer_type(func->parameters[i].type, stmt->line, stmt->column) ||
+                            reject_unsupported_type_info(func->parameters[i].type_info, stmt->line, stmt->column);
+    if (unsupported_type) return;
     
     if (!func->name) {
         report_semantic_error(stmt->line, stmt->column,
@@ -2961,6 +2994,18 @@ static void analyze_block_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
 static void analyze_class_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     ClassStmt* class_stmt = &stmt->as.class_stmt;
 
+    bool unsupported_type = false;
+    for (int i = 0; i < class_stmt->field_count; ++i)
+        unsupported_type |= reject_unsupported_integer_type(class_stmt->fields[i].type, stmt->line, stmt->column);
+    for (int i = 0; i < class_stmt->method_count; ++i) {
+        MethodDecl* method = &class_stmt->methods[i];
+        unsupported_type |= reject_unsupported_integer_type(method->return_type, stmt->line, stmt->column);
+        for (int j = 0; j < method->param_count; ++j)
+            unsupported_type |= reject_unsupported_integer_type(method->parameters[j].type, stmt->line, stmt->column) ||
+                                reject_unsupported_type_info(method->parameters[j].type_info, stmt->line, stmt->column);
+    }
+    if (unsupported_type) return;
+
     // Class was already registered in pre-pass; just look it up
     ClassSymbol* class_sym = lookup_class(analyzer->symbols, class_stmt->name);
     if (!class_sym) {
@@ -3181,6 +3226,11 @@ static void preregister_struct(SemanticAnalyzer* analyzer, Stmt* stmt) {
 
 static void analyze_struct_stmt(SemanticAnalyzer* analyzer, Stmt* stmt) {
     StructStmt* struct_stmt = &stmt->as.struct_stmt;
+    bool unsupported_type = false;
+    for (int i = 0; i < struct_stmt->field_count; ++i)
+        unsupported_type |= reject_unsupported_integer_type(struct_stmt->fields[i].type, stmt->line, stmt->column) ||
+                            reject_unsupported_type_info(struct_stmt->fields[i].type_info, stmt->line, stmt->column);
+    if (unsupported_type) return;
 
     /* Struct name conflicts (with a class or another struct) are detected and
      * reported during pre-registration; bail out here so we don't validate

@@ -33,6 +33,60 @@ static void format_global_var_symbol(const char* name, char* buf, size_t buf_siz
     static const int ABI_SHADOW_SPACE = 0; // Linux doesn't use shadow space
 #endif
 
+static unsigned asm_arithmetic_label_id;
+
+static unsigned asm_integer_width(DataType type) {
+    switch (type) {
+        case TYPE_I8: case TYPE_U8: return 8;
+        case TYPE_I16: case TYPE_U16: return 16;
+        case TYPE_I32: case TYPE_U32: return 32;
+        case TYPE_I64: case TYPE_U64: return 64;
+        default: return 0;
+    }
+}
+
+static bool asm_integer_unsigned(DataType type) {
+    return type == TYPE_U8 || type == TYPE_U16 || type == TYPE_U32 || type == TYPE_U64;
+}
+
+static void asm_normalize_reg(AssemblyGenerator* gen, const char* reg, DataType type) {
+    unsigned width = asm_integer_width(type);
+    const char* sub = NULL;
+    const char* low = NULL;
+    const char* word = NULL;
+    const char* dword = NULL;
+    if (strcmp(reg, "rax") == 0) { low="al"; word="ax"; dword="eax"; }
+    else if (strcmp(reg, "rbx") == 0) { low="bl"; word="bx"; dword="ebx"; }
+    else if (strcmp(reg, "rcx") == 0) { low="cl"; word="cx"; dword="ecx"; }
+    else if (strcmp(reg, "rdx") == 0) { low="dl"; word="dx"; dword="edx"; }
+    else if (strcmp(reg, "rsi") == 0) { low="sil"; word="si"; dword="esi"; }
+    else if (strcmp(reg, "rdi") == 0) { low="dil"; word="di"; dword="edi"; }
+    else if (strcmp(reg, "r8") == 0) { low="r8b"; word="r8w"; dword="r8d"; }
+    else if (strcmp(reg, "r9") == 0) { low="r9b"; word="r9w"; dword="r9d"; }
+    else if (strcmp(reg, "r10") == 0) { low="r10b"; word="r10w"; dword="r10d"; }
+    else if (strcmp(reg, "r11") == 0) { low="r11b"; word="r11w"; dword="r11d"; }
+    if (!width || width == 64 || !dword) return;
+    if (width == 8) sub = low;
+    else if (width == 16) sub = word;
+    else sub = dword;
+    if (width == 32 && !asm_integer_unsigned(type)) emit_asm(gen, "    movsxd %s, %s\n", reg, sub);
+    else if (asm_integer_unsigned(type) && width < 32) emit_asm(gen, "    movzx %s, %s\n", reg, sub);
+    else if (asm_integer_unsigned(type)) emit_asm(gen, "    mov %s, %s\n", dword, sub);
+    else if (width == 8) emit_asm(gen, "    movsx %s, %s\n", reg, sub);
+    else if (width == 16) emit_asm(gen, "    movsx %s, %s\n", reg, sub);
+    else emit_asm(gen, "    movsxd %s, %s\n", reg, sub);
+}
+
+static void asm_emit_failure_call(AssemblyGenerator* gen, const char* reason) {
+    int stack_adj = ABI_SHADOW_SPACE > 0 ? ABI_SHADOW_SPACE : 16;
+    emit_asm(gen, "    lea %s, [rel %s]\n", ABI_I_REGS[0], reason);
+    emit_asm(gen, "    sub rsp, %d\n", stack_adj);
+    emit_asm(gen, "    call __casprix_arithmetic_failure\n");
+    emit_asm(gen, "    add rsp, %d\n", stack_adj);
+}
+
+static unsigned asm_new_arithmetic_label(void) { return ++asm_arithmetic_label_id; }
+
 /* Count constructor overloads on this class (declaration-order). */
 static int class_constructor_count(ClassSymbol* class_sym) {
     if (!class_sym) return 0;
@@ -1156,6 +1210,7 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
     
     // Move right to different register
     emit_asm(gen, "    mov rbx, %s\n", reg);
+    asm_normalize_reg(gen, "rbx", binary->right->data_type);
     
     // Restore left operand
     emit_asm(gen, "    pop %s\n", reg);
@@ -1176,13 +1231,16 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
                 emit_asm(gen, "    mov %s, rax  ; Result\n", reg);
             } else {
                 emit_asm(gen, "    add %s, rbx\n", reg);
+                asm_normalize_reg(gen, reg, expr->data_type);
             }
             break;
         case TOKEN_MINUS:
             emit_asm(gen, "    sub %s, rbx\n", reg);
+            asm_normalize_reg(gen, reg, expr->data_type);
             break;
         case TOKEN_STAR:
             emit_asm(gen, "    imul %s, rbx\n", reg);
+            asm_normalize_reg(gen, reg, expr->data_type);
             break;
         case TOKEN_SLASH:
         case TOKEN_PERCENT:
@@ -1190,8 +1248,24 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
              * but x86 DIV/IDIV always consumes RDX:RAX.  Keep the divisor in
              * RBX, place the dividend in RAX, and prepare the high half using
              * the operand's signedness. */
+            {
+            unsigned width = asm_integer_width(expr->data_type);
+            unsigned label = asm_new_arithmetic_label();
+            asm_normalize_reg(gen, reg, expr->data_type);
+            asm_normalize_reg(gen, "rbx", expr->data_type);
+            emit_asm(gen, "    test rbx, rbx\n    jnz .Larith_nz_%u\n", label);
+            asm_emit_failure_call(gen, binary->operator == TOKEN_SLASH ? "__casprix_err_divzero" : "__casprix_err_modzero");
+            emit_asm(gen, ".Larith_nz_%u:\n", label);
+            if (!asm_integer_unsigned(expr->data_type) && width) {
+                uint64_t min = width == 64 ? (UINT64_C(1) << 63) : (UINT64_MAX - ((UINT64_C(1) << (width - 1)) - 1));
+                uint64_t minus_one = UINT64_MAX;
+                emit_asm(gen, "    mov r11, 0x%llx\n    cmp %s, r11\n    jne .Larith_noov_%u\n", (unsigned long long)min, reg, label);
+                emit_asm(gen, "    mov r11, 0x%llx\n    cmp rbx, r11\n    jne .Larith_noov_%u\n", (unsigned long long)minus_one, label);
+                asm_emit_failure_call(gen, "__casprix_err_divoverflow");
+                emit_asm(gen, ".Larith_noov_%u:\n", label);
+            }
             emit_asm(gen, "    mov rax, %s\n", reg);
-            if (type_is_unsigned(binary->left->data_type)) {
+            if (asm_integer_unsigned(expr->data_type)) {
                 emit_asm(gen, "    xor edx, edx\n");
                 emit_asm(gen, "    div rbx\n");
             } else {
@@ -1200,6 +1274,8 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
             }
             emit_asm(gen, "    mov %s, %s\n", reg,
                      binary->operator == TOKEN_SLASH ? "rax" : "rdx");
+            asm_normalize_reg(gen, reg, expr->data_type);
+            }
             break;
         case TOKEN_EQUAL:
             emit_asm(gen, "    cmp %s, rbx\n", reg);
@@ -1244,22 +1320,48 @@ static void generate_asm_binary(AssemblyGenerator* gen, Expr* expr, const char* 
         /* ── Bitwise operators ── */
         case TOKEN_BITAND:
             emit_asm(gen, "    and %s, rbx\n", reg);  /* bitwise AND */
+            asm_normalize_reg(gen, reg, expr->data_type);
             break;
         case TOKEN_PIPE:  /* bitwise OR (TOKEN_PIPE doubles as | in non-lambda context) */
             emit_asm(gen, "    or %s, rbx\n", reg);
+            asm_normalize_reg(gen, reg, expr->data_type);
             break;
         case TOKEN_BITXOR:
             emit_asm(gen, "    xor %s, rbx\n", reg);  /* bitwise XOR */
+            asm_normalize_reg(gen, reg, expr->data_type);
             break;
         case TOKEN_LSHIFT:
-            /* shl reg, cl — move count to cl first */
+            { unsigned label = asm_new_arithmetic_label();
+            unsigned width = asm_integer_width(expr->data_type);
+            if (!asm_integer_unsigned(binary->right->data_type)) {
+                emit_asm(gen, "    test rbx, rbx\n    jns .Lshift_nonneg_%u\n", label);
+                asm_emit_failure_call(gen, "__casprix_err_shift");
+                emit_asm(gen, ".Lshift_nonneg_%u:\n", label);
+            }
+            emit_asm(gen, "    cmp rbx, %u\n    jb .Lshift_valid_%u\n", width, label);
+            asm_emit_failure_call(gen, "__casprix_err_shift");
+            emit_asm(gen, ".Lshift_valid_%u:\n", label);
             emit_asm(gen, "    mov rcx, rbx\n");
             emit_asm(gen, "    shl %s, cl\n", reg);
+            asm_normalize_reg(gen, reg, expr->data_type);
+            }
             break;
         case TOKEN_RSHIFT:
+            { unsigned label = asm_new_arithmetic_label();
+            unsigned width = asm_integer_width(expr->data_type);
+            if (!asm_integer_unsigned(binary->right->data_type)) {
+                emit_asm(gen, "    test rbx, rbx\n    jns .Lshift_nonneg_%u\n", label);
+                asm_emit_failure_call(gen, "__casprix_err_shift");
+                emit_asm(gen, ".Lshift_nonneg_%u:\n", label);
+            }
+            emit_asm(gen, "    cmp rbx, %u\n    jb .Lshift_valid_%u\n", width, label);
+            asm_emit_failure_call(gen, "__casprix_err_shift");
+            emit_asm(gen, ".Lshift_valid_%u:\n", label);
             emit_asm(gen, "    mov rcx, rbx\n");
             emit_asm(gen, type_is_unsigned(binary->left->data_type)
                          ? "    shr %s, cl\n" : "    sar %s, cl\n", reg);
+            asm_normalize_reg(gen, reg, expr->data_type);
+            }
             break;
         default:
             break;
@@ -1301,6 +1403,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 case TOKEN_MINUS:
                     // Arithmetic negation: -value
                     emit_asm(gen, "    neg %s\n", reg);
+                    asm_normalize_reg(gen, reg, expr->data_type);
                     break;
                 case TOKEN_NOT:
                     // Logical NOT: !value (convert to boolean 0/1 then flip)
@@ -1311,6 +1414,7 @@ static void generate_asm_expr(AssemblyGenerator* gen, Expr* expr, const char* re
                 case TOKEN_BITNOT:
                     // Bitwise complement: ~value
                     emit_asm(gen, "    not %s\n", reg);
+                    asm_normalize_reg(gen, reg, expr->data_type);
                     break;
                 case TOKEN_BITAND:
                 case TOKEN_QUESTION:
@@ -3189,6 +3293,8 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     
     // External functions
     emit_asm(gen, "extern printf\n");
+    emit_asm(gen, "extern puts\n");
+    emit_asm(gen, "extern fflush\n");
     emit_asm(gen, "extern malloc\n");
     emit_asm(gen, "extern free\n");
     emit_asm(gen, "extern strcpy\n");
@@ -3227,6 +3333,10 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     emit_asm(gen, "    fmt_str db \"%%s\", 10, 0\n");
     emit_asm(gen, "    fmt_true db \"True\", 10, 0\n");
     emit_asm(gen, "    fmt_false db \"False\", 10, 0\n");
+    emit_asm(gen, "    __casprix_err_divzero db \"Casprix arithmetic failure: division by zero\", 0\n");
+    emit_asm(gen, "    __casprix_err_modzero db \"Casprix arithmetic failure: remainder by zero\", 0\n");
+    emit_asm(gen, "    __casprix_err_divoverflow db \"Casprix arithmetic failure: signed division overflow\", 0\n");
+    emit_asm(gen, "    __casprix_err_shift db \"Casprix arithmetic failure: invalid shift count\", 0\n");
     
     // String literals
     for (int i = 0; i < gen->string_size; i++) {
@@ -3355,6 +3465,14 @@ void generate_assembly(AssemblyGenerator* gen, Stmt** statements, int count, Sym
     
     // Code section
     emit_asm(gen, "section .text\n");
+    asm_arithmetic_label_id = 0;
+    emit_asm(gen, "__casprix_arithmetic_failure:\n    push rbp\n    mov rbp, rsp\n");
+#ifdef _WIN32
+    emit_asm(gen, "    sub rsp, 32\n    call puts\n    xor ecx, ecx\n    call fflush\n    call abort\n");
+#else
+    emit_asm(gen, "    call puts\n    xor edi, edi\n    call fflush\n    call abort\n");
+#endif
+    emit_asm(gen, "    ud2\n\n");
 #ifdef _WIN32
     emit_asm(gen, "global main\n\n");
     // Main function (Windows uses main as entry point)

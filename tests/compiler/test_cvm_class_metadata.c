@@ -310,13 +310,86 @@ static bool run_residual_vm_owner_contract(void) {
     return true;
 }
 
+static bool run_managed_arithmetic_trap_cleanup(void) {
+    MirModule* module = mir_module_create("managed_arithmetic_trap");
+    MirType* ptr = mir_type_ptr(module, mir_type_i8(module));
+    MirType* i64 = mir_type_i64(module);
+    MirFunction* fn = mir_module_add_function(module, "main", ptr, NULL, 0);
+    MirBlock* entry = mir_function_add_block(fn, "entry");
+    MirBuilder builder;
+    const int child_field[] = { 8 };
+    CvmState* vm = NULL;
+    void *child = NULL, *parent = NULL;
+    ArcWeak weak_child = {0}, weak_parent = {0};
+    bool held_child = false, held_parent = false;
+    bool ok = false;
+
+    if (!module || !fn || !entry) goto cleanup;
+    mir_builder_init(&builder, module, fn);
+    mir_builder_set_block(&builder, entry);
+    MirValueId child_id = mir_build_obj_alloc(&builder, "TrapCleanupChild", 16);
+    MirValueId parent_id = mir_build_obj_alloc_ex(&builder, "TrapCleanupParent", 16,
+                                                   child_field, 1);
+    mir_build_arc_retain(&builder, child_id); /* parent field owns one child ref */
+    mir_build_store(&builder, mir_build_get_field_ptr(&builder, parent_id, 1), child_id);
+    MirValueId one = mir_build_const_int(&builder, 1, i64);
+    MirValueId zero = mir_build_const_int(&builder, 0, i64);
+    (void)mir_build_div(&builder, one, zero);
+    mir_build_ret(&builder, parent_id);
+
+    vm = cvm_state_create(module, NULL);
+    if (!vm) goto cleanup;
+    (void)cvm_run(vm, "main", NULL, 0);
+    if (vm->trap_code != CVM_TRAP_DIVISION_BY_ZERO || vm->heap_obj_count != 2)
+        goto cleanup;
+    child = vm->heap_objs[0];
+    parent = vm->heap_objs[1];
+    if (!child || !parent) goto cleanup;
+
+    /* Simulate an embedding caller preserving both objects after the trap. */
+    (void)arc_retain(child);
+    held_child = true;
+    (void)arc_retain(parent);
+    held_parent = true;
+    weak_child = arc_weak_create(child);
+    weak_parent = arc_weak_create(parent);
+    cvm_state_destroy(vm);
+    vm = NULL;
+    mir_module_destroy(module);
+    module = NULL;
+
+    if (!arc_weak_is_alive(weak_child) || !arc_weak_is_alive(weak_parent) ||
+        arc_strong_count(parent) != 1 || arc_strong_count(child) != 2)
+        goto cleanup;
+    (void)arc_release_survived(parent); /* parent destructor releases its child edge */
+    parent = NULL;
+    held_parent = false;
+    if (arc_weak_is_alive(weak_parent) || arc_strong_count(child) != 1)
+        goto cleanup;
+    (void)arc_release_survived(child);
+    child = NULL;
+    held_child = false;
+    if (arc_weak_is_alive(weak_child)) goto cleanup;
+    ok = true;
+
+cleanup:
+    if (vm) cvm_state_destroy(vm);
+    if (module) mir_module_destroy(module);
+    if (held_parent && parent) (void)arc_release_survived(parent);
+    if (held_child && child) (void)arc_release_survived(child);
+    arc_weak_release(&weak_parent);
+    arc_weak_release(&weak_child);
+    return ok;
+}
+
 int main(void) {
     bool ok = run_different_layout_order(true) &&
               run_different_layout_order(false) &&
               run_identical_layout_sharing() &&
               run_malformed_layout_cases() &&
               run_cycle_survivor_edges() &&
-              run_residual_vm_owner_contract();
+              run_residual_vm_owner_contract() &&
+              run_managed_arithmetic_trap_cleanup();
     if (!ok) return 1;
     puts("CVM class metadata identity and lifetime: PASS");
     return 0;

@@ -1,0 +1,1 @@
+func imported_i128(value: i128) -> i128 { return value }

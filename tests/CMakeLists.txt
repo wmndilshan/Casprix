@@ -468,6 +468,21 @@ if(BUILD_COMPILER AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compiler/test_mir_back
     endforeach()
     set(_cvm_support_sources ${_cvm_cap_sources})
     list(REMOVE_AT _cvm_support_sources 0)
+    foreach(_dispatch IN ITEMS computed_goto switch)
+        set(_target test_cvm_integer_arithmetic_${_dispatch})
+        add_executable(${_target}
+            compiler/test_cvm_integer_arithmetic.c
+            ${_cvm_support_sources})
+        target_include_directories(${_target} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/runtime)
+        target_link_libraries(${_target} PRIVATE casprix_compile_options casprix_include_dirs
+            $<$<NOT:$<BOOL:${MSVC}>>:m>)
+        if(_dispatch STREQUAL "switch")
+            target_compile_definitions(${_target} PRIVATE CVM_FORCE_SWITCH=1)
+        endif()
+        add_test(NAME ${_target} COMMAND ${_target})
+        set_tests_properties(${_target} PROPERTIES TIMEOUT 30 LABELS "vm;integer")
+    endforeach()
     add_executable(test_cvm_class_metadata
         compiler/test_cvm_class_metadata.c ${_cvm_support_sources})
     target_include_directories(test_cvm_class_metadata PRIVATE
@@ -699,6 +714,7 @@ if(BUILD_COMPILER AND TARGET casprix)
         COMMAND ${CMAKE_COMMAND}
             -DCASPRIX_EXE=$<TARGET_FILE:casprix>
             -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_native_integer_semantics.cpx
+            -DINVALID_SOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/compiler/fixture_native_integer_divzero.cpx
             -DPRINT_SHIM=${CMAKE_CURRENT_SOURCE_DIR}/compiler/integer_semantics_print_shim.c
             -DC_COMPILER=${CMAKE_C_COMPILER}
             -DOUTPUT_BASE=${CMAKE_BINARY_DIR}/ctest/native_integer_semantics
@@ -713,7 +729,7 @@ if(BUILD_COMPILER AND TARGET casprix)
             ENVIRONMENT "CASPRIX_SOURCE_ROOT=${CMAKE_SOURCE_DIR}")
     endif()
     set_tests_properties(compiler_native_integer_semantics PROPERTIES
-        LABELS "compiler;integer;backend")
+        TIMEOUT 600 LABELS "compiler;integer;backend")
 
     # Permanent negative: conditional move then use after join (use-after-move).
     # Fixture is named fixture_*.cpx so the positive GLOB and suite runner skip it.
@@ -817,6 +833,49 @@ foreach(_test_target IN LISTS CASPRIX_TEST_TARGETS)
 endforeach()
 
 set_property(DIRECTORY PROPERTY TEST_LAUNCH_DIR "${CMAKE_SOURCE_DIR}")
+
+if(BUILD_TESTS)
+    add_executable(test_integer_semantics compiler/test_integer_semantics.c)
+    target_include_directories(test_integer_semantics PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_integer_semantics PRIVATE casprix_compile_options)
+    add_test(NAME integer_semantics_primitives COMMAND test_integer_semantics)
+    set_tests_properties(integer_semantics_primitives PROPERTIES LABELS "integer;compiler")
+
+    add_executable(test_integer_optimizer compiler/test_integer_optimizer.c)
+    target_include_directories(test_integer_optimizer PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(test_integer_optimizer PRIVATE casprix_compiler casprix_compile_options)
+    add_test(NAME integer_ast_optimizer COMMAND test_integer_optimizer)
+    set_tests_properties(integer_ast_optimizer PROPERTIES LABELS "integer;compiler;optimizer")
+endif()
+
+if(BUILD_COMPILER AND BUILD_TESTS AND TARGET casprix)
+    add_test(NAME compiler_integer_literal_ranges
+        COMMAND ${CMAKE_COMMAND}
+            -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+            -DOUTPUT_DIR=${CMAKE_BINARY_DIR}/ctest/integer_literal_ranges
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_integer_literal_ranges.cmake)
+    set_tests_properties(compiler_integer_literal_ranges PROPERTIES
+        TIMEOUT 60 LABELS "compiler;semantic;integer")
+
+    add_test(NAME compiler_unsupported_integer_widths
+        COMMAND ${CMAKE_COMMAND}
+            -DCASPRIX_EXE=$<TARGET_FILE:casprix>
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DOUTPUT_DIR=${CMAKE_BINARY_DIR}/ctest/unsupported_integer_widths
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_unsupported_integer_width.cmake)
+    set_tests_properties(compiler_unsupported_integer_widths PROPERTIES
+        TIMEOUT 60 LABELS "compiler;semantic;integer")
+
+    add_executable(test_mir_lower_unsupported_width compiler/test_mir_lower_unsupported_width.c)
+    target_include_directories(test_mir_lower_unsupported_width PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(test_mir_lower_unsupported_width PRIVATE
+        casprix_compiler casprix_compile_options)
+    add_test(NAME mir_lower_unsupported_integer_width
+        COMMAND test_mir_lower_unsupported_width)
+    set_tests_properties(mir_lower_unsupported_integer_width PROPERTIES
+        LABELS "compiler;integer;mir")
+endif()
 
 message(STATUS "  Test suite:    ${CMAKE_CURRENT_SOURCE_DIR}")
 message(STATUS "    Runtime tests:  registered with CTest")

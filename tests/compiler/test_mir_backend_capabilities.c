@@ -83,6 +83,35 @@ static void test_supported_scalar(void) {
     mir_module_destroy(module);
 }
 
+static void test_bnot_capabilities(void) {
+    MirModule* module = mir_module_create("bnot_capability_probe");
+    MirType* u16 = mir_type_u16(module);
+    MirFunction* f = mir_module_add_function(module, "main", u16, NULL, 0);
+    MirBlock* entry = mir_function_add_block(f, "entry");
+    MirBuilder b;
+    mir_builder_init(&b, module, f);
+    mir_builder_set_block(&b, entry);
+    MirValueId zero = mir_build_const_int(&b, 0, u16);
+    MirValueId complement = mir_build_not(&b, zero);
+    mir_build_ret(&b, complement);
+
+    CHECK(mir_verify_module(module, NULL) == 0);
+    CHECK(mir_backend_caps_validate(module, MIR_CAP_CVM, NULL));
+    CHECK(mir_backend_caps_validate(module, MIR_CAP_EMIT_C, NULL));
+    CHECK(mir_backend_caps_validate(module, MIR_CAP_LEGACY_NATIVE, NULL));
+    CHECK(capability_rejects(module, MIR_CAP_VM_BYTECODE));
+    CHECK(capability_rejects(module, MIR_CAP_JIT_PACKAGE));
+    CHECK(capability_rejects(module, MIR_CAP_MIR_X86_ASM));
+    CvmState* vm = cvm_state_create(module, NULL);
+    CHECK(vm != NULL);
+    if (vm) {
+        CHECK(cvm_run(vm, "main", NULL, 0) == 65535);
+        CHECK(vm->trap_code == 0);
+        cvm_state_destroy(vm);
+    }
+    mir_module_destroy(module);
+}
+
 static void test_live_undef_rejected(void) {
     MirModule* module = mir_module_create("live_undef_probe");
     MirType* i64 = mir_type_i64(module);
@@ -173,6 +202,7 @@ int main(void) {
     CHECK(strcmp(mir_opcode_name(MIR_CALL), "call") == 0);
     test_vector_rejection();
     test_supported_scalar();
+    test_bnot_capabilities();
     test_live_undef_rejected();
     test_bytecode_branch_and_call_rejection();
     test_unknown_opcode_fails_closed();

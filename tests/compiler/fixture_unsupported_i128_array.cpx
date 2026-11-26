@@ -1,0 +1,4 @@
+func main() -> i64 {
+  let unsupported_array: [i128; 2] = [1i128, 2i128]
+  return 0
+}

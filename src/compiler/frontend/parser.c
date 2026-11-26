@@ -415,6 +415,17 @@ static DataType parse_inner_type_param(Parser* parser, char** out_class_name) {
     return inner;
 }
 
+static DataType parameterized_type_base(CpxTokenType token) {
+    switch (token) {
+        case TOKEN_ARRAY_TYPE:  return TYPE_ARRAY;
+        case TOKEN_SLICE_TYPE:  return TYPE_SLICE;
+        case TOKEN_PTR_TYPE:    return TYPE_PTR;
+        case TOKEN_REF_TYPE:    return TYPE_REF;
+        case TOKEN_TENSOR_TYPE: return TYPE_TENSOR;
+        default:                return TYPE_ERROR;
+    }
+}
+
 static DataType parse_type(Parser* parser) {
     g_pending_fn_type_info = NULL;  /* only the `lambda(...)` branch sets this */
     // Borrow types: &T (immutable borrow), &mut T (mutable borrow)
@@ -446,17 +457,16 @@ static DataType parse_type(Parser* parser) {
             char* inner_class = NULL;
             DataType inner = parse_inner_type_param(parser, &inner_class);
             if (inner_class) free(inner_class);
-            (void)inner;  // We don't track inner type in simple parse_type
+            TypeInfo* inner_info = take_pending_fn_type_info();
+            if (!inner_info) inner_info = create_type_info(inner);
+            DataType base = parameterized_type_base(param_token);
+            if (base != TYPE_ERROR)
+                g_pending_fn_type_info = create_parameterized_type(base, inner_info);
+            else
+                free_type_info(inner_info);
         }
 
-        switch (param_token) {
-            case TOKEN_ARRAY_TYPE:  return TYPE_ARRAY;
-            case TOKEN_SLICE_TYPE:  return TYPE_SLICE;
-            case TOKEN_PTR_TYPE:    return TYPE_PTR;
-            case TOKEN_REF_TYPE:    return TYPE_REF;
-            case TOKEN_TENSOR_TYPE: return TYPE_TENSOR;
-            default: break;
-        }
+        return parameterized_type_base(param_token);
     }
 
     // Static array: [T; N], or slice: [T]
@@ -611,17 +621,16 @@ static DataType parse_type_with_class(Parser* parser, char** out_class_name) {
             char* inner_class = NULL;
             DataType inner = parse_inner_type_param(parser, &inner_class);
             if (inner_class) free(inner_class);
-            (void)inner;
+            TypeInfo* inner_info = take_pending_fn_type_info();
+            if (!inner_info) inner_info = create_type_info(inner);
+            DataType base = parameterized_type_base(param_token);
+            if (base != TYPE_ERROR)
+                g_pending_fn_type_info = create_parameterized_type(base, inner_info);
+            else
+                free_type_info(inner_info);
         }
 
-        switch (param_token) {
-            case TOKEN_ARRAY_TYPE:  return TYPE_ARRAY;
-            case TOKEN_SLICE_TYPE:  return TYPE_SLICE;
-            case TOKEN_PTR_TYPE:    return TYPE_PTR;
-            case TOKEN_REF_TYPE:    return TYPE_REF;
-            case TOKEN_TENSOR_TYPE: return TYPE_TENSOR;
-            default: break;
-        }
+        return parameterized_type_base(param_token);
     }
 
     // Static array: [T; N], or slice: [T]
@@ -969,11 +978,42 @@ static DataType integer_literal_type(const Token* token) {
            token->literal.int_value > INT32_MAX ? TYPE_I64 : TYPE_INT;
 }
 
+static unsigned integer_type_width(DataType type) {
+    switch (type) {
+        case TYPE_I8: case TYPE_U8: return 8;
+        case TYPE_I16: case TYPE_U16: return 16;
+        case TYPE_I32: case TYPE_U32: return 32;
+        case TYPE_I64: case TYPE_U64: return 64;
+        default: return 0;
+    }
+}
+
+static uint64_t integer_token_bits(const Token* token) {
+    int64_t value = token->literal.int_value;
+    return value >= 0 ? (uint64_t)value
+                      : UINT64_MAX - (uint64_t)(-(value + 1));
+}
+
+static bool integer_token_fits_type(const Token* token, DataType type) {
+    unsigned width = integer_type_width(type);
+    if (!width) return true; /* i128/u128 are rejected by semantic validation. */
+    uint64_t bits = integer_token_bits(token);
+    uint64_t limit;
+    if (type >= TYPE_I8 && type <= TYPE_I64)
+        limit = (UINT64_C(1) << (width - 1)) - 1;
+    else
+        limit = width == 64 ? UINT64_MAX : (UINT64_C(1) << width) - 1;
+    return bits <= limit;
+}
+
 static Expr* primary(Parser* parser) {
     if (match(parser, TOKEN_INTEGER)) {
         LiteralExpr lit;
         lit.type = integer_literal_type(&parser->previous);
         lit.value.int_value = parser->previous.literal.int_value;
+        if (!integer_token_fits_type(&parser->previous, lit.type))
+            error_at(parser, &parser->previous,
+                     "Integer literal is out of range for its declared type");
         return create_literal_expr(lit, parser->previous.line, parser->previous.column);
     }
     
@@ -1289,8 +1329,26 @@ static Expr* unary(Parser* parser) {
         if (expr) expr->as.unary.is_mut = is_mut;
         return expr;
     }
-    if (match(parser, TOKEN_NOT) || match(parser, TOKEN_MINUS) ||
-        match(parser, TOKEN_BITNOT)) {
+    if (check(parser, TOKEN_MINUS)) {
+        Token op = parser->current;
+        advance(parser);
+        if (check(parser, TOKEN_INTEGER)) {
+            DataType type = integer_literal_type(&parser->current);
+            unsigned width = integer_type_width(type);
+            if (width && type >= TYPE_I8 && type <= TYPE_I64 &&
+                integer_token_bits(&parser->current) == (UINT64_C(1) << (width - 1))) {
+                advance(parser);
+                LiteralExpr min_literal;
+                min_literal.type = type;
+                min_literal.value.int_value = width == 64
+                    ? INT64_MIN : -(int64_t)(UINT64_C(1) << (width - 1));
+                return create_literal_expr(min_literal, op.line, op.column);
+            }
+        }
+        Expr* operand = unary(parser);
+        return create_unary_expr(op.type, operand, op.line, op.column);
+    }
+    if (match(parser, TOKEN_NOT) || match(parser, TOKEN_BITNOT)) {
         Token op = parser->previous;
         Expr* operand = unary(parser);
         return create_unary_expr(op.type, operand, op.line, op.column);

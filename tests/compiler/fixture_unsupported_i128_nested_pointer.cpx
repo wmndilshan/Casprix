@@ -1,0 +1,2 @@
+func takes_nested_pointer(value: ptr<ref<i128>>) -> i64 { return 0 }
+func main() -> i64 { return 0 }

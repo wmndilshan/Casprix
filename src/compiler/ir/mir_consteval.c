@@ -7,6 +7,7 @@
  */
 
 #include "mir_consteval.h"
+#include "integer_semantics.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -164,40 +165,31 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
                 ce->error_msg = "consteval: integer arithmetic on non-integer";
                 return false;
             }
-            int64_t result = 0;
             MirType* operand_type = mir_function_value_type(
                 ce->current_func, inst->as.binary.lhs);
-            if (mir_type_is_unsigned(operand_type)) {
-                uint64_t a = (uint64_t)l->as.i64;
-                uint64_t b = (uint64_t)rv->as.i64;
-                uint64_t bits = 0;
-                switch (inst->opcode) {
-                    case MIR_ADD: bits = a + b; break;
-                    case MIR_SUB: bits = a - b; break;
-                    case MIR_MUL: bits = a * b; break;
-                    case MIR_DIV:
-                        if (!b) { ce->error_msg = "consteval: division by zero"; return false; }
-                        bits = a / b; break;
-                    case MIR_MOD:
-                        if (!b) { ce->error_msg = "consteval: modulo by zero"; return false; }
-                        bits = a % b; break;
-                    default: break;
-                }
-                memcpy(&result, &bits, sizeof(result));
-            } else {
-                switch (inst->opcode) {
-                    case MIR_ADD: result = l->as.i64 + rv->as.i64; break;
-                    case MIR_SUB: result = l->as.i64 - rv->as.i64; break;
-                    case MIR_MUL: result = l->as.i64 * rv->as.i64; break;
-                    case MIR_DIV:
-                        if (rv->as.i64 == 0) { ce->error_msg = "consteval: division by zero"; return false; }
-                        result = l->as.i64 / rv->as.i64; break;
-                    case MIR_MOD:
-                        if (rv->as.i64 == 0) { ce->error_msg = "consteval: modulo by zero"; return false; }
-                        result = l->as.i64 % rv->as.i64; break;
-                    default: break;
-                }
+            unsigned width = (unsigned)mir_type_size(operand_type) * 8;
+            bool is_unsigned = mir_type_is_unsigned(operand_type);
+            uint64_t bits = 0;
+            CpxIntStatus status = CPX_INT_OK;
+            if (!cpx_int_width_valid(width)) status = CPX_INT_UNSUPPORTED_WIDTH;
+            else if (inst->opcode == MIR_ADD) bits = cpx_int_add((uint64_t)l->as.i64, (uint64_t)rv->as.i64, width);
+            else if (inst->opcode == MIR_SUB) bits = cpx_int_sub((uint64_t)l->as.i64, (uint64_t)rv->as.i64, width);
+            else if (inst->opcode == MIR_MUL) bits = cpx_int_mul((uint64_t)l->as.i64, (uint64_t)rv->as.i64, width);
+            else {
+                CpxIntResult checked = cpx_int_divmod((uint64_t)l->as.i64,
+                    (uint64_t)rv->as.i64, width, !is_unsigned, inst->opcode == MIR_MOD);
+                status = checked.status;
+                bits = checked.bits;
             }
+            if (status != CPX_INT_OK) {
+                ce->error_msg = status == CPX_INT_DIVISION_BY_ZERO ? "consteval: division by zero" :
+                    status == CPX_INT_REMAINDER_BY_ZERO ? "consteval: modulo by zero" :
+                    status == CPX_INT_SIGNED_OVERFLOW ? "consteval: signed division overflow" :
+                    "consteval: unsupported or invalid integer operation";
+                return false;
+            }
+            bits = cpx_int_normalize(bits, width, !is_unsigned);
+            int64_t result = cpx_int_bits_to_i64(bits);
             MirConstValue value = mir_cval_int(result);
             value.type = mir_function_value_type(ce->current_func, r);
             set_slot(ce, r, value);
@@ -234,15 +226,22 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
                 return false;
             }
             bool result = false;
-            bool is_unsigned = mir_type_is_unsigned(mir_function_value_type(
-                ce->current_func, inst->as.binary.lhs));
+            MirType* operand_type = mir_function_value_type(ce->current_func, inst->as.binary.lhs);
+            unsigned width = (unsigned)mir_type_size(operand_type) * 8;
+            bool is_unsigned = mir_type_is_unsigned(operand_type);
+            if (!cpx_int_width_valid(width)) {
+                ce->error_msg = "consteval: unsupported integer width";
+                return false;
+            }
+            uint64_t lhs_bits = cpx_int_zero_extend(cpx_int_i64_to_bits(l->as.i64), width);
+            uint64_t rhs_bits = cpx_int_zero_extend(cpx_int_i64_to_bits(rv->as.i64), width);
             switch (inst->opcode) {
-                case MIR_CMP_EQ: result = l->as.i64 == rv->as.i64; break;
-                case MIR_CMP_NE: result = l->as.i64 != rv->as.i64; break;
-                case MIR_CMP_LT: result = is_unsigned ? (uint64_t)l->as.i64 < (uint64_t)rv->as.i64 : l->as.i64 < rv->as.i64; break;
-                case MIR_CMP_LE: result = is_unsigned ? (uint64_t)l->as.i64 <= (uint64_t)rv->as.i64 : l->as.i64 <= rv->as.i64; break;
-                case MIR_CMP_GT: result = is_unsigned ? (uint64_t)l->as.i64 > (uint64_t)rv->as.i64 : l->as.i64 > rv->as.i64; break;
-                case MIR_CMP_GE: result = is_unsigned ? (uint64_t)l->as.i64 >= (uint64_t)rv->as.i64 : l->as.i64 >= rv->as.i64; break;
+                case MIR_CMP_EQ: result = lhs_bits == rhs_bits; break;
+                case MIR_CMP_NE: result = lhs_bits != rhs_bits; break;
+                case MIR_CMP_LT: result = cpx_int_compare(lhs_bits, rhs_bits, width, !is_unsigned) < 0; break;
+                case MIR_CMP_LE: result = cpx_int_compare(lhs_bits, rhs_bits, width, !is_unsigned) <= 0; break;
+                case MIR_CMP_GT: result = cpx_int_compare(lhs_bits, rhs_bits, width, !is_unsigned) > 0; break;
+                case MIR_CMP_GE: result = cpx_int_compare(lhs_bits, rhs_bits, width, !is_unsigned) >= 0; break;
                 default: break;
             }
             set_slot(ce, r, mir_cval_bool(result));
@@ -252,8 +251,15 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
         /* Unary */
         case MIR_NEG: {
             MirConstValue* op = get_slot(ce, inst->as.unary.operand);
-            if (op->kind == MIR_CVAL_INT) set_slot(ce, r, mir_cval_int(-op->as.i64));
-            else { ce->error_msg = "consteval: neg on non-integer"; return false; }
+            if (op->kind == MIR_CVAL_INT) {
+                MirType* type = mir_function_value_type(ce->current_func, inst->as.unary.operand);
+                unsigned width = (unsigned)mir_type_size(type) * 8;
+                if (!cpx_int_width_valid(width)) { ce->error_msg = "consteval: unsupported integer width"; return false; }
+                uint64_t bits = cpx_int_normalize(cpx_int_negate((uint64_t)op->as.i64, width),
+                    width, !mir_type_is_unsigned(type));
+                int64_t result = cpx_int_bits_to_i64(bits);
+                set_slot(ce, r, mir_cval_int(result));
+            } else { ce->error_msg = "consteval: neg on non-integer"; return false; }
             return true;
         }
         case MIR_FNEG: {
@@ -277,17 +283,54 @@ bool mir_consteval_step(MirConstEval* ce, MirInst* inst) {
                 ce->error_msg = "consteval: bitwise on non-integer";
                 return false;
             }
-            int64_t result = 0;
+            uint64_t lhs_bits = cpx_int_i64_to_bits(l->as.i64);
+            uint64_t rhs_bits = cpx_int_i64_to_bits(rv->as.i64);
+            MirType* operand_type = mir_function_value_type(ce->current_func, inst->as.binary.lhs);
+            unsigned width = (unsigned)mir_type_size(operand_type) * 8;
+            if (!cpx_int_width_valid(width)) {
+                ce->error_msg = "consteval: unsupported integer width";
+                return false;
+            }
+            bool is_unsigned = mir_type_is_unsigned(operand_type);
+            uint64_t result_bits = 0;
             switch (inst->opcode) {
-                case MIR_BAND: result = l->as.i64 & rv->as.i64; break;
-                case MIR_BOR:  result = l->as.i64 | rv->as.i64; break;
-                case MIR_BXOR: result = l->as.i64 ^ rv->as.i64; break;
-                case MIR_SHL:  result = l->as.i64 << rv->as.i64; break;
-                case MIR_SHR:  result = l->as.i64 >> rv->as.i64; break;
-                case MIR_USHR: result = (int64_t)((uint64_t)l->as.i64 >> ((uint64_t)rv->as.i64 & 63)); break;
+                case MIR_BAND: result_bits = cpx_int_bitwise(lhs_bits, rhs_bits, width, '&'); break;
+                case MIR_BOR:  result_bits = cpx_int_bitwise(lhs_bits, rhs_bits, width, '|'); break;
+                case MIR_BXOR: result_bits = cpx_int_bitwise(lhs_bits, rhs_bits, width, '^'); break;
+                case MIR_SHL: case MIR_SHR: case MIR_USHR: {
+                    bool arithmetic = inst->opcode == MIR_SHR && !is_unsigned;
+                    CpxIntResult shifted = cpx_int_shift((uint64_t)l->as.i64, rv->as.i64,
+                        width, arithmetic, inst->opcode == MIR_SHL);
+                    if (shifted.status != CPX_INT_OK) {
+                        ce->error_msg = "consteval: invalid shift count or width";
+                        return false;
+                    }
+                    result_bits = cpx_int_normalize(shifted.bits, width, !is_unsigned);
+                    break;
+                }
                 default: break;
             }
+            result_bits = cpx_int_normalize(result_bits, width, !is_unsigned);
+            int64_t result = cpx_int_bits_to_i64(result_bits);
             set_slot(ce, r, mir_cval_int(result));
+            return true;
+        }
+
+        case MIR_BNOT: {
+            MirConstValue* operand = get_slot(ce, inst->as.unary.operand);
+            if (operand->kind != MIR_CVAL_INT) {
+                ce->error_msg = "consteval: bitwise not on non-integer";
+                return false;
+            }
+            MirType* type = mir_function_value_type(ce->current_func, inst->as.unary.operand);
+            unsigned width = (unsigned)mir_type_size(type) * 8;
+            if (!cpx_int_width_valid(width)) {
+                ce->error_msg = "consteval: unsupported integer width";
+                return false;
+            }
+            uint64_t bits = cpx_int_bitwise(cpx_int_i64_to_bits(operand->as.i64), 0, width, '~');
+            bits = cpx_int_normalize(bits, width, !mir_type_is_unsigned(type));
+            set_slot(ce, r, mir_cval_int(cpx_int_bits_to_i64(bits)));
             return true;
         }
 

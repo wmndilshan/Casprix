@@ -173,6 +173,11 @@ static MirType* lower_type(MirLowerCtx* ctx, DataType dt) {
         case TYPE_U16:    return mir_type_u16(ctx->module);
         case TYPE_U32:    return mir_type_u32(ctx->module);
         case TYPE_U64:    return mir_type_u64(ctx->module);
+        case TYPE_I128:
+        case TYPE_U128:
+            ctx->error_count++;
+            /* Keep construction memory-safe; the module is discarded below. */
+            return mir_type_void(ctx->module);
         case TYPE_F32:    return mir_type_f32(ctx->module);
         case TYPE_F64:    return mir_type_f64(ctx->module);
         case TYPE_STRING: return mir_type_ptr(ctx->module, mir_type_i8(ctx->module));
@@ -183,7 +188,9 @@ static MirType* lower_type(MirLowerCtx* ctx, DataType dt) {
         case TYPE_CLASS:  return mir_type_ptr(ctx->module, mir_type_i8(ctx->module));
         case TYPE_FUNC:   return mir_type_func(ctx->module, mir_type_void(ctx->module), NULL, 0);
         case TYPE_DYN:    return mir_type_ptr(ctx->module, mir_type_i8(ctx->module));
-        default:          return mir_type_i64(ctx->module); /* fallback */
+        default:
+            ctx->error_count++;
+            return mir_type_void(ctx->module);
     }
 }
 
@@ -573,6 +580,10 @@ static MirValueId lower_unary(MirLowerCtx* ctx, Expr* expr) {
         case TOKEN_NOT: {
             MirValueId operand = lower_expr(ctx, un->operand);
             return mir_build_logic_not(&ctx->builder, operand);
+        }
+        case TOKEN_BITNOT: {
+            MirValueId operand = lower_expr(ctx, un->operand);
+            return mir_build_not(&ctx->builder, operand);
         }
         case TOKEN_BITAND: {
             /* Prefer place-based borrows for locals so MIR_BORROW/_MUT
@@ -1591,7 +1602,9 @@ static void lower_print(MirLowerCtx* ctx, Stmt* stmt) {
     MirValueId val = lower_expr(ctx, p->expression);
     MirValueId args[1] = { val };
     const char* print_fn = "nuwan_print_str";
-    if (p->expression->data_type == TYPE_INT || p->expression->data_type == TYPE_I32 || p->expression->data_type == TYPE_I64) {
+    if (p->expression->data_type == TYPE_INT || p->expression->data_type == TYPE_I8 ||
+        p->expression->data_type == TYPE_I16 || p->expression->data_type == TYPE_I32 ||
+        p->expression->data_type == TYPE_I64) {
         print_fn = "nuwan_print_int";
     } else if (p->expression->data_type == TYPE_U8 ||
                p->expression->data_type == TYPE_U16 ||
@@ -2033,6 +2046,7 @@ MirModule* mir_lower_program(Stmt** statements, int stmt_count,
     free(ctx.arc_owned);
 
     if (ctx.error_count > 0) {
+        mir_module_destroy(module);
         return NULL;   /* pipeline reports "MIR lowering failed" and exits 65 */
     }
     return module;

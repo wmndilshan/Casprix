@@ -69,6 +69,10 @@ typedef struct CvmJitBridge CvmJitBridge;
 
 #define CVM_TRAP_UNSUPPORTED_MIR       8
 #define CVM_TRAP_INVALID_OBJECT_LAYOUT 9
+#define CVM_TRAP_DIVISION_BY_ZERO     10
+#define CVM_TRAP_REMAINDER_BY_ZERO    11
+#define CVM_TRAP_INTEGER_OVERFLOW     12
+#define CVM_TRAP_INVALID_SHIFT        13
 
 /* ─────────────────────────────────────────────────────────────
  * Register type

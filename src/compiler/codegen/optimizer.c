@@ -1,11 +1,79 @@
 // Casprix Compiler Optimizer Implementation
 
 #include "compiler/codegen/optimizer.h"
+#include "compiler/ir/integer_semantics.h"
 #include "support/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
+static bool try_eval_integer(Expr* expr, uint64_t* bits) {
+    if (!expr || !bits) return false;
+    unsigned width = (unsigned)type_size_bytes(expr->data_type) * 8;
+    bool is_unsigned = type_is_unsigned(expr->data_type);
+    if (!cpx_int_width_valid(width)) return false;
+    if (expr->type == EXPR_LITERAL && expr->as.literal.type == TYPE_INT) {
+        *bits = (uint64_t)expr->as.literal.value.int_value & cpx_int_mask(width);
+        return true;
+    }
+    if (expr->type == EXPR_UNARY && expr->as.unary.operator == TOKEN_MINUS) {
+        uint64_t operand;
+        if (!try_eval_integer(expr->as.unary.operand, &operand)) return false;
+        *bits = cpx_int_normalize(cpx_int_negate(operand, width), width, !is_unsigned);
+        return true;
+    }
+    if (expr->type == EXPR_UNARY && expr->as.unary.operator == TOKEN_BITNOT) {
+        uint64_t operand;
+        if (!try_eval_integer(expr->as.unary.operand, &operand)) return false;
+        *bits = cpx_int_normalize(cpx_int_bitwise(operand, 0, width, '~'), width, !is_unsigned);
+        return true;
+    }
+    if (expr->type != EXPR_BINARY) return false;
+    uint64_t left, right;
+    if (!try_eval_integer(expr->as.binary.left, &left) ||
+        !try_eval_integer(expr->as.binary.right, &right)) return false;
+    switch (expr->as.binary.operator) {
+        case TOKEN_PLUS: *bits = cpx_int_normalize(cpx_int_add(left, right, width), width, !is_unsigned); return true;
+        case TOKEN_MINUS: *bits = cpx_int_normalize(cpx_int_sub(left, right, width), width, !is_unsigned); return true;
+        case TOKEN_STAR: *bits = cpx_int_normalize(cpx_int_mul(left, right, width), width, !is_unsigned); return true;
+        case TOKEN_BITAND: *bits = cpx_int_normalize(cpx_int_bitwise(left, right, width, '&'), width, !is_unsigned); return true;
+        case TOKEN_PIPE: *bits = cpx_int_normalize(cpx_int_bitwise(left, right, width, '|'), width, !is_unsigned); return true;
+        case TOKEN_BITXOR: *bits = cpx_int_normalize(cpx_int_bitwise(left, right, width, '^'), width, !is_unsigned); return true;
+        case TOKEN_LSHIFT: case TOKEN_RSHIFT: {
+            CpxIntResult shifted = cpx_int_shift(left, cpx_int_bits_to_i64(right), width,
+                expr->as.binary.operator == TOKEN_RSHIFT && !is_unsigned,
+                expr->as.binary.operator == TOKEN_LSHIFT);
+            if (shifted.status != CPX_INT_OK) return false;
+            *bits = cpx_int_normalize(shifted.bits, width, !is_unsigned);
+            return true;
+        }
+        case TOKEN_SLASH: case TOKEN_PERCENT: {
+            CpxIntResult result = cpx_int_divmod(left, right, width, !is_unsigned,
+                expr->as.binary.operator == TOKEN_PERCENT);
+            if (result.status != CPX_INT_OK) return false;
+            *bits = result.bits; return true;
+        }
+        default: return false;
+    }
+}
+
+/* Validate integer subexpressions inside constant boolean expressions too;
+ * otherwise the legacy bool evaluator could mistake an invalid child (which
+ * returns a zero placeholder) for an ordinary integer constant. */
+static bool constant_integer_operations_valid(Expr* expr) {
+    if (!expr) return true;
+    if (type_is_integer(expr->data_type)) {
+        uint64_t ignored;
+        return try_eval_integer(expr, &ignored);
+    }
+    if (expr->type == EXPR_UNARY)
+        return constant_integer_operations_valid(expr->as.unary.operand);
+    if (expr->type == EXPR_BINARY)
+        return constant_integer_operations_valid(expr->as.binary.left) &&
+               constant_integer_operations_valid(expr->as.binary.right);
+    return true;
+}
 
 // Initialize optimizer
 void init_optimizer(OptimizerContext* ctx) {
@@ -45,6 +113,15 @@ bool is_constant_expr(Expr* expr) {
 // Evaluate constant integer expression
 int64_t evaluate_constant_int(Expr* expr) {
     if (!expr) return 0;
+
+    /* Keep this legacy value-returning API defined even when callers pass an
+     * invalid integer expression. fold_constants uses the checked result
+     * directly and leaves such an expression intact. */
+    if (type_is_integer(expr->data_type)) {
+        uint64_t bits;
+        if (!try_eval_integer(expr, &bits)) return 0;
+        return cpx_int_bits_to_i64(bits);
+    }
 
     switch (expr->type) {
         case EXPR_LITERAL: {
@@ -160,6 +237,13 @@ Expr* fold_constants(Expr* expr, OptimizerContext* ctx) {
         return expr;
     }
 
+    if (expr->data_type == TYPE_BOOL && !constant_integer_operations_valid(expr))
+        return expr;
+
+    uint64_t integer_bits = 0;
+    bool fold_integer = type_is_integer(expr->data_type) && try_eval_integer(expr, &integer_bits);
+    if (type_is_integer(expr->data_type) && !fold_integer) return expr;
+
     // Create folded literal expression
     Expr* folded = (Expr*)malloc(sizeof(Expr));
     if (!folded) return expr;
@@ -169,8 +253,10 @@ Expr* fold_constants(Expr* expr, OptimizerContext* ctx) {
     folded->column = expr->column;
     folded->data_type = expr->data_type;
 
-    if (expr->data_type == TYPE_INT || expr->data_type == TYPE_BOOL) {
-        int64_t value = evaluate_constant_int(expr);
+    if (type_is_integer(expr->data_type) || expr->data_type == TYPE_BOOL) {
+        int64_t value = 0;
+        if (fold_integer) value = cpx_int_bits_to_i64(integer_bits);
+        else value = evaluate_constant_int(expr);
         folded->as.literal.type = TYPE_INT;
         folded->as.literal.value.int_value = value;
     } else if (expr->data_type == TYPE_FLOAT) {
@@ -201,6 +287,7 @@ Expr* simplify_expr(Expr* expr, OptimizerContext* ctx) {
     // Recursively simplify sub-expressions
     binary->left = simplify_expr(binary->left, ctx);
     binary->right = simplify_expr(binary->right, ctx);
+    if (!binary->left || !binary->right) return expr;
 
     // Check for algebraic identities
     bool left_is_zero = false;
@@ -224,62 +311,62 @@ Expr* simplify_expr(Expr* expr, OptimizerContext* ctx) {
         }
     }
 
+    /* Return one child while reclaiming the discarded literal and wrapper.
+     * The returned child remains owned by the caller. */
+    #define RETURN_CHILD(child, discarded) do { \
+        Expr* kept = (child); \
+        Expr* drop = (discarded); \
+        if (kept == binary->left) binary->left = NULL; else binary->right = NULL; \
+        if (drop == binary->left) binary->left = NULL; else binary->right = NULL; \
+        free_expr(drop); \
+        free_expr(expr); \
+        return kept; \
+    } while (0)
+
     // Simplification rules:
     // x + 0 = x
     if (binary->operator == TOKEN_PLUS && right_is_zero) {
         ctx->expressions_simplified++;
         ctx->optimizations_performed++;
-        return binary->left;
+        RETURN_CHILD(binary->left, binary->right);
     }
 
     // 0 + x = x
     if (binary->operator == TOKEN_PLUS && left_is_zero) {
         ctx->expressions_simplified++;
         ctx->optimizations_performed++;
-        return binary->right;
+        RETURN_CHILD(binary->right, binary->left);
     }
 
     // x - 0 = x
     if (binary->operator == TOKEN_MINUS && right_is_zero) {
         ctx->expressions_simplified++;
         ctx->optimizations_performed++;
-        return binary->left;
-    }
-
-    // x * 0 = 0
-    if (binary->operator == TOKEN_STAR && (left_is_zero || right_is_zero)) {
-        ctx->expressions_simplified++;
-        ctx->optimizations_performed++;
-        Expr* zero = (Expr*)malloc(sizeof(Expr));
-        zero->type = EXPR_LITERAL;
-        zero->data_type = TYPE_INT;
-        zero->as.literal.type = TYPE_INT;
-        zero->as.literal.value.int_value = 0;
-        zero->line = expr->line;
-        zero->column = expr->column;
-        return zero;
+        RETURN_CHILD(binary->left, binary->right);
     }
 
     // x * 1 = x
     if (binary->operator == TOKEN_STAR && right_is_one) {
         ctx->expressions_simplified++;
         ctx->optimizations_performed++;
-        return binary->left;
+        RETURN_CHILD(binary->left, binary->right);
     }
 
     // 1 * x = x
     if (binary->operator == TOKEN_STAR && left_is_one) {
         ctx->expressions_simplified++;
         ctx->optimizations_performed++;
-        return binary->right;
+        RETURN_CHILD(binary->right, binary->left);
     }
 
     // x / 1 = x
     if (binary->operator == TOKEN_SLASH && right_is_one) {
         ctx->expressions_simplified++;
         ctx->optimizations_performed++;
-        return binary->left;
+        RETURN_CHILD(binary->left, binary->right);
     }
+
+    #undef RETURN_CHILD
 
     return expr;
 }

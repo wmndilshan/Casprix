@@ -17,6 +17,7 @@
  */
 
 #include "mir_opt.h"
+#include "integer_semantics.h"
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -256,36 +257,92 @@ int mir_pass_constant_fold(MirFunction* func) {
                 MirInst* rhs_def = find_def(func, inst->as.binary.rhs);
                 if (lhs_def && lhs_def->opcode == MIR_CONST_INT &&
                     rhs_def && rhs_def->opcode == MIR_CONST_INT) {
-                    int64_t l = lhs_def->as.imm_i64;
-                    int64_t r = rhs_def->as.imm_i64;
-                    int64_t result = 0;
-                    bool valid = true;
-                    bool is_unsigned = mir_type_is_unsigned(
-                        mir_function_value_type(func, inst->as.binary.lhs));
-                    if (is_unsigned) {
-                        uint64_t ul = (uint64_t)l, ur = (uint64_t)r, uresult = 0;
+                    MirType* operand_type = mir_function_value_type(func, inst->as.binary.lhs);
+                    unsigned width = (unsigned)mir_type_size(operand_type) * 8;
+                    bool is_unsigned = mir_type_is_unsigned(operand_type);
+                    uint64_t l = (uint64_t)lhs_def->as.imm_i64;
+                    uint64_t r = (uint64_t)rhs_def->as.imm_i64;
+                    uint64_t result = 0;
+                    bool valid = cpx_int_width_valid(width);
+                    if (valid) {
                         switch (inst->opcode) {
-                            case MIR_ADD: uresult = ul + ur; break;
-                            case MIR_SUB: uresult = ul - ur; break;
-                            case MIR_MUL: uresult = ul * ur; break;
-                            case MIR_DIV: if (ur) uresult = ul / ur; else valid = false; break;
-                            case MIR_MOD: if (ur) uresult = ul % ur; else valid = false; break;
-                            default: valid = false;
+                            case MIR_ADD: result = cpx_int_add(l, r, width); break;
+                            case MIR_SUB: result = cpx_int_sub(l, r, width); break;
+                            case MIR_MUL: result = cpx_int_mul(l, r, width); break;
+                            case MIR_DIV: case MIR_MOD: {
+                                CpxIntResult folded = cpx_int_divmod(l, r, width, !is_unsigned,
+                                    inst->opcode == MIR_MOD);
+                                valid = folded.status == CPX_INT_OK;
+                                result = folded.bits;
+                                break;
+                            }
+                            default: valid = false; break;
                         }
-                        memcpy(&result, &uresult, sizeof(result));
-                    } else {
-                        switch (inst->opcode) {
-                            case MIR_ADD: result = l + r; break;
-                            case MIR_SUB: result = l - r; break;
-                            case MIR_MUL: result = l * r; break;
-                            case MIR_DIV: if (r != 0) result = l / r; else valid = false; break;
-                            case MIR_MOD: if (r != 0) result = l % r; else valid = false; break;
-                            default: valid = false;
-                        }
+                        result = cpx_int_normalize(result, width, !is_unsigned);
                     }
                     if (valid) {
                         inst->opcode = MIR_CONST_INT;
-                        inst->as.imm_i64 = result;
+                        inst->as.imm_i64 = cpx_int_bits_to_i64(result);
+                        changes++;
+                    }
+                }
+            }
+
+            if (inst->opcode == MIR_BAND || inst->opcode == MIR_BOR || inst->opcode == MIR_BXOR) {
+                MirInst* lhs_def = find_def(func, inst->as.binary.lhs);
+                MirInst* rhs_def = find_def(func, inst->as.binary.rhs);
+                if (lhs_def && lhs_def->opcode == MIR_CONST_INT &&
+                    rhs_def && rhs_def->opcode == MIR_CONST_INT) {
+                    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+                    unsigned width = (unsigned)mir_type_size(type) * 8;
+                    if (cpx_int_width_valid(width)) {
+                        char op = inst->opcode == MIR_BAND ? '&' :
+                                  inst->opcode == MIR_BOR ? '|' : '^';
+                        uint64_t result = cpx_int_bitwise((uint64_t)lhs_def->as.imm_i64,
+                            (uint64_t)rhs_def->as.imm_i64, width, op);
+                        result = cpx_int_normalize(result, width, !mir_type_is_unsigned(type));
+                        inst->opcode = MIR_CONST_INT;
+                        inst->as.imm_i64 = cpx_int_bits_to_i64(result);
+                        changes++;
+                    }
+                }
+            }
+
+            if (inst->opcode == MIR_NEG || inst->opcode == MIR_BNOT) {
+                MirInst* operand_def = find_def(func, inst->as.unary.operand);
+                if (operand_def && operand_def->opcode == MIR_CONST_INT) {
+                    MirType* type = mir_function_value_type(func, inst->as.unary.operand);
+                    unsigned width = (unsigned)mir_type_size(type) * 8;
+                    if (cpx_int_width_valid(width)) {
+                        uint64_t operand = (uint64_t)operand_def->as.imm_i64;
+                        uint64_t result = inst->opcode == MIR_NEG
+                            ? cpx_int_negate(operand, width)
+                            : cpx_int_bitwise(operand, 0, width, '~');
+                        result = cpx_int_normalize(result, width, !mir_type_is_unsigned(type));
+                        inst->opcode = MIR_CONST_INT;
+                        inst->as.imm_i64 = cpx_int_bits_to_i64(result);
+                        changes++;
+                    }
+                }
+            }
+
+            /* Fold valid constant shifts with the same width checks as execution. */
+            if (inst->opcode == MIR_SHL || inst->opcode == MIR_SHR || inst->opcode == MIR_USHR) {
+                MirInst* lhs_def = find_def(func, inst->as.binary.lhs);
+                MirInst* rhs_def = find_def(func, inst->as.binary.rhs);
+                if (lhs_def && lhs_def->opcode == MIR_CONST_INT &&
+                    rhs_def && rhs_def->opcode == MIR_CONST_INT) {
+                    MirType* type = mir_function_value_type(func, inst->as.binary.lhs);
+                    unsigned width = (unsigned)mir_type_size(type) * 8;
+                    CpxIntResult folded = cpx_int_shift((uint64_t)lhs_def->as.imm_i64,
+                        rhs_def->as.imm_i64, width,
+                        inst->opcode == MIR_SHR && !mir_type_is_unsigned(type),
+                        inst->opcode == MIR_SHL);
+                    if (folded.status == CPX_INT_OK) {
+                        uint64_t normalized = cpx_int_normalize(folded.bits, width,
+                                                               !mir_type_is_unsigned(type));
+                        inst->opcode = MIR_CONST_INT;
+                        inst->as.imm_i64 = cpx_int_bits_to_i64(normalized);
                         changes++;
                     }
                 }
@@ -300,17 +357,21 @@ int mir_pass_constant_fold(MirFunction* func) {
                     int64_t l = lhs_def->as.imm_i64;
                     int64_t r = rhs_def->as.imm_i64;
                     bool result = false;
-                    bool is_unsigned = mir_type_is_unsigned(
-                        mir_function_value_type(func, inst->as.binary.lhs));
+                    MirType* operand_type = mir_function_value_type(
+                        func, inst->as.binary.lhs);
+                    unsigned width = (unsigned)mir_type_size(operand_type) * 8;
+                    bool is_unsigned = mir_type_is_unsigned(operand_type);
+                    bool valid = cpx_int_width_valid(width);
                     switch (inst->opcode) {
-                        case MIR_CMP_EQ: result = (l == r); break;
-                        case MIR_CMP_NE: result = (l != r); break;
-                        case MIR_CMP_LT: result = is_unsigned ? (uint64_t)l < (uint64_t)r : l < r; break;
-                        case MIR_CMP_LE: result = is_unsigned ? (uint64_t)l <= (uint64_t)r : l <= r; break;
-                        case MIR_CMP_GT: result = is_unsigned ? (uint64_t)l > (uint64_t)r : l > r; break;
-                        case MIR_CMP_GE: result = is_unsigned ? (uint64_t)l >= (uint64_t)r : l >= r; break;
+                        case MIR_CMP_EQ: result = cpx_int_normalize((uint64_t)l, width, !is_unsigned) == cpx_int_normalize((uint64_t)r, width, !is_unsigned); break;
+                        case MIR_CMP_NE: result = cpx_int_normalize((uint64_t)l, width, !is_unsigned) != cpx_int_normalize((uint64_t)r, width, !is_unsigned); break;
+                        case MIR_CMP_LT: result = valid && cpx_int_compare((uint64_t)l, (uint64_t)r, width, !is_unsigned) < 0; break;
+                        case MIR_CMP_LE: result = valid && cpx_int_compare((uint64_t)l, (uint64_t)r, width, !is_unsigned) <= 0; break;
+                        case MIR_CMP_GT: result = valid && cpx_int_compare((uint64_t)l, (uint64_t)r, width, !is_unsigned) > 0; break;
+                        case MIR_CMP_GE: result = valid && cpx_int_compare((uint64_t)l, (uint64_t)r, width, !is_unsigned) >= 0; break;
                         default: break;
                     }
+                    if (!valid) continue;
                     inst->opcode = MIR_CONST_BOOL;
                     inst->as.imm_bool = result;
                     changes++;
@@ -405,6 +466,8 @@ static bool has_side_effects(MirOpcode op) {
         case MIR_ARC_RETAIN: case MIR_ARC_RELEASE:
         case MIR_DROP: case MIR_OBJ_ALLOC:
         case MIR_DEBUGLOC:
+        /* These operations can trap; unused results do not make them pure. */
+        case MIR_DIV: case MIR_MOD: case MIR_SHL: case MIR_SHR: case MIR_USHR:
             return true;
         default:
             return false;
@@ -492,7 +555,8 @@ int mir_pass_strength_reduce(MirFunction* func) {
                 }
             }
 
-            if (inst->opcode == MIR_MOD) {
+            if (inst->opcode == MIR_MOD && mir_type_is_unsigned(
+                    mir_function_value_type(func, inst->as.binary.lhs))) {
                 MirInst* rhs_def = find_def(func, inst->as.binary.rhs);
                 if (rhs_def && rhs_def->opcode == MIR_CONST_INT &&
                     is_power_of_two(rhs_def->as.imm_i64)) {

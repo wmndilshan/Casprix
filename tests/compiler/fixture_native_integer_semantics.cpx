@@ -3,7 +3,44 @@ func signed_mod(a: i64, b: i64) -> i64 { return a % b }
 func unsigned_div(a: u64, b: u64) -> u64 { return a / b }
 func unsigned_mod(a: u64, b: u64) -> u64 { return a % b }
 func sum3(a: i64, b: i64, c: i64) -> i64 { return a + b + c }
-func main() -> i64 {
+func wrap_i8(a: i8, b: i8) -> i8 { return a + b }
+func wrap_u8(a: u8, b: u8) -> u8 { return a + b }
+func wrap_i16(a: i16, b: i16) -> i16 { return a + b }
+func wrap_u16(a: u16, b: u16) -> u16 { return a + b }
+func wrap_i32(a: i32, b: i32) -> i32 { return a + b }
+func wrap_u32(a: u32, b: u32) -> u32 { return a + b }
+func wrap_i64(a: i64, b: i64) -> i64 { return a + b }
+func wrap_u64(a: u64, b: u64) -> u64 { return a + b }
+func max_u64() -> u64 { return 0u64 - 1u64 }
+func direct_min_i64() -> i64 { return -9223372036854775808i64 }
+func direct_max_u64() -> u64 { return 18446744073709551615u64 }
+func neg_i8(a: i8) -> i8 { return -a }
+func mul_i16(a: i16, b: i16) -> i16 { return a * b }
+func shr_i8(a: i8, n: i8) -> i8 { return a >> n }
+func shr_u8(a: u8, n: u8) -> u8 { return a >> n }
+func shl_i8(a: i8, n: i8) -> i8 { return a << n }
+func not_u16(a: u16) -> u16 { return ~a }
+func div_i8(a: i8, b: i8) -> i8 { return a / b }
+func mod_i8(a: i8, b: i8) -> i8 { return a % b }
+func div_u16(a: u16, b: u16) -> u16 { return a / b }
+func mod_u16(a: u16, b: u16) -> u16 { return a % b }
+func sub_i8(a: i8, b: i8) -> i8 { return a - b }
+func mul_u8(a: u8, b: u8) -> u8 { return a * b }
+func cmp_i16(a: i16, b: i16) -> bool { return a < b }
+func cmp_u32(a: u32, b: u32) -> bool { return a > b }
+func widen_i16(a: i16) -> i64 { return a }
+func widen_u16(a: u16) -> u64 { return a }
+func loop_i32(n: i32) -> i32 {
+  mut i: i32 = 0
+  mut sum: i32 = 0
+  while i < n { sum = sum + i; i = i + 1 }
+  return sum
+}
+func const_scaled(a: i64) -> i64 { return (7i64 + 8i64) * a }
+mut operand_evaluations: i64 = 0
+func next_divisor() -> i64 { operand_evaluations = operand_evaluations + 1; return 2 }
+func checked_operand(a: i64) -> i64 { return a / next_divisor() }
+func run() -> i64 {
   let high: u64 = 0u64 - 1u64
   print(signed_div(-84, 7))
   print(signed_div(84, -7))
@@ -19,5 +56,36 @@ func main() -> i64 {
   print(high >> 1u64)
   print(-8i64 >> 1i64)
   print(sum3(100 / 3, 85 / 7, -85 % 7))
+  print(wrap_i8(127i8, 1i8))
+  print(wrap_u8(255u8, 1u8))
+  print(wrap_i16(32767i16, 1i16))
+  print(wrap_u16(65535u16, 1u16))
+  print(wrap_i32(2147483647i32, 1i32))
+  print(wrap_u32(4294967295u32, 1u32))
+  print(wrap_i64(9223372036854775807i64, 1i64))
+  print(wrap_u64(max_u64(), 1u64))
+  print(neg_i8(-128i8))
+  print(mul_i16(300i16, 300i16))
+  print(shr_i8(-8i8, 1i8))
+  print(shr_u8(128u8, 1u8))
+  print(shl_i8(64i8, 1i8))
+  print(not_u16(0u16))
+  print(div_i8(-85i8, 7i8))
+  print(mod_i8(-85i8, 7i8))
+  print(div_u16(65535u16, 10u16))
+  print(mod_u16(65535u16, 10u16))
+  print(sub_i8(-128i8, 1i8))
+  print(mul_u8(200u8, 2u8))
+  print(cmp_i16(-1i16, 1i16))
+  print(cmp_u32(4294967295u32, 1u32))
+  print(widen_i16(-300i16))
+  print(widen_u16(60000u16))
+  print(loop_i32(10i32))
+  print(const_scaled(2i64))
+  print(checked_operand(10i64))
+  print(operand_evaluations)
+  print(direct_min_i64())
+  print(direct_max_u64())
   return 0
 }
+run()
