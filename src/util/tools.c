@@ -3,6 +3,7 @@
  */
 
 #include "util/tools.h"
+#include "util/process.h"
 #include "support/log.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -33,6 +34,10 @@ const char* get_tool_name(ToolType tool) {
 }
 
 const char* get_tool_command(ToolType tool) {
+    if (tool == TOOL_GCC) {
+        const char* override = getenv("CASPRIX_CC");
+        if (override && *override) return override;
+    }
     if (tool >= 0 && tool < 3) {
         return tool_commands[tool];
     }
@@ -42,16 +47,8 @@ const char* get_tool_command(ToolType tool) {
 bool check_tool_available(ToolType tool, void* unused) {
     (void)unused;  // Deprecated parameter
 
-    const char* cmd = get_tool_command(tool);
-    char command[256];
-
-#ifdef _WIN32
-    snprintf(command, sizeof(command), "where %s >nul 2>&1", cmd);
-#else
-    snprintf(command, sizeof(command), "which %s >/dev/null 2>&1", cmd);
-#endif
-
-    int result = system(command);
+    const char* argv[] = { get_tool_command(tool), "--version", NULL };
+    int result = casprix_run_process(argv, true);
 
     if (result == 0) {
         CPX_LOG(CPX_LOG_DEBUG, CPX_LOG_CAT_GENERAL, "Tool '%s' is available", get_tool_name(tool));

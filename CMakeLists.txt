@@ -49,9 +49,45 @@ option(ENABLE_DEBUG_LOGGING  "Compile with DEBUG_LOGGING defined"    OFF)
 option(ENABLE_SKIA_GUI       "Enable Skia-based GUI framework"       OFF)
 option(SKIA_GUI_ENABLE_ASAN  "Enable AddressSanitizer for skia_gui consumers" OFF)
 option(SKIA_GUI_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for skia_gui consumers" OFF)
+set(CASPRIX_SANITIZERS "" CACHE STRING
+    "Opt-in compiler/runtime sanitizer set: empty, address, undefined, or address,undefined")
+set_property(CACHE CASPRIX_SANITIZERS PROPERTY STRINGS "" address undefined address,undefined)
 option(CASPRIX_ENABLE_NINJA_AUTOREGEN
        "Allow Ninja to rerun CMake automatically during builds"
        OFF)
+
+set(CASPRIX_SANITIZER_FLAGS "")
+if(NOT CASPRIX_SANITIZERS STREQUAL "")
+    if(NOT CASPRIX_SANITIZERS MATCHES "^(address|undefined|address,undefined)$")
+        message(FATAL_ERROR
+            "Unsupported CASPRIX_SANITIZERS='${CASPRIX_SANITIZERS}'. Use address, undefined, or address,undefined.")
+    endif()
+    if(MSVC)
+        message(FATAL_ERROR
+            "CASPRIX_SANITIZERS is unsupported with MSVC: Casprix native outputs use the external GCC-compatible toolchain.")
+    endif()
+
+    set(CASPRIX_SANITIZER_FLAGS "-fsanitize=${CASPRIX_SANITIZERS}")
+    include(CheckCSourceCompiles)
+    set(_casprix_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+    set(_casprix_saved_required_link_options "${CMAKE_REQUIRED_LINK_OPTIONS}")
+    set(CMAKE_REQUIRED_FLAGS "${CASPRIX_SANITIZER_FLAGS} -fno-omit-frame-pointer")
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${CASPRIX_SANITIZER_FLAGS}")
+    # The supported set is part of the probe key. Re-run when users change it
+    # in an existing build directory (address and undefined runtimes differ).
+    unset(CASPRIX_CMAKE_SANITIZER_LINK_SUPPORTED CACHE)
+    check_c_source_compiles(
+        "int main(void) { volatile int n = 1; return n - 1; }"
+        CASPRIX_CMAKE_SANITIZER_LINK_SUPPORTED)
+    set(CMAKE_REQUIRED_FLAGS "${_casprix_saved_required_flags}")
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${_casprix_saved_required_link_options}")
+    if(NOT CASPRIX_CMAKE_SANITIZER_LINK_SUPPORTED)
+        message(FATAL_ERROR
+            "The selected CMake C compiler cannot compile and link CASPRIX_SANITIZERS='${CASPRIX_SANITIZERS}'. No sanitizer build was produced.")
+    endif()
+endif()
+
+set(CASPRIX_RUNTIME_ABI "${CMAKE_SYSTEM_NAME}|${CMAKE_SYSTEM_PROCESSOR}|${CMAKE_SIZEOF_VOID_P}")
 
 # CMake regeneration has been flaky on the Windows/Ninja build tree,
 # leaving behind .tmp build files and stalling otherwise simple target builds.
@@ -107,6 +143,13 @@ else()
     target_compile_definitions(casprix_compile_options INTERFACE
         $<$<NOT:$<BOOL:${WIN32}>>:_GNU_SOURCE=1>
     )
+endif()
+
+if(CASPRIX_SANITIZER_FLAGS)
+    target_compile_options(casprix_compile_options INTERFACE
+        ${CASPRIX_SANITIZER_FLAGS} -fno-omit-frame-pointer)
+    target_link_options(casprix_compile_options INTERFACE
+        ${CASPRIX_SANITIZER_FLAGS})
 endif()
 
 if(ENABLE_DEBUG_LOGGING)
@@ -197,6 +240,7 @@ set(OPT_SOURCES
 set(UTIL_SOURCES
     src/util/tools.c
     src/util/module.c
+    src/util/process.c
 )
 
 set(DRIVER_SOURCES
@@ -232,6 +276,11 @@ if(BUILD_COMPILER)
     list(REMOVE_ITEM CASPRIX_COMPILER_LIB_SOURCES src/main.c)
 
     add_library(casprix_compiler STATIC ${CASPRIX_COMPILER_LIB_SOURCES})
+    target_compile_definitions(casprix_compiler PRIVATE
+        CASPRIX_EXTERNAL_SANITIZER_FLAGS="${CASPRIX_SANITIZER_FLAGS}"
+        CASPRIX_SANITIZER_CONFIG="${CASPRIX_SANITIZERS}"
+        CASPRIX_RUNTIME_ABI="${CASPRIX_RUNTIME_ABI}"
+    )
     target_link_libraries(casprix_compiler PRIVATE
         casprix_compile_options
         casprix_include_dirs
@@ -467,7 +516,13 @@ if(BUILD_RUNTIME)
         ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     )
 
+    set(CASPRIX_RUNTIME_METADATA
+        "${CMAKE_BINARY_DIR}/libcasprix_runtime.a.casprix-sanitizers")
+    file(GENERATE OUTPUT "${CASPRIX_RUNTIME_METADATA}"
+        CONTENT "casprix-runtime-v1\nsanitizers=${CASPRIX_SANITIZERS}\nabi=${CASPRIX_RUNTIME_ABI}\n")
+
     install(TARGETS casprix_runtime DESTINATION lib)
+    install(FILES "${CASPRIX_RUNTIME_METADATA}" DESTINATION lib)
 endif()
 
 # ============================================================================
@@ -659,6 +714,7 @@ message(STATUS "╠════════════════════�
 message(STATUS "║ Components:")
 message(STATUS "║   Compiler:   ${BUILD_COMPILER}")
 message(STATUS "║   Runtime:    ${BUILD_RUNTIME}")
+message(STATUS "║   Sanitizers: ${CASPRIX_SANITIZERS}")
 message(STATUS "║   Pkg mgr:    ${BUILD_PACKAGE_MANAGER}")
 message(STATUS "║   Tests:      ${BUILD_TESTS}")
 message(STATUS "╠══════════════════════════════════════╣")
